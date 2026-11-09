@@ -11,6 +11,21 @@ import org.json.*;
 public final class LocalLlm {
   private static final AtomicBoolean BUSY = new AtomicBoolean();
   private static volatile boolean loaded;
+  private static volatile String stage = "";
+
+  static String stage() {
+    return stage;
+  }
+
+  private static void reportStage(int step) {
+    stage = switch (step) {
+      case 1 -> "Загружаю модель GGUF…";
+      case 2 -> "Обрабатываю вопрос и контекст…";
+      case 3 -> "Генерирую ответ на телефоне…";
+      default -> "";
+    };
+    ChatRunner.changed();
+  }
 
   public static boolean enabled(Context c) {
     return c.getSharedPreferences("settings", 0).getBoolean("localLlm", false);
@@ -113,7 +128,7 @@ public final class LocalLlm {
         roles.add(item.getString("role"));
         texts.add(((String) content).getBytes(StandardCharsets.UTF_8));
       }
-      int maximum = Math.min(512, Math.max(64, payload.optInt("max_tokens", 256)));
+      int maximum = Math.min(256, Math.max(64, payload.optInt("max_tokens", 256)));
       byte[] bytes =
           generateNative(
               model(c).getAbsolutePath(),
@@ -134,9 +149,12 @@ public final class LocalLlm {
                       new JSONObject()
                           .put("message", new JSONObject().put("content", answer))
                           .put("finish_reason", "stop")));
+    } catch (UnsatisfiedLinkError e) {
+      throw new IOException("Не удалось запустить нативный движок GGUF", e);
     } catch (IllegalStateException e) {
       throw new IOException(e.getMessage(), e);
     } finally {
+      stage = "";
       BUSY.set(false);
     }
   }

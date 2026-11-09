@@ -24,15 +24,20 @@ static std::string utf8(JNIEnv *env, jbyteArray array) {
 }
 extern "C" JNIEXPORT void JNICALL Java_app_fastnotes_LocalLlm_cancelNative(JNIEnv *,jclass) {cancelled.store(true);}
 extern "C" JNIEXPORT jbyteArray JNICALL Java_app_fastnotes_LocalLlm_generateNative(
-    JNIEnv *env,jclass,jstring path,jobjectArray roles,jobjectArray texts,jint maximum,jint context_size,jint threads) {
+    JNIEnv *env,jclass engine,jstring path,jobjectArray roles,jobjectArray texts,jint maximum,jint context_size,jint threads) {
     std::lock_guard<std::mutex> guard(generation_mutex);cancelled.store(false);Deadline deadline;
     try {
+        jmethodID report = env->GetStaticMethodID(engine, "reportStage", "(I)V");
+        if (!report) return nullptr;
+        env->CallStaticVoidMethod(engine, report, 1);
         std::call_once(backend,[]{llama_backend_init();});
         const char *file=env->GetStringUTFChars(path,nullptr);std::string filename(file);env->ReleaseStringUTFChars(path,file);
         auto model_params=llama_model_default_params();model_params.n_gpu_layers=0;
         model_params.progress_callback=load_progress;model_params.progress_callback_user_data=&deadline;
         std::unique_ptr<llama_model,decltype(&llama_model_free)> model(llama_model_load_from_file(filename.c_str(),model_params),llama_model_free);
+        if(deadline.expired())throw std::runtime_error("Загрузка модели остановлена или превысила 2 минуты.");
         if(!model)throw std::runtime_error("GGUF не загружен. Модель несовместима, повреждена или не хватает памяти.");
+        env->CallStaticVoidMethod(engine, report, 2);
         auto params=llama_context_default_params();params.n_ctx=context_size;params.n_batch=256;params.n_ubatch=128;
         params.n_threads=threads;params.n_threads_batch=threads;params.abort_callback=abort_generation;params.abort_callback_data=&deadline;
         std::unique_ptr<llama_context,decltype(&llama_free)> ctx(llama_init_from_model(model.get(),params),llama_free);
@@ -60,15 +65,22 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_app_fastnotes_LocalLlm_generateNati
         std::unique_ptr<llama_sampler,decltype(&llama_sampler_free)> sampler(llama_sampler_chain_init(llama_sampler_chain_default_params()),llama_sampler_free);
         llama_sampler_chain_add(sampler.get(),llama_sampler_init_top_k(40));llama_sampler_chain_add(sampler.get(),llama_sampler_init_top_p(.9f,1));
         llama_sampler_chain_add(sampler.get(),llama_sampler_init_temp(.7f));llama_sampler_chain_add(sampler.get(),llama_sampler_init_dist(42));
+        env->CallStaticVoidMethod(engine, report, 3);
         std::string result;
         for(int i=0;i<maximum;i++) {
-            if(deadline.expired())throw std::runtime_error("Локальная генерация остановлена или превысила 2 минуты.");
+            if(cancelled.load())throw std::runtime_error("Локальная генерация остановлена.");
+            if(deadline.expired())break;
             llama_token token=llama_sampler_sample(sampler.get(),ctx.get(),-1);if(llama_vocab_is_eog(vocab,token))break;
             std::vector<char> piece(128);int length=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);
             if(length<0){piece.resize(-length);length=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);}
             if(length>0)result.append(piece.data(),length);
             if(result.size()>131072)throw std::runtime_error("Слишком большой ответ локальной модели.");
-            if(i+1<maximum){auto batch=llama_batch_get_one(&token,1);if(llama_decode(ctx.get(),batch)!=0)throw std::runtime_error("Локальная модель не смогла продолжить ответ.");}
+            if(i+1<maximum){auto batch=llama_batch_get_one(&token,1);if(llama_decode(ctx.get(),batch)!=0&&!deadline.expired())throw std::runtime_error("Локальная модель не смогла продолжить ответ.");}
+        }
+        if(cancelled.load())throw std::runtime_error("Локальная генерация остановлена.");
+        if(deadline.expired()) {
+            if(result.empty())throw std::runtime_error("Модель не успела начать ответ за 2 минуты. Попробуйте модель меньшего размера.");
+            result += "\n\nОтвет прерван по лимиту времени.";
         }
         auto out=env->NewByteArray(result.size());env->SetByteArrayRegion(out,0,result.size(),reinterpret_cast<const jbyte *>(result.data()));return out;
     } catch(const std::exception &error) {

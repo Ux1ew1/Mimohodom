@@ -23,7 +23,7 @@ public final class ChatRunner {
     listener = new WeakReference<>(l);
   }
 
-  private static void changed() {
+  static void changed() {
     new Handler(Looper.getMainLooper())
         .post(
             () -> {

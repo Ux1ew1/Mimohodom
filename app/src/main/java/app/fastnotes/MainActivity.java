@@ -55,32 +55,65 @@ public final class MainActivity extends Activity
       swipeX = event.getRawX();
       swipeY = event.getRawY();
       swipeConsumed = false;
+      Rect bounds = new Rect();
       swipeAllowed =
-          swipeX > dp(24)
-              && swipeX < getResources().getDisplayMetrics().widthPixels - dp(24)
+          pageSurface().getGlobalVisibleRect(bounds)
+              && bounds.contains((int) swipeX, (int) swipeY)
+              && swipeX > bounds.left + dp(24)
+              && swipeX < bounds.right - dp(24)
               && !touchesInput(root, (int) swipeX, (int) swipeY);
-    } else if (action == MotionEvent.ACTION_POINTER_DOWN) swipeAllowed = false;
-    if (swipeConsumed) {
-      if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
-        swipeConsumed = false;
-      return true;
+    }
+    if (action == MotionEvent.ACTION_POINTER_DOWN) {
+      swipeAllowed = false;
+      if (swipeConsumed) {
+        finishSwipe(false);
+        return true;
+      }
     }
     if (action == MotionEvent.ACTION_MOVE && swipeAllowed) {
       float dx = event.getRawX() - swipeX, dy = event.getRawY() - swipeY;
-      if (Math.abs(dy) > dp(24) && Math.abs(dy) > Math.abs(dx)) swipeAllowed = false;
-      int next = tab + (dx < 0 ? 1 : -1);
-      if (Math.abs(dx) > dp(72) && Math.abs(dy) < Math.abs(dx) * 0.5f && next >= 0 && next < 4) {
+      int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+      if (!swipeConsumed && Math.abs(dy) > slop && Math.abs(dy) >= Math.abs(dx))
+        swipeAllowed = false;
+      if (!swipeConsumed && swipeAllowed
+          && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f) {
         MotionEvent cancel = MotionEvent.obtain(event);
         cancel.setAction(MotionEvent.ACTION_CANCEL);
         super.dispatchTouchEvent(cancel);
         cancel.recycle();
         swipeConsumed = true;
-        swipeAllowed = false;
-        animateNavigate(next);
+      }
+      if (swipeConsumed) {
+        int width = pageSurface().getWidth();
+        // At the first and last tabs, resist dragging beyond the available pages.
+        if ((tab == 0 && dx > 0) || (tab == 3 && dx < 0)) dx *= 0.2f;
+        pageSurface().setTranslationX(Math.max(-width, Math.min(width, dx)));
         return true;
       }
     }
+    if (swipeConsumed) {
+      if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
+        finishSwipe(action == MotionEvent.ACTION_UP);
+      return true;
+    }
     return super.dispatchTouchEvent(event);
+  }
+
+  private void finishSwipe(boolean released) {
+    swipeAllowed = false;
+    swipeConsumed = false;
+    View surface = pageSurface();
+    float offset = surface.getTranslationX();
+    int next = tab + (offset < 0 ? 1 : -1);
+    if (released && next >= 0 && next < 4
+        && Math.abs(offset) >= surface.getWidth() * 0.25f) {
+      animateNavigate(next);
+    } else {
+      pageAnimating = true;
+      surface.animate().translationX(0)
+          .setDuration(android.animation.ValueAnimator.areAnimatorsEnabled() ? 180 : 0)
+          .withEndAction(() -> pageAnimating = false).start();
+    }
   }
 
   private boolean touchesInput(View view, int x, int y) {
@@ -430,6 +463,8 @@ public final class MainActivity extends Activity
     }
     int previous = tab, direction = next > tab ? 1 : -1;
     View outgoing = pageSurface();
+    float dragOffset = outgoing.getTranslationX();
+    outgoing.setTranslationX(0);
     int[] origin = new int[2];
     outgoing.getLocationOnScreen(origin);
     int width = outgoing.getWidth(), height = outgoing.getHeight();
@@ -438,7 +473,7 @@ public final class MainActivity extends Activity
     View incoming = pageSurface();
     LinearLayout destination = root;
     pageAnimating = true;
-    incoming.setTranslationX(direction * width);
+    incoming.setTranslationX(direction * width + dragOffset);
     destination.post(
         () -> {
           if (isDestroyed() || root != destination) {
@@ -454,6 +489,7 @@ public final class MainActivity extends Activity
               origin[1] - offset[1],
               origin[0] - offset[0] + width,
               origin[1] - offset[1] + height);
+          outgoing.setTranslationX(dragOffset);
           android.view.animation.Interpolator easing =
               new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f);
           outgoing
@@ -1237,7 +1273,8 @@ public final class MainActivity extends Activity
     if (ChatRunner.running == chat && chat != 0) {
       ProgressBar progress = new ProgressBar(this);
       messages.addView(progress, new LinearLayout.LayoutParams(dp(28), dp(28)));
-      secondary(messages, "Ищу ответ в ваших заметках…");
+      String stage = LocalLlm.stage();
+      secondary(messages, stage.isEmpty() ? "Подготавливаю ответ…" : stage);
       gap(messages, 10);
     }
     if (ChatRunner.errorChat == chat && !ChatRunner.error.isEmpty()) {
@@ -1261,7 +1298,9 @@ public final class MainActivity extends Activity
       gap(messages, 10);
     }
     gap(content, 8);
-    secondary(content, "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
+    secondary(content, LocalLlm.enabled(this)
+        ? "Локальный режим GGUF · модель отвечает на телефоне"
+        : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
     gap(content, 8);
     chatInput = input("Сообщение или просьба создать заметку…", true);
     chatInput.setMinLines(1);
@@ -1587,7 +1626,7 @@ public final class MainActivity extends Activity
     gap(content, 8);
     secondary(
         content,
-        "Текстовый ИИ на телефоне, без Polza.AI. ARM64, CPU, контекст 4096 токенов, ответ до 512"
+        "Текстовый ИИ на телефоне, без Polza.AI. ARM64, CPU, контекст 4096 токенов, ответ до 256"
             + " токенов. Начните с небольшой instruct-модели 0.5–1.5B в Q4 до 2 ГБ. Понадобятся"
             + " свободная память и место для копии файла. Картинки и фоновые проверки в этом режиме"
             + " пока недоступны.");
@@ -1940,7 +1979,7 @@ public final class MainActivity extends Activity
     gap(content, 16);
     secondary(
         content,
-        "Мимоходом 0.4.1\n"
+        "Мимоходом 0.4.2\n"
             + "Заметки и чаты хранятся на устройстве. API-ключ зашифрован Android Keystore."
             + " Удаление приложения удалит локальные данные; предварительно экспортируйте"
             + " заметки.");
@@ -2014,11 +2053,12 @@ public final class MainActivity extends Activity
                 if (cursor != null && cursor.moveToFirst()) name = cursor.getString(0);
               }
               LocalLlm.importModel(getApplicationContext(), uri);
-              prefs.edit().putString("localModelName", name).apply();
+              prefs.edit().putString("localModelName", name).putBoolean("localLlm", true).apply();
+              BackgroundAnalysis.configure(getApplicationContext());
               runOnUiThread(
                   () -> {
                     if (!isDestroyed()) {
-                      toast("GGUF скопирован. Включите локальный режим и сохраните настройки.");
+                      toast("GGUF скопирован. Локальный режим включён.");
                       if (page.equals("settings")) render();
                     }
                   });
