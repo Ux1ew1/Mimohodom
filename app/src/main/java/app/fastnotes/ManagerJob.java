@@ -36,15 +36,10 @@ final class ManagerJob {
     long runId;
     synchronized (lock) {
       if (!enabled.getAsBoolean()) return;
-      String today = LocalDate.now().toString();
-      int count =
-          today.equals(prefs.getString("analysisDay", "")) ? prefs.getInt("analysisCount", 0) : 0;
-      if (!ReviewPolicy.allowed(count, prefs.getBoolean("unlimitedAi", false))) {
+      if (!ReviewBudget.reserve(context)) {
         status(context, "Дневной лимит: 4 пакета. Следующая проверка — завтра.");
         return;
       }
-      if (!prefs.edit().putString("analysisDay", today).putInt("analysisCount", count + 1).commit())
-        return;
       runId = manager.claim(batch);
     }
     if (!enabled.getAsBoolean()) return;
@@ -78,6 +73,7 @@ final class ManagerJob {
       proposals =
           ManagerAnalysis.parse(choice.getJSONObject("message").getString("content"), batch);
     }
+    proposals = TopicSelection.proposals(batch, proposals);
     for (JSONObject p : proposals) ManagerStore.attachGroups(p, groupSnapshot);
     synchronized (lock) {
       if (!enabled.getAsBoolean()) return;

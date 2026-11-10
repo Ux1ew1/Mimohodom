@@ -157,17 +157,18 @@ public final class BackgroundAnalysis extends JobService {
       }
       synchronized (COMMIT_LOCK) {
         if (!enabled(run)) return;
-        for (Note n : store.pendingAnalysis()) if (store.claimAnalysis(n)) claimed.add(n);
-        if (claimed.isEmpty()) {
+        List<Note> pending = store.pendingAnalysis();
+        if (pending.isEmpty()) {
           status("Нет новых заметок для проверки.");
           return;
         }
-        // Persist before sending: process death must not cause an automatic duplicate charge.
-        if (!prefs
-            .edit()
-            .putString("analysisDay", today)
-            .putInt("analysisCount", count + 1)
-            .commit()) return;
+        // Reserve before claiming so a concurrent summary cannot strand unattempted notes.
+        if (!ReviewBudget.reserve(this)) {
+          status("Дневной лимит: 4 пакета.");
+          return;
+        }
+        for (Note n : pending) if (store.claimAnalysis(n)) claimed.add(n);
+        if (claimed.isEmpty()) return;
       }
       if (!enabled(run)) return;
       JSONObject response =

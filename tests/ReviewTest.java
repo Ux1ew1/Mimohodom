@@ -126,21 +126,6 @@ public final class ReviewTest {
     check(
         ReviewPolicy.summary("Дневной лимит: 4 пакета").contains("исчерпан"),
         "Cap has clear status");
-    a.body = "Полный текст " + "длинный ".repeat(2000);
-    JSONObject draft = ManagerAnalysis.groupDraft(notes);
-    check(
-        draft.getString("body").contains(a.body) && draft.getString("body").contains(b.body),
-        "Link draft includes full sources beyond API budget");
-    check(
-        draft.getString("body").contains(a.title) && draft.getString("body").contains(b.title),
-        "Source headings retained");
-    boolean single = false;
-    try {
-      ManagerAnalysis.groupDraft(Collections.singletonList(a));
-    } catch (IllegalArgumentException e) {
-      single = true;
-    }
-    check(single, "Single-source stack rejected");
     System.out.println("PASS: " + checks + " unified review checks");
   }
 }

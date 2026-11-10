@@ -57,21 +57,59 @@ public final class ManagerStore {
                 || c.getInt(2) == 0)) seeds.add(n);
       }
     }
-    LinkedHashMap<Long, Note> selected = new LinkedHashMap<>();
-    // Two rotating seeds guarantee progress even when one topic dominates search results.
-    for (int i = 0; i < Math.min(2, seeds.size()); i++) selected.put(seeds.get(i).id, seeds.get(i));
-    for (Note seed : new ArrayList<>(selected.values())) {
-      for (Note n :
-          store.searchNotes(seed.title + " " + Retrieval.excerpt(seed.searchText, "", 200))) {
-        if (selected.size() >= 8) break;
-        if (manual || !failedUnchanged(n)) selected.put(n.id, n);
+    seeds.removeIf(n -> top(n.id) != 0 && top(n.id) != n.id);
+    return TopicSelection.select(seeds);
+  }
+
+  public List<Note> summarySources(JSONObject p) throws Exception {
+    TreeSet<Long> ids = new TreeSet<>();
+    JSONArray sources = p.getJSONArray("sources");
+    for (int i = 0; i < sources.length(); i++) {
+      long id = sources.getJSONObject(i).getLong("id");
+      ids.add(id);
+      long group = top(id);
+      if (group != 0) {
+        ids.add(group);
+        ids.addAll(members(group));
       }
     }
-    for (Note n : seeds) {
-      if (selected.size() >= 8) break;
-      selected.put(n.id, n);
+    List<Note> out = new ArrayList<>();
+    for (long id : ids) {
+      Note n = store.note(id);
+      if (n == null) throw new IllegalStateException("Исходники изменились");
+      out.add(n);
     }
-    return new ArrayList<>(selected.values());
+    return out;
+  }
+
+  public JSONObject summaryProgress(long id) throws Exception {
+    try (Cursor c =
+        db.rawQuery("SELECT data FROM manager_proposals WHERE id=?", new String[] {"" + id})) {
+      if (!c.moveToFirst()) throw new IllegalStateException("Предложение не найдено");
+      JSONObject data = new JSONObject(c.getString(0));
+      JSONObject summary = data.optJSONObject("_summary");
+      return summary == null ? new JSONObject() : summary;
+    }
+  }
+
+  public void saveSummary(JSONObject p, JSONObject summary) throws Exception {
+    db.beginTransaction();
+    try {
+      if (!current(p))
+        throw new IllegalStateException("Исходники изменились. Нужна новая проверка.");
+      JSONObject data = new JSONObject(p.toString()).put("_summary", summary);
+      ContentValues values = new ContentValues();
+      values.put("data", data.toString());
+      if (db.update(
+              "manager_proposals",
+              values,
+              "id=? AND state IN ('pending','reviewed')",
+              new String[] {"" + p.getLong("id")})
+          != 1) throw new IllegalStateException("Предложение уже закрыто");
+      db.setTransactionSuccessful();
+    } finally {
+      db.endTransaction();
+    }
   }
 
   private boolean failedUnchanged(Note n) {

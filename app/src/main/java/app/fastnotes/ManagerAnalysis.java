@@ -5,17 +5,6 @@ import org.json.*;
 
 /** Bounded, untrusted suggestions. No model output executes an action. */
 public final class ManagerAnalysis {
-  public static JSONObject groupDraft(List<Note> notes) throws Exception {
-    if (notes.size() < 2) throw new IllegalArgumentException("Для стопки нужны две заметки");
-    StringBuilder body = new StringBuilder();
-    for (Note n : notes) {
-      if (body.length() > 0) body.append("\n\n");
-      body.append(n.title);
-      if (!n.body.isEmpty()) body.append("\n").append(n.body);
-    }
-    return new JSONObject().put("title", "Связанные заметки").put("body", body.toString());
-  }
-
   public static String fingerprint(Note n) {
     try {
       java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
@@ -49,6 +38,7 @@ public final class ManagerAnalysis {
     }
     return new JSONObject()
         .put("model", model)
+        .put("temperature", 0)
         .put("max_tokens", 1200)
         .put(
             "messages",
@@ -64,8 +54,9 @@ public final class ManagerAnalysis {
                                 + " незавершённое дело), question (уточнение). Не считай дело"
                                 + " невыполненным без основания: формулируй как предположение. Для"
                                 + " merge нужны минимум две записи и complete=true у всех"
-                                + " источников. Сохрани все важные детали и противоречия в"
-                                + " объединённом тексте. Не выдумывай факты. Ответ только JSON:"
+                                + " источников. Сохрани все важные детали и противоречия в краткой"
+                                + " выжимке. Не перечисляй названия исходников и не склеивай их"
+                                + " тексты. Не выдумывай факты. Ответ только JSON:"
                                 + " {\"suggestions\":[{\"type\":\"merge\",\"sources\":[1,2],\"reason\":\"Почему"
                                 + " полезно\",\"title\":\"Заголовок\",\"body\":\"Полный"
                                 + " черновик\"}]}. До 4 предложений, только ID из входа. Для"

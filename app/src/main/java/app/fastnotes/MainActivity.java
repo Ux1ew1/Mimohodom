@@ -1069,24 +1069,28 @@ public final class MainActivity extends Activity
             if (expanded) {
               line = null;
               occupied = 0;
-              HorizontalScrollView strip = new HorizontalScrollView(this);
-              strip.setFillViewport(false);
-              LinearLayout cards = row();
-              strip.addView(cards);
-              View topCard = groupedCard(n, grid, true);
-              cards.addView(
-                  topCard,
-                  new LinearLayout.LayoutParams(dp(width), topCard.getLayoutParams().height));
+              LinearLayout group = column();
+              group.addView(text("В стопке: " + members.size() + " исходных заметок", 15, MUTED));
+              List<Note> all = new ArrayList<>();
+              all.add(n);
               for (long member : members) {
                 Note source = store.note(member);
-                if (source == null) continue;
-                View card = noteCard(source, grid);
+                if (source != null) all.add(source);
+              }
+              LinearLayout cards = null;
+              for (int i = 0; i < all.size(); i++) {
+                if (i % columns == 0) {
+                  cards = row();
+                  group.addView(cards);
+                  gap(group, 10);
+                }
+                View card = i == 0 ? groupedCard(n, grid, true) : noteCard(all.get(i), grid);
                 LinearLayout.LayoutParams lp =
                     new LinearLayout.LayoutParams(dp(width), card.getLayoutParams().height);
-                lp.leftMargin = dp(10);
+                if (i % columns != 0) lp.leftMargin = dp(10);
                 cards.addView(card, lp);
               }
-              listing.addView(strip);
+              listing.addView(group);
               gap(listing, 10);
             } else {
               if (line == null || occupied == columns) {
@@ -1340,9 +1344,9 @@ public final class MainActivity extends Activity
       gap(card, 6);
       card.addView(text(p.optString("reason"), 14, MUTED));
       if (type.equals("link"))
-        secondary(card, "Можно собрать в стопку. Полные тексты и исходники сохранятся.");
+        secondary(card, "ИИ подготовит выжимку отдельным платным запросом. Исходники сохранятся.");
       if (type.equals("merge"))
-        secondary(card, "ИИ подготовил общий текст. Проверьте его перед созданием стопки.");
+        secondary(card, "Подготовьте выжимку ИИ и проверьте её перед созданием стопки.");
       gap(card, 8);
       JSONArray sources = p.optJSONArray("sources");
       if (sources != null)
@@ -1352,11 +1356,18 @@ public final class MainActivity extends Activity
           if (n != null) card.addView(quietAction(n.title + "  ↗", () -> openNote(id)));
         }
       gap(card, 8);
+      boolean summaryReady = false;
+      try {
+        summaryReady = manager.summaryProgress(p.optLong("id")).optBoolean("ready");
+      } catch (Exception ignored) {
+      }
       card.addView(
           button(
-              type.equals("link")
-                  ? "Собрать в стопку"
-                  : type.equals("merge") ? "Проверить и собрать" : "Посмотреть черновик",
+              summaryReady
+                  ? "Посмотреть выжимку"
+                  : type.equals("link")
+                      ? "Подготовить выжимку"
+                      : type.equals("merge") ? "Подготовить выжимку" : "Посмотреть черновик",
               true,
               () -> previewProposal(p)));
       card.addView(
@@ -1367,6 +1378,62 @@ public final class MainActivity extends Activity
                 render();
               }));
       content.addView(card);
+    }
+  }
+
+  private void prepareSummary(JSONObject p) {
+    try {
+      JSONObject cached = new ManagerStore(store).summaryProgress(p.optLong("id"));
+      if (cached.optBoolean("ready")) {
+        p.put("title", cached.getString("title"))
+            .put("body", cached.getString("body"))
+            .put("summaryReady", true);
+        previewProposal(p);
+        return;
+      }
+    } catch (Exception ignored) {
+    }
+    if (LocalLlm.enabled(this)) {
+      toast("Для выжимки выберите Polza.AI в настройках.");
+      return;
+    }
+    try {
+      String key = Secrets.read(this), model = prefs.getString("model", "");
+      if (key.isEmpty() || model.isEmpty()) {
+        toast("Укажите ключ и модель в настройках.");
+        return;
+      }
+      boolean started =
+          SummaryRunner.start(
+              this,
+              p,
+              key,
+              model,
+              (result, error) -> {
+                if (isDestroyed() || isFinishing()) return;
+                if (error != null) {
+                  new AlertDialog.Builder(this)
+                      .setTitle("Выжимка не готова")
+                      .setMessage(error)
+                      .setPositiveButton("Понятно", null)
+                      .show();
+                } else {
+                  try {
+                    p.put("title", result.getString("title"))
+                        .put("body", result.getString("body"))
+                        .put("summaryReady", true);
+                    previewProposal(p);
+                  } catch (Exception e) {
+                    toast("Не удалось открыть выжимку");
+                  }
+                }
+              });
+      toast(
+          started
+              ? "ИИ готовит выжимку. Готовый текст можно будет проверить перед сохранением."
+              : "Выжимка уже готовится. Откройте предложение после завершения.");
+    } catch (Exception e) {
+      toast("Не удалось начать выжимку");
     }
   }
 
@@ -1382,18 +1449,10 @@ public final class MainActivity extends Activity
       toast("Не удалось открыть предложение");
       return;
     }
-    if (p.optString("type").equals("link")) {
-      try {
-        List<Note> sources = new ArrayList<>();
-        JSONArray refs = p.getJSONArray("sources");
-        for (int i = 0; i < refs.length(); i++)
-          sources.add(store.note(refs.getJSONObject(i).getLong("id")));
-        JSONObject draft = ManagerAnalysis.groupDraft(sources);
-        p.put("title", draft.getString("title")).put("body", draft.getString("body"));
-      } catch (Exception e) {
-        toast("Исходники изменились. Обновите предложения.");
-        return;
-      }
+    if ((p.optString("type").equals("link") || p.optString("type").equals("merge"))
+        && !p.optBoolean("summaryReady")) {
+      prepareSummary(p);
+      return;
     }
     LinearLayout form = column();
     pad(form, 20);
@@ -1405,7 +1464,8 @@ public final class MainActivity extends Activity
       gap(form, 12);
     }
     EditText title = input("Заголовок", false), body = input("Текст", true);
-    String key = "managerDraft." + p.optLong("id");
+    String key =
+        (p.optBoolean("summaryReady") ? "managerSummaryDraft." : "managerDraft.") + p.optLong("id");
     title.setText(prefs.getString(key + ".title", p.optString("title")));
     body.setText(prefs.getString(key + ".body", p.optString("body")));
     form.addView(title);

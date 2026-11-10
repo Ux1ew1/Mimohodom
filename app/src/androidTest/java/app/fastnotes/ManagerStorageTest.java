@@ -132,7 +132,8 @@ final class ManagerStorageTest {
       require(
           m.pending().stream().anyMatch(p -> p.optLong("id") == linkId),
           "Previously viewed link is available for grouping");
-      JSONObject localDraft = ManagerAnalysis.groupDraft(linked);
+      JSONObject localDraft =
+          new JSONObject().put("title", "Общий рецепт").put("body", "Мука и молоко");
       long linkedTop =
           m.accept(linkId, localDraft.getString("title"), localDraft.getString("body"));
       require(m.members(linkedTop).size() == 2, "Link acceptance creates a stack");
@@ -143,6 +144,53 @@ final class ManagerStorageTest {
       require(
           m.pending().stream().noneMatch(p -> p.optLong("id") == linkId),
           "Accepted link leaves pending list");
+      List<Note> eight = new ArrayList<>();
+      for (int i = 0; i < 8; i++)
+        eight.add(store.note(store.save(0, "Архив авто " + i, "Машина: факт " + i, 0)));
+      List<JSONObject> largeProposal = proposal(eight);
+      ManagerStore.attachGroups(largeProposal.get(0), m.groupSnapshot(eight));
+      m.finish(m.claim(eight), eight, largeProposal);
+      JSONObject large =
+          m.pending().stream()
+              .filter(
+                  p -> p.optString("identity").equals(largeProposal.get(0).optString("identity")))
+              .findFirst()
+              .orElseThrow();
+      m.saveSummary(large, new JSONObject().put("cursor", 1).put("body", "Промежуточная выжимка"));
+      require(
+          m.summaryProgress(large.getLong("id")).getInt("cursor") == 1,
+          "Summary progress survives reads");
+      long eightTop = m.accept(large.getLong("id"), "Авто", "Выжимка восьми записей");
+      List<Note> extension =
+          Arrays.asList(
+              store.note(eightTop),
+              store.note(store.save(0, "Авто девять", "Машина: факт 9", 0)),
+              store.note(store.save(0, "Авто десять", "Машина: факт 10", 0)));
+      List<JSONObject> extensionProposal = proposal(extension);
+      ManagerStore.attachGroups(extensionProposal.get(0), m.groupSnapshot(extension));
+      m.finish(m.claim(extension), extension, extensionProposal);
+      JSONObject more =
+          m.pending().stream()
+              .filter(
+                  p ->
+                      p.optString("identity")
+                          .equals(extensionProposal.get(0).optString("identity")))
+              .findFirst()
+              .orElseThrow();
+      require(
+          m.summarySources(more).size() == 11,
+          "Summary sees every hidden original and previous top");
+      long allTop = m.accept(more.getLong("id"), "Все авто", "Выжимка всех записей");
+      m.toggle(allTop);
+      require(
+          m.expanded(allTop) && m.members(allTop).size() == 11,
+          "Expansion returns all ten originals and previous summary");
+      for (Note original : eight)
+        require(
+            m.members(allTop).contains(original.id), "No original lost after repeated grouping");
+      require(
+          m.batch(true).stream().noneMatch(n -> m.top(n.id) != 0 && m.top(n.id) != n.id),
+          "Hidden sources excluded from fresh grouping candidates");
       // Recreate a real v5 database by removing only the v6 additions, then reopen it.
       for (String table :
           new String[] {

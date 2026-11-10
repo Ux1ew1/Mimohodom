@@ -7,6 +7,10 @@ public final class ReviewPolicy {
   }
 
   public static String summary(String status) {
+    if (status.startsWith("Готовим выжимку")) return "ИИ готовит выжимку…";
+    if (status.startsWith("Выжимка готова")) return "Выжимка готова к просмотру";
+    if (status.startsWith("Не удалось подготовить выжимку"))
+      return "Выжимка не готова — подробности в истории";
     if (status.startsWith("Просмотрено") || status.startsWith("Проверено"))
       return "Проверка завершена";
     if (status.startsWith("Проверяем")) return "Проверяем заметки…";
