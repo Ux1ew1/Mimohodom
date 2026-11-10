@@ -32,8 +32,9 @@ public final class MainActivity extends Activity
   private final ExecutorService io = Executors.newSingleThreadExecutor();
   private Store store;
   private SharedPreferences prefs;
-  private LinearLayout root, content, dock;
-  private FrameLayout frame;
+  private LinearLayout root, content;
+  private FrameLayout frame, dock;
+  private int lastDockTab = -1;
   private View dockFade;
   private int navInset;
   private boolean keyboardUp, searchOpen;
@@ -710,31 +711,61 @@ public final class MainActivity extends Activity
         new GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0x00F7F8F2, PAPER}));
     frame.addView(dockFade, new FrameLayout.LayoutParams(-1, dp(110), Gravity.BOTTOM));
-    dock = row();
-    dock.setPadding(dp(14), dp(9), dp(14), dp(9));
+    dock = new FrameLayout(this);
     GradientDrawable background = shape(0xF2FFFFFF, 20);
     background.setStroke(dp(1), LINE);
     dock.setBackground(background);
     dock.setElevation(dp(8));
+    // Подсветка активной вкладки лежит под значками и скользит к новой вкладке.
+    int step = dp(60);
+    View marker = new View(this);
+    marker.setBackground(shape(LIME, 14));
+    FrameLayout.LayoutParams markerParams = new FrameLayout.LayoutParams(dp(46), dp(46));
+    markerParams.leftMargin = dp(14);
+    markerParams.topMargin = dp(9);
+    dock.addView(marker, markerParams);
+    LinearLayout items = row();
+    items.setPadding(dp(14), dp(9), dp(14), dp(9));
+    dock.addView(items, new FrameLayout.LayoutParams(-2, -2));
+    final int to = tab, from = lastDockTab < 0 ? tab : lastDockTab;
+    boolean animate = from != to && android.animation.ValueAnimator.areAnimatorsEnabled();
+    marker.setTranslationX(step * (animate ? from : to));
     String[] labels = {"Заметки", "Записать", "ИИ-чат"};
     String[] icons = {"notes", "add", "chat"};
+    ImageView[] views = new ImageView[3];
     for (int i = 0; i < 3; i++) {
       final int target = i;
-      boolean add = i == 1, active = i == tab;
+      boolean add = i == 1;
       ImageView item = new ImageView(this);
       item.setScaleType(ImageView.ScaleType.CENTER);
-      item.setImageDrawable(new Glyph(icons[i], add ? WHITE : active ? GREEN : MUTED, 24));
-      item.setBackground(
-          ripple(add ? GREEN : active ? LIME : android.graphics.Color.TRANSPARENT, 14));
+      item.setImageDrawable(new Glyph(icons[i], add ? WHITE : MUTED, 24));
+      if (!add) item.setColorFilter(i == (animate ? from : to) ? GREEN : MUTED);
+      item.setBackground(ripple(add ? GREEN : android.graphics.Color.TRANSPARENT, 14));
       item.setContentDescription(labels[i]);
       item.setFocusable(true);
       item.setClickable(true);
-      item.setSelected(active);
+      item.setSelected(i == to);
       item.setOnClickListener(v -> animateNavigate(target));
       LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(46), dp(46));
       if (i > 0) lp.leftMargin = dp(14);
-      dock.addView(item, lp);
+      items.addView(item, lp);
+      views[i] = item;
     }
+    if (animate) {
+      android.animation.ArgbEvaluator argb = new android.animation.ArgbEvaluator();
+      android.animation.ValueAnimator slide = android.animation.ValueAnimator.ofFloat(0, 1);
+      slide.setDuration(280);
+      slide.setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f));
+      slide.addUpdateListener(
+          a -> {
+            float f = (float) a.getAnimatedValue();
+            marker.setTranslationX(step * (from + (to - from) * f));
+            if (from != 1) views[from].setColorFilter((int) argb.evaluate(f, GREEN, MUTED));
+            if (to != 1) views[to].setColorFilter((int) argb.evaluate(f, MUTED, GREEN));
+          });
+      slide.start();
+    }
+    lastDockTab = to;
     frame.addView(
         dock, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
     placeDock();
@@ -751,6 +782,13 @@ public final class MainActivity extends Activity
     dockFade.setLayoutParams(fade);
     dock.setVisibility(visible ? View.VISIBLE : View.GONE);
     dockFade.setVisibility(visible ? View.VISIBLE : View.GONE);
+    // Пока открыта клавиатура, панели нет, и запас под неё внизу страницы не нужен.
+    if (content != null && !"notes".equals(page) && !"chat".equals(page))
+      content.setPadding(
+          content.getPaddingLeft(),
+          content.getPaddingTop(),
+          content.getPaddingRight(),
+          dp(keyboardUp ? 16 : 100));
   }
 
   private ImageView barIcon(String icon, String description, Runnable click) {
@@ -1157,31 +1195,52 @@ public final class MainActivity extends Activity
       toolbar.setPadding(dp(22), dp(4), dp(22), dp(4));
       root.addView(toolbar, 0);
     } else {
-      content.addView(topBar(false, false, true), new LinearLayout.LayoutParams(-1, dp(44)));
-      gap(content, 10);
+      FrameLayout bar = (FrameLayout) topBar(false, false, true);
+      TextView screen = text("Новая заметка", 20, INK);
+      screen.setTypeface(null, Typeface.BOLD);
+      bar.addView(
+          screen, new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL));
+      content.addView(bar, new LinearLayout.LayoutParams(-1, dp(44)));
+      gap(content, 12);
     }
-    heading(
-        id == 0 ? "Поймать мысль." : "Ваша заметка",
-        id == 0 ? "Запишите сейчас. Всё остальное подождёт." : "");
+    if (id > 0) heading("Ваша заметка", "");
     String p = draftPrefix();
     noteImage = prefs.getString(p + "image", note == null ? "" : note.image);
+    // Название и текст лежат на одном листе, как в бумажной записной книжке.
+    LinearLayout sheet = column();
+    GradientDrawable sheetBackground = shape(WHITE, 14);
+    sheetBackground.setStroke(dp(1), LINE);
+    sheet.setBackground(sheetBackground);
     titleField = input("Название — необязательно", false);
+    titleField.setBackground(null);
+    titleField.setTypeface(null, Typeface.BOLD);
+    titleField.setTextSize(prefs.getBoolean("large", false) ? 22 : 20);
+    titleField.setPadding(dp(16), dp(16), dp(16), dp(6));
     titleField.setText(prefs.getString(p + "title", note == null ? "" : note.title));
     titleField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(160)});
-    content.addView(titleField, new LinearLayout.LayoutParams(-1, -2));
-    gap(content, 12);
+    sheet.addView(titleField, new LinearLayout.LayoutParams(-1, -2));
     bodyField = input("Что хочется запомнить?", true);
-    bodyField.setMinLines(12);
-    bodyField.setMinHeight(dp(320));
+    bodyField.setBackground(null);
+    bodyField.setPadding(dp(16), dp(6), dp(16), dp(16));
+    bodyField.setMinLines(10);
+    bodyField.setMinHeight(dp(280));
     bodyField.setText(prefs.getString(p + "body", note == null ? "" : note.body));
     bodyField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(100000)});
-    content.addView(bodyField, new LinearLayout.LayoutParams(-1, -2));
+    sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, -2));
+    content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
     gap(content, 12);
-    content.addView(
-        button(
-            noteImage.isEmpty() ? "Прикрепить изображение" : "Заменить изображение",
-            false,
-            () -> pickImage(false)));
+    reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
+    LinearLayout tools = row();
+    tools.addView(
+        iconButton(
+            noteImage.isEmpty() ? "Изображение" : "Заменить", "image", () -> pickImage(false)));
+    reminderButton = iconButton(reminderLabel(), "clock", this::pickReminder);
+    reminderButton.setSingleLine(true);
+    reminderButton.setEllipsize(TextUtils.TruncateAt.END);
+    LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(0, -2, 1);
+    reminderParams.leftMargin = dp(8);
+    tools.addView(reminderButton, reminderParams);
+    content.addView(tools);
     if (!noteImage.isEmpty()) {
       gap(content, 8);
       content.addView(imagePreview(noteImage, 220));
@@ -1203,10 +1262,6 @@ public final class MainActivity extends Activity
                 render();
               }));
     }
-    gap(content, 12);
-    reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
-    reminderButton = iconButton(reminderLabel(), "clock", this::pickReminder);
-    content.addView(reminderButton);
     if (note != null && note.suggestion > 0) {
       gap(content, 12);
       LinearLayout proposal = column();
