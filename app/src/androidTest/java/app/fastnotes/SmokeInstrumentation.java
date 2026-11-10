@@ -19,6 +19,7 @@ public final class SmokeInstrumentation extends Instrumentation {
     Bundle result = new Bundle();
     long id = 0, chat = 0;
     try (Store db = new Store(getTargetContext())) {
+      ManagerStorageTest.run(getTargetContext());
       id = db.save(0, "", "Проверочная заметка\nТекст", 0);
       Note note = db.note(id);
       require(note.title.equals("Проверочная заметка"), "Auto title");

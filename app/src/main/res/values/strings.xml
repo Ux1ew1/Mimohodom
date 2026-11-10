@@ -6,4 +6,5 @@
     <string name="balance_amount">Баланс: %1$s</string>
     <string name="balance_available">Доступно для запросов: %1$s\nПроверено: %2$s</string>
     <string name="notes_count">Заметок: %1$d</string>
+    <string name="note_manager">Менеджер заметок · Polza.AI</string>
 </resources>

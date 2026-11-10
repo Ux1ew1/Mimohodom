@@ -29,7 +29,8 @@ public final class BackgroundAnalysis extends JobService {
   public static void configure(Context context) {
     var scheduler = context.getSystemService(JobScheduler.class);
     if (LocalLlm.enabled(context)
-        || !context.getSharedPreferences("settings", 0).getBoolean("backgroundAi", false)) {
+        || !(context.getSharedPreferences("settings", 0).getBoolean("backgroundAi", false)
+            || context.getSharedPreferences("settings", 0).getBoolean("managerAi", false))) {
       synchronized (COMMIT_LOCK) {
         scheduler.cancel(PERIODIC);
         scheduler.cancel(ONCE);
@@ -50,7 +51,8 @@ public final class BackgroundAnalysis extends JobService {
   public static boolean enqueue(Context context) {
     configure(context);
     if (LocalLlm.enabled(context)
-        || !context.getSharedPreferences("settings", 0).getBoolean("backgroundAi", false))
+        || !(context.getSharedPreferences("settings", 0).getBoolean("backgroundAi", false)
+            || context.getSharedPreferences("settings", 0).getBoolean("managerAi", false)))
       return false;
     JobScheduler scheduler = context.getSystemService(JobScheduler.class);
     if (scheduler.getPendingJob(ONCE) != null) return true;
@@ -114,7 +116,9 @@ public final class BackgroundAnalysis extends JobService {
   private boolean enabled(Run run) {
     return !run.stopped
         && !LocalLlm.enabled(this)
-        && (run.manual || getSharedPreferences("settings", 0).getBoolean("backgroundAi", false));
+        && (run.manual
+            || getSharedPreferences("settings", 0).getBoolean("backgroundAi", false)
+            || getSharedPreferences("settings", 0).getBoolean("managerAi", false));
   }
 
   private void work(Run run) {
@@ -129,6 +133,16 @@ public final class BackgroundAnalysis extends JobService {
       String key = Secrets.read(this), model = prefs.getString("model", "");
       if (key.isEmpty() || model.isEmpty()) {
         status("Для фоновой проверки сохраните ключ и модель.");
+        return;
+      }
+      if (prefs.getBoolean("managerAi", false)) {
+        ManagerJob.work(
+            this,
+            store,
+            key,
+            model,
+            () -> enabled(run) && prefs.getBoolean("managerAi", false),
+            COMMIT_LOCK);
         return;
       }
       String today = LocalDate.now().toString();

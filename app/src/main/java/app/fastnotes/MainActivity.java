@@ -75,8 +75,10 @@ public final class MainActivity extends Activity
       int slop = ViewConfiguration.get(this).getScaledTouchSlop();
       if (!swipeConsumed && Math.abs(dy) > slop && Math.abs(dy) >= Math.abs(dx))
         swipeAllowed = false;
-      if (!swipeConsumed && swipeAllowed
-          && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f) {
+      if (!swipeConsumed
+          && swipeAllowed
+          && Math.abs(dx) > slop
+          && Math.abs(dx) > Math.abs(dy) * 1.5f) {
         MotionEvent cancel = MotionEvent.obtain(event);
         cancel.setAction(MotionEvent.ACTION_CANCEL);
         super.dispatchTouchEvent(cancel);
@@ -105,14 +107,16 @@ public final class MainActivity extends Activity
     View surface = pageSurface();
     float offset = surface.getTranslationX();
     int next = tab + (offset < 0 ? 1 : -1);
-    if (released && next >= 0 && next < 4
-        && Math.abs(offset) >= surface.getWidth() * 0.25f) {
+    if (released && next >= 0 && next < 4 && Math.abs(offset) >= surface.getWidth() * 0.25f) {
       animateNavigate(next);
     } else {
       pageAnimating = true;
-      surface.animate().translationX(0)
+      surface
+          .animate()
+          .translationX(0)
           .setDuration(android.animation.ValueAnimator.areAnimatorsEnabled() ? 180 : 0)
-          .withEndAction(() -> pageAnimating = false).start();
+          .withEndAction(() -> pageAnimating = false)
+          .start();
     }
   }
 
@@ -123,6 +127,7 @@ public final class MainActivity extends Activity
     if (view instanceof EditText
         || view instanceof Spinner
         || view instanceof Switch
+        || view instanceof HorizontalScrollView
         || view instanceof SeekBar) return true;
     if (view instanceof ViewGroup group)
       for (int i = 0; i < group.getChildCount(); i++)
@@ -150,6 +155,10 @@ public final class MainActivity extends Activity
     if (state == null && requested > 0) {
       editing = requested;
       page = "edit";
+      tab = 1;
+    }
+    if (state == null && getIntent().getBooleanExtra("manager", false)) {
+      page = "manager";
       tab = 1;
     }
     ChatRunner.listen(this);
@@ -220,6 +229,9 @@ public final class MainActivity extends Activity
       if (!persistEditedNote()) return;
       page = returnPage;
       tab = page.equals("chat") ? 2 : 1;
+      render();
+    } else if ("manager".equals(page)) {
+      page = "notes";
       render();
     } else if ("chat".equals(page)) {
       stash();
@@ -541,6 +553,7 @@ public final class MainActivity extends Activity
       case "home" -> editor(0);
       case "edit" -> editor(editing);
       case "notes" -> notes();
+      case "manager" -> managerPage();
       case "chats" -> chats();
       case "chat" -> chatPage();
       case "settings" -> settings();
@@ -933,6 +946,14 @@ public final class MainActivity extends Activity
 
   private void notes() {
     heading("Всё под рукой.", "Ваши заметки и напоминания");
+    content.addView(
+        button(
+            "Предложения помощника · " + new ManagerStore(store).pending().size(),
+            false,
+            () -> {
+              page = "manager";
+              render();
+            }));
     EditText find = input("Найти в заметках", false);
     find.setText(search);
     content.addView(find);
@@ -952,53 +973,70 @@ public final class MainActivity extends Activity
     controls.addView(switcher);
     content.addView(controls);
     gap(content, 12);
-    FrameLayout frame = new FrameLayout(this);
-    content.addView(frame, new LinearLayout.LayoutParams(-1, 0, 1));
-    GridView list = new GridView(this);
-    list.setNumColumns(grid ? (getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2) : 1);
-    list.setHorizontalSpacing(dp(10));
-    list.setVerticalSpacing(dp(10));
-    list.setClipToPadding(false);
-    list.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
-    frame.addView(list, new FrameLayout.LayoutParams(-1, -1));
-    TextView empty =
-        text("Пока здесь чистый лист.\nСохраните первую мысль во вкладке «Записать».", 17, MUTED);
-    empty.setGravity(Gravity.CENTER);
-    pad(empty, 24);
-    frame.addView(empty, new FrameLayout.LayoutParams(-1, -1));
-    list.setEmptyView(empty);
-    BaseAdapter adapter =
-        new BaseAdapter() {
-          public int getCount() {
-            return visibleNotes.size();
-          }
-
-          public Object getItem(int p) {
-            return visibleNotes.get(p);
-          }
-
-          public long getItemId(int p) {
-            return visibleNotes.get(p).id;
-          }
-
-          public View getView(int p, View recycled, android.view.ViewGroup parent) {
-            return noteCard(visibleNotes.get(p), grid);
-          }
-        };
-    list.setAdapter(adapter);
-    list.setOnItemClickListener((a, v, pos, id) -> openNote(visibleNotes.get(pos).id));
-    List<Note> snapshot = store.notes();
+    LinearLayout listing = column();
+    content.addView(scroll(listing), new LinearLayout.LayoutParams(-1, 0, 1));
     Runnable refresh =
         () -> {
-          String query = search.toLowerCase(Locale.ROOT);
+          listing.removeAllViews();
+          ManagerStore manager = new ManagerStore(store);
+          List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search);
           visibleNotes.clear();
-          visibleNotes.addAll(query.isEmpty() ? snapshot : store.searchNotes(query));
+          for (Note n : found)
+            if (!search.trim().isEmpty() || manager.top(n.id) == 0 || manager.top(n.id) == n.id)
+              visibleNotes.add(n);
           count.setText(getString(R.string.notes_count, visibleNotes.size()));
-          empty.setText(
-              query.isEmpty()
-                  ? "Пока здесь чистый лист.\nСохраните первую мысль во вкладке «Записать»."
-                  : "Ничего не найдено.\nПопробуйте другое слово.");
-          adapter.notifyDataSetChanged();
+          if (visibleNotes.isEmpty())
+            listing.addView(
+                text(
+                    search.isEmpty() ? "Пока здесь чистый лист." : "Ничего не найдено.",
+                    17,
+                    MUTED));
+          int columns = grid ? (getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2) : 1;
+          int width =
+              (getResources().getConfiguration().screenWidthDp - 44 - (columns - 1) * 10) / columns;
+          LinearLayout line = null;
+          int occupied = 0;
+          for (Note n : visibleNotes) {
+            List<Long> members = manager.members(n.id);
+            boolean expanded =
+                !members.isEmpty() && manager.expanded(n.id) && search.trim().isEmpty();
+            if (expanded) {
+              line = null;
+              occupied = 0;
+              HorizontalScrollView strip = new HorizontalScrollView(this);
+              strip.setFillViewport(false);
+              LinearLayout cards = row();
+              strip.addView(cards);
+              View topCard = groupedCard(n, grid, true);
+              cards.addView(
+                  topCard,
+                  new LinearLayout.LayoutParams(dp(width), topCard.getLayoutParams().height));
+              for (long member : members) {
+                Note source = store.note(member);
+                if (source == null) continue;
+                View card = noteCard(source, grid);
+                LinearLayout.LayoutParams lp =
+                    new LinearLayout.LayoutParams(dp(width), card.getLayoutParams().height);
+                lp.leftMargin = dp(10);
+                cards.addView(card, lp);
+              }
+              listing.addView(strip);
+              gap(listing, 10);
+            } else {
+              if (line == null || occupied == columns) {
+                line = row();
+                listing.addView(line);
+                gap(listing, 10);
+                occupied = 0;
+              }
+              View card = groupedCard(n, grid, false);
+              LinearLayout.LayoutParams lp =
+                  new LinearLayout.LayoutParams(dp(width), card.getLayoutParams().height);
+              if (occupied > 0) lp.leftMargin = dp(10);
+              line.addView(card, lp);
+              occupied++;
+            }
+          }
         };
     refresh.run();
     watch(
@@ -1012,12 +1050,54 @@ public final class MainActivity extends Activity
   private View noteCard(Note n, boolean grid) {
     LinearLayout card = column();
     pad(card, 16);
-    card.setBackground(ripple(n.reminder > 0 ? 0xFFEDF0E2 : WHITE, 18));
+    card.setBackground(
+        ripple(
+            new ManagerStore(store).top(n.id) != 0
+                ? 0xFFF0E8FA
+                : n.reminder > 0 ? 0xFFEDF0E2 : WHITE,
+            18));
+    card.setOnClickListener(v -> openNote(n.id));
     TextView title = text(n.title, 17, INK);
     title.setTypeface(null, Typeface.BOLD);
     title.setMaxLines(grid ? 2 : 1);
     title.setEllipsize(TextUtils.TruncateAt.END);
-    card.addView(title);
+    LinearLayout titleRow = row();
+    titleRow.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+    TextView menu = text("⋮", 24, INK);
+    menu.setGravity(Gravity.CENTER);
+    menu.setContentDescription("Меню заметки «" + n.title + "»");
+    titleRow.addView(menu, new LinearLayout.LayoutParams(dp(48), dp(48)));
+    menu.setOnClickListener(
+        v -> {
+          ManagerStore manager = new ManagerStore(store);
+          PopupMenu popup = new PopupMenu(this, menu);
+          popup
+              .getMenu()
+              .add("Удалить")
+              .setOnMenuItemClickListener(
+                  item -> {
+                    returnPage = "notes";
+                    deleteNote(n.id);
+                    return true;
+                  });
+          long top = manager.top(n.id);
+          if (top != 0)
+            popup
+                .getMenu()
+                .add(manager.expanded(top) ? "Сгруппировать" : "Разгруппировать")
+                .setOnMenuItemClickListener(
+                    item -> {
+                      manager.toggle(top);
+                      search = "";
+                      render();
+                      return true;
+                    });
+          popup.show();
+        });
+    card.addView(titleRow);
+    if (!new ManagerStore(store).members(n.id).isEmpty())
+      card.addView(
+          text("Исходных: " + new ManagerStore(store).members(n.id).size(), 11, 0xFF75449B));
     gap(card, 8);
     TextView body =
         text(n.body.isEmpty() ? "Без текста" : Retrieval.excerpt(n.body, "", 320), 14, MUTED);
@@ -1045,6 +1125,179 @@ public final class MainActivity extends Activity
     card.setContentDescription(
         n.title + ", " + Retrieval.excerpt(n.body, "", 320) + ", создана " + date(n.created));
     return card;
+  }
+
+  private View groupedCard(Note n, boolean grid, boolean expanded) {
+    View card = noteCard(n, grid);
+    int layers = Math.min(3, new ManagerStore(store).members(n.id).size());
+    if (layers == 0 || expanded) return card;
+    FrameLayout stack = new FrameLayout(this);
+    int height = card.getLayoutParams().height;
+    stack.setLayoutParams(new LinearLayout.LayoutParams(-1, height + dp(layers * 5)));
+    for (int i = layers; i > 0; i--) {
+      View layer = new View(this);
+      GradientDrawable shape = shape(0xFFE1CEEF, 18);
+      shape.setStroke(dp(1), 0xFFAD83CA);
+      layer.setBackground(shape);
+      FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, height);
+      lp.topMargin = dp(i * 5);
+      lp.leftMargin = dp(i * 3);
+      lp.rightMargin = dp(i * 3);
+      stack.addView(layer, lp);
+    }
+    stack.addView(card, new FrameLayout.LayoutParams(-1, height));
+    return stack;
+  }
+
+  private String proposalLabel(String type) {
+    return switch (type) {
+      case "merge" -> "Объединить заметки";
+      case "link" -> "Связанные записи";
+      case "task" -> "Возможное незавершённое дело";
+      default -> "Вопрос для уточнения";
+    };
+  }
+
+  private void managerPage() {
+    heading("Предложения помощника", "Решаете вы. ИИ помогает разобраться в записях.");
+    content.addView(
+        button(
+            "Назад к заметкам",
+            false,
+            () -> {
+              page = "notes";
+              render();
+            }));
+    ManagerStore manager = new ManagerStore(store);
+    List<JSONObject> proposals = manager.pending();
+    secondary(
+        content,
+        prefs.getString(
+            "analysisStatus", "Включите менеджера в настройках для регулярного обзора."));
+    int merges = 0, links = 0, tasks = 0, questions = 0;
+    for (JSONObject p : proposals)
+      switch (p.optString("type")) {
+        case "merge" -> merges++;
+        case "link" -> links++;
+        case "task" -> tasks++;
+        default -> questions++;
+      }
+    secondary(
+        content,
+        "Сводка: объединения — "
+            + merges
+            + ", связи — "
+            + links
+            + ", дела — "
+            + tasks
+            + ", вопросы — "
+            + questions
+            + ".");
+    content.addView(
+        button(
+            "Проверить сейчас",
+            false,
+            () ->
+                toast(
+                    prefs.getBoolean("managerAi", false) && BackgroundAnalysis.enqueue(this)
+                        ? "Проверка поставлена в очередь Android"
+                        : "Включите помощника в настройках. В локальном режиме обзор"
+                              + " недоступен.")));
+    content.addView(button("Обновить", false, this::render));
+    if (proposals.isEmpty()) secondary(content, "Новых предложений пока нет.");
+    for (JSONObject p : proposals) {
+      gap(content, 12);
+      LinearLayout card = column();
+      pad(card, 16);
+      card.setBackground(shape(WHITE, 18));
+      card.addView(text(proposalLabel(p.optString("type")), 18, INK));
+      card.addView(text(p.optString("reason"), 15, MUTED));
+      JSONArray sources = p.optJSONArray("sources");
+      if (sources != null)
+        for (int i = 0; i < sources.length(); i++) {
+          long id = sources.optJSONObject(i).optLong("id");
+          Note n = store.note(id);
+          if (n != null) card.addView(button(n.title, false, () -> openNote(id)));
+        }
+      card.addView(button("Посмотреть", false, () -> previewProposal(p)));
+      card.addView(
+          button(
+              "Отклонить",
+              false,
+              () -> {
+                manager.state(p.optLong("id"), "dismissed");
+                render();
+              }));
+      content.addView(card);
+    }
+  }
+
+  private void previewProposal(JSONObject p) {
+    ManagerStore manager = new ManagerStore(store);
+    try {
+      if (!manager.current(p)) {
+        toast("Исходники изменились. Нужна новая проверка.");
+        render();
+        return;
+      }
+    } catch (Exception e) {
+      toast("Не удалось открыть предложение");
+      return;
+    }
+    if (p.optString("type").equals("link")) {
+      new AlertDialog.Builder(this)
+          .setTitle("Связанные записи")
+          .setMessage(p.optString("reason"))
+          .setPositiveButton(
+              "Понятно",
+              (d, w) -> {
+                manager.state(p.optLong("id"), "reviewed");
+                render();
+              })
+          .setNegativeButton("Назад", null)
+          .show();
+      return;
+    }
+    LinearLayout form = column();
+    pad(form, 20);
+    EditText title = input("Заголовок", false), body = input("Текст", true);
+    String key = "managerDraft." + p.optLong("id");
+    title.setText(prefs.getString(key + ".title", p.optString("title")));
+    body.setText(prefs.getString(key + ".body", p.optString("body")));
+    form.addView(title);
+    form.addView(body);
+    watch(title, () -> prefs.edit().putString(key + ".title", title.getText().toString()).apply());
+    watch(body, () -> prefs.edit().putString(key + ".body", body.getText().toString()).apply());
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle(proposalLabel(p.optString("type")))
+            .setView(scroll(form))
+            .setNegativeButton("Назад", null)
+            .setPositiveButton("Сохранить", null)
+            .create();
+    dialog.setOnShowListener(
+        d ->
+            dialog
+                .getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(
+                    v -> {
+                      try {
+                        manager.accept(
+                            p.optLong("id"), title.getText().toString(), body.getText().toString());
+                        prefs.edit().remove(key + ".title").remove(key + ".body").apply();
+                        dialog.dismiss();
+                        page = "notes";
+                        search = "";
+                        render();
+                        toast("✓ Заметка сохранена");
+                      } catch (Exception e) {
+                        toast(
+                            e instanceof IllegalStateException
+                                ? e.getMessage()
+                                : "Не удалось сохранить предложение");
+                      }
+                    }));
+    dialog.show();
   }
 
   private void chats() {
@@ -1298,9 +1551,11 @@ public final class MainActivity extends Activity
       gap(messages, 10);
     }
     gap(content, 8);
-    secondary(content, LocalLlm.enabled(this)
-        ? "Локальный режим GGUF · модель отвечает на телефоне"
-        : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
+    secondary(
+        content,
+        LocalLlm.enabled(this)
+            ? "Локальный режим GGUF · модель отвечает на телефоне"
+            : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
     gap(content, 8);
     chatInput = input("Сообщение или просьба создать заметку…", true);
     chatInput.setMinLines(1);
@@ -1844,6 +2099,31 @@ public final class MainActivity extends Activity
     background.setMinHeight(dp(52));
     background.setChecked(prefs.getBoolean("backgroundAi", false));
     content.addView(background);
+    Switch manager = new Switch(this);
+    manager.setText(R.string.note_manager);
+    manager.setTextColor(INK);
+    manager.setMinHeight(dp(52));
+    manager.setChecked(prefs.getBoolean("managerAi", false));
+    manager.setOnCheckedChangeListener(
+        (v, checked) -> {
+          if (checked && !prefs.getBoolean("managerAi", false))
+            new AlertDialog.Builder(this)
+                .setTitle("Включить менеджера заметок?")
+                .setMessage(
+                    "Выбранные тексты из всей коллекции будут передаваться в Polza.AI примерно"
+                        + " каждые 6 часов, даже при закрытом приложении. Общий лимит — 4 платных"
+                        + " запроса в сутки, до 8 заметок и 12 000 символов на запрос. Изменения —"
+                        + " только после подтверждения. Сохраните настройки для включения.")
+                .setPositiveButton("Согласен", (d, w) -> {})
+                .setNegativeButton("Отмена", (d, w) -> manager.setChecked(false))
+                .setOnCancelListener(d -> manager.setChecked(false))
+                .show();
+        });
+    content.addView(manager);
+    secondary(
+        content,
+        "Менеджер предлагает объединения, связи, дела и вопросы. Сводка доступна в заметках."
+            + " Уведомления — не чаще раза в сутки.");
     gap(content, 8);
     secondary(
         content,
@@ -1877,7 +2157,8 @@ public final class MainActivity extends Activity
                 toast("Локальная GGUF пока работает только в текстовом чате");
                 return;
               }
-              if (!prefs.getBoolean("backgroundAi", false)) {
+              if (!prefs.getBoolean("backgroundAi", false)
+                  && !prefs.getBoolean("managerAi", false)) {
                 toast("Сначала включите помощника и сохраните настройки");
                 return;
               }
@@ -1886,6 +2167,7 @@ public final class MainActivity extends Activity
                 return;
               }
               store.retryFailed();
+              new ManagerStore(store).retryFailed();
               BackgroundAnalysis.enqueue(this);
               toast("Повтор поставлен в очередь. Дневной лимит сохраняется.");
             }));
@@ -1901,7 +2183,7 @@ public final class MainActivity extends Activity
                   return;
                 }
                 if (!local.isChecked()
-                    && background.isChecked()
+                    && (background.isChecked() || manager.isChecked())
                     && (key.getText().toString().trim().isEmpty()
                         || model.getText().toString().trim().isEmpty())) {
                   toast("Для фонового ИИ укажите ключ и модель");
@@ -1916,6 +2198,7 @@ public final class MainActivity extends Activity
                     .putBoolean("large", large.isChecked())
                     .putInt("reminderLead", Reminders.LEAD_MINUTES[lead.getSelectedItemPosition()])
                     .putBoolean("backgroundAi", background.isChecked())
+                    .putBoolean("managerAi", manager.isChecked())
                     .putBoolean("localLlm", local.isChecked())
                     .apply();
                 BackgroundAnalysis.configure(this);
@@ -1928,7 +2211,7 @@ public final class MainActivity extends Activity
                             Reminders.schedule(getApplicationContext(), n);
                       }
                     });
-                if (background.isChecked()) {
+                if (background.isChecked() || manager.isChecked()) {
                   BackgroundAnalysis.enqueue(this);
                   if (Build.VERSION.SDK_INT >= 33
                       && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -2131,7 +2414,13 @@ public final class MainActivity extends Activity
                         .put("updated", n.updated)
                         .put("reminder", n.reminder)
                         .put("metadata", Metadata.read(n.metadata)));
-              JSONObject export = new JSONObject().put("version", 2).put("notes", notes);
+              JSONObject export =
+                  new JSONObject()
+                      .put("version", 3)
+                      .put("notes", notes)
+                      .put("groups", new ManagerStore(exportStore).export("note_groups"))
+                      .put("members", new ManagerStore(exportStore).export("note_members"))
+                      .put("proposals", new ManagerStore(exportStore).export("manager_proposals"));
               try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
                 if (out == null) throw new java.io.IOException();
                 out.write(export.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));

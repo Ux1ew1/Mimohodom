@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 5);
+    super(context, name, null, 6);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -68,6 +68,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     db.execSQL("ALTER TABLE notes ADD COLUMN image TEXT NOT NULL DEFAULT ''");
     db.execSQL("ALTER TABLE messages ADD COLUMN draft TEXT NOT NULL DEFAULT ''");
     addMetadata(db);
+    ManagerStore.create(db);
   }
 
   @Override
@@ -78,6 +79,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
       db.execSQL("ALTER TABLE messages ADD COLUMN draft TEXT NOT NULL DEFAULT ''");
     }
     if (oldV < 5) addMetadata(db);
+    if (oldV < 6) ManagerStore.create(db);
   }
 
   private void addMetadata(SQLiteDatabase db) {
@@ -250,6 +252,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
 
   public void delete(long id) {
     getWritableDatabase().delete("notes", "id=?", new String[] {"" + id});
+    new ManagerStore(this).cleanup();
   }
 
   public void image(long id, String image) {

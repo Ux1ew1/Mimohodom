@@ -1,0 +1,113 @@
+package app.fastnotes;
+
+import android.content.Context;
+import java.util.*;
+import org.json.*;
+
+final class ManagerStorageTest {
+  static void run(Context context) throws Exception {
+    String name = "manager-test-" + System.nanoTime() + ".db";
+    try (Store store = new Store(context, name)) {
+      ManagerStore m = new ManagerStore(store);
+      long a = store.save(0, "Рецепт", "Мука", 12345), b = store.save(0, "Рецепт", "Молоко", 0);
+      store.image(a, "fixture.jpg");
+      List<Note> notes = Arrays.asList(store.note(a), store.note(b));
+      long run = m.claim(notes);
+      require(m.batch().isEmpty(), "Ambiguous requests not automatically retried");
+      m.retryFailed();
+      require(m.batch().size() == 2, "Manual retry releases failed snapshots");
+      run = m.claim(notes);
+      List<JSONObject> proposals = proposal(notes);
+      require(m.finish(run, notes, proposals) == 1, "Persist proposal");
+      require(m.finish(run, notes, proposals) == 0, "Duplicate suppressed");
+      long id = m.pending().get(0).getLong("id");
+      long top = m.accept(id, "Общий рецепт", "Мука и молоко");
+      require(m.accept(id, "Другой", "Другой") == top, "Acceptance idempotent");
+      require(m.members(top).size() == 2 && m.top(a) == top, "Flat group created");
+      require(
+          m.finish(m.claim(notes), notes, proposal(notes)) == 0,
+          "Already grouped sources are not suggested again");
+      require(
+          store.note(a).image.equals("fixture.jpg") && store.note(a).reminder == 12345,
+          "Original attachment and reminder retained");
+      m.toggle(top);
+      require(m.expanded(top), "Expand persisted");
+      m.toggle(top);
+      require(!m.expanded(top), "Collapse persisted");
+      long third = store.save(0, "Соль", "Соль", 0);
+      List<Note> next = Arrays.asList(store.note(top), store.note(third));
+      m.finish(m.claim(next), next, proposal(next));
+      long nextTop =
+          m.accept(m.pending().get(0).getLong("id"), "Полный рецепт", "Мука, молоко, соль");
+      require(
+          m.members(nextTop).size() == 4 && m.members(top).isEmpty(),
+          "Groups flattened, previous summary retained");
+      List<Note> grouped = Arrays.asList(store.note(nextTop), store.note(third));
+      JSONObject snapshot = proposal(grouped).get(0).put("groups", m.groupSnapshot(grouped));
+      store.save(a, "Рецепт", "Мука уточнённая", 12345);
+      require(!m.current(snapshot), "Hidden member edit invalidates group snapshot");
+      store.delete(b);
+      require(m.members(nextTop).size() == 3, "Delete only one member");
+      store.delete(nextTop);
+      require(m.top(a) == 0 && store.note(top) != null, "Delete summary releases all originals");
+      List<Note> stale = Arrays.asList(store.note(a), store.note(third));
+      m.finish(m.claim(stale), stale, proposal(stale));
+      long staleId = m.pending().get(0).getLong("id");
+      store.save(a, "Изменено", "Новое содержание", 0);
+      boolean rejected = false;
+      try {
+        m.accept(staleId, "Итог", "Старый текст");
+      } catch (IllegalStateException e) {
+        rejected = true;
+      }
+      require(rejected && m.pending().isEmpty(), "Stale proposal cannot mutate notes");
+      List<Note> fresh = Arrays.asList(store.note(a), store.note(third));
+      List<JSONObject> freshP = proposal(fresh);
+      m.finish(m.claim(fresh), fresh, freshP);
+      long dismissed = m.pending().get(0).getLong("id");
+      m.state(dismissed, "dismissed");
+      require(
+          m.finish(m.claim(fresh), fresh, freshP) == 0 && m.pending().isEmpty(),
+          "Dismissal survives repeat review");
+      require(m.export("manager_proposals").length() > 0, "Proposals exported");
+      // At least one seed outside the previous batch advances on the next pass.
+      for (int i = 0; i < 12; i++) store.save(0, "Отдельная запись " + i, "Текст " + i, 0);
+      List<Note> first = m.batch();
+      m.finish(m.claim(first), first, Collections.emptyList());
+      Set<Long> ids = new HashSet<>();
+      for (Note n : first) ids.add(n.id);
+      require(m.batch().stream().anyMatch(n -> !ids.contains(n.id)), "Review queue advances");
+      // Recreate a real v5 database by removing only the v6 additions, then reopen it.
+      for (String table :
+          new String[] {
+            "note_members", "note_groups", "manager_review", "manager_proposals", "manager_runs"
+          }) store.getWritableDatabase().execSQL("DROP TABLE " + table);
+      store.getWritableDatabase().setVersion(5);
+      store.close();
+      try (Store upgraded = new Store(context, name)) {
+        require(upgraded.note(a).body.equals("Новое содержание"), "v5 to v6 preserves content");
+        require(new ManagerStore(upgraded).pending().isEmpty(), "v5 to v6 adds manager tables");
+      }
+    } finally {
+      context.deleteDatabase(name);
+    }
+  }
+
+  private static List<JSONObject> proposal(List<Note> notes) throws Exception {
+    JSONArray ids = new JSONArray();
+    for (Note n : notes) ids.put(n.id);
+    JSONObject row =
+        new JSONObject()
+            .put("type", "merge")
+            .put("sources", ids)
+            .put("reason", "Общая тема")
+            .put("title", "Итог")
+            .put("body", "Общий текст");
+    return ManagerAnalysis.parse(
+        new JSONObject().put("suggestions", new JSONArray().put(row)).toString(), notes);
+  }
+
+  private static void require(boolean ok, String label) {
+    if (!ok) throw new AssertionError(label);
+  }
+}
