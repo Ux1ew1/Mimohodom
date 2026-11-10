@@ -66,7 +66,7 @@ public final class MainActivity extends Activity
                   analysisStatusView.setText(analysisStatusText());
               });
       };
-  private String search = "";
+  private String search = "", chatSearch = "";
   private final List<Note> visibleNotes = new ArrayList<>();
   private float swipeX, swipeY;
   private boolean swipeAllowed, swipeConsumed;
@@ -258,7 +258,7 @@ public final class MainActivity extends Activity
       suggestionsPopup.dismiss();
       return;
     }
-    if ("notes".equals(page) && searchOpen && closeSearch != null) {
+    if (("notes".equals(page) || "chats".equals(page)) && searchOpen && closeSearch != null) {
       closeSearch.run();
       return;
     }
@@ -830,13 +830,14 @@ public final class MainActivity extends Activity
     field.setSingleLine(true);
     field.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
     field.setPadding(dp(8), 0, dp(8), 0);
-    field.setContentDescription("Поиск по заметкам");
+    String barText = "chats".equals(page) ? chatSearch : search;
+    field.setContentDescription("chats".equals(page) ? "Поиск по чатам" : "Поиск по заметкам");
     field.setOnEditorActionListener(
         (v, action, event) -> {
           hideKeyboard();
           return true;
         });
-    field.setText(search);
+    field.setText(barText);
     LinearLayout box = row();
     box.setPadding(dp(14), 0, dp(6), 0);
     GradientDrawable boxBackground = shape(WHITE, 14);
@@ -876,7 +877,7 @@ public final class MainActivity extends Activity
           if (focused) motion.set(true, true);
           else if (field.getText().length() == 0) motion.set(false, true);
         });
-    motion.set(!search.isEmpty(), false);
+    motion.set(!barText.isEmpty(), false);
     return bar;
   }
 
@@ -919,7 +920,8 @@ public final class MainActivity extends Activity
     void set(boolean open, boolean animated) {
       if (animated && open == searchOpen) return;
       searchOpen = open;
-      field.setHint(open ? "Поиск по заметкам" : "Поиск");
+      field.setHint(
+          open ? ("chats".equals(page) ? "Поиск по чатам" : "Поиск по заметкам") : "Поиск");
       if (running != null) running.cancel();
       float target = open ? 1 : 0;
       if (!animated || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
@@ -1908,9 +1910,8 @@ public final class MainActivity extends Activity
   }
 
   private void chats() {
-    content.addView(topBar(false, false, true), new LinearLayout.LayoutParams(-1, dp(44)));
-    gap(content, 10);
-    heading("Спросите свои\nзаметки.", "Найдите рецепт, идею или важную дату.");
+    content.addView(topBar(true, true, true), new LinearLayout.LayoutParams(-1, dp(44)));
+    gap(content, 14);
     content.addView(
         button(
             "Новый чат",
@@ -1920,38 +1921,59 @@ public final class MainActivity extends Activity
               page = "chat";
               render();
             }));
-    gap(content, 24);
+    gap(content, 22);
     secondary(content, "История чатов");
     gap(content, 12);
-    List<String[]> chats = store.chats();
-    if (chats.isEmpty()) {
-      gap(content, 20);
-      secondary(content, "Первый разговор ещё впереди.\nОтветы будут ссылаться на ваши заметки.");
-    }
-    for (String[] c : chats) {
-      long id = Long.parseLong(c[0]);
-      LinearLayout item = row();
-      pad(item, 14);
-      item.setBackground(shape(WHITE, 12));
-      LinearLayout words = column();
-      TextView title = text(c[1], 16, INK);
-      title.setMaxLines(2);
-      words.addView(title);
-      gap(words, 6);
-      secondary(words, date(Long.parseLong(c[2])));
-      words.setOnClickListener(
-          v -> {
-            chat = id;
-            page = "chat";
-            render();
-          });
-      words.setFocusable(true);
-      item.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
-      TextView open = chatMenu(id);
-      item.addView(open);
-      content.addView(item);
-      gap(content, 10);
-    }
+    LinearLayout listing = column();
+    content.addView(listing);
+    EditText find = searchField;
+    Runnable refresh =
+        () -> {
+          listing.removeAllViews();
+          String term = chatSearch.trim().toLowerCase(Locale.ROOT);
+          boolean any = false;
+          for (String[] c : store.chats()) {
+            if (!term.isEmpty() && !c[1].toLowerCase(Locale.ROOT).contains(term)) continue;
+            any = true;
+            long id = Long.parseLong(c[0]);
+            LinearLayout item = row();
+            pad(item, 14);
+            item.setBackground(shape(WHITE, 12));
+            LinearLayout words = column();
+            TextView title = text(c[1], 16, INK);
+            title.setMaxLines(2);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            words.addView(title);
+            gap(words, 6);
+            secondary(words, date(Long.parseLong(c[2])));
+            words.setOnClickListener(
+                v -> {
+                  chat = id;
+                  page = "chat";
+                  render();
+                });
+            words.setFocusable(true);
+            item.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+            item.addView(chatMenu(id));
+            listing.addView(item);
+            gap(listing, 10);
+          }
+          if (!any) {
+            gap(listing, 12);
+            secondary(
+                listing,
+                term.isEmpty()
+                    ? "Первый разговор ещё впереди.\nОтветы будут ссылаться на ваши заметки."
+                    : "Чатов с такими словами нет.");
+          }
+        };
+    refresh.run();
+    watch(
+        find,
+        () -> {
+          chatSearch = find.getText().toString();
+          refresh.run();
+        });
   }
 
   private TextView chatMenu(long id) {
@@ -2012,15 +2034,24 @@ public final class MainActivity extends Activity
   private void chatPage() {
     LinearLayout actions = row();
     actions.addView(
-        iconButton(
-            "История",
+        barIcon(
             "back",
+            "К истории чатов",
             () -> {
               stash();
               page = "chats";
               render();
             }),
-        new LinearLayout.LayoutParams(0, -2, 1));
+        new LinearLayout.LayoutParams(dp(44), dp(44)));
+    String chatTitle = "Новый чат";
+    if (chat > 0)
+      for (String[] c : store.chats()) if (Long.parseLong(c[0]) == chat) chatTitle = c[1];
+    TextView titleView = text(chatTitle, 16, INK);
+    titleView.setTypeface(null, Typeface.BOLD);
+    titleView.setSingleLine(true);
+    titleView.setEllipsize(TextUtils.TruncateAt.END);
+    titleView.setPadding(dp(4), 0, dp(4), 0);
+    actions.addView(titleView, new LinearLayout.LayoutParams(0, -2, 1));
     if (chat > 0) {
       actions.addView(chatMenu(chat));
     }
@@ -2166,14 +2197,6 @@ public final class MainActivity extends Activity
             ? "Локальный режим GGUF · модель отвечает на телефоне"
             : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
     gap(content, 8);
-    chatInput = input("Сообщение или просьба создать заметку…", true);
-    chatInput.setMinLines(1);
-    chatInput.setMaxLines(4);
-    chatInput.setFilters(new InputFilter[] {new InputFilter.LengthFilter(2000)});
-    chatInput.setText(prefs.getString("chatDraft." + chat, ""));
-    content.addView(chatInput);
-    gap(content, 8);
-    content.addView(button("Прикрепить изображение", false, () -> pickImage(true)));
     String attached = prefs.getString("chatImage." + chat, "");
     if (!attached.isEmpty()) {
       content.addView(imagePreview(attached, 120));
@@ -2196,11 +2219,37 @@ public final class MainActivity extends Activity
               + " изображений.");
     }
     gap(content, 8);
-    TextView send =
-        button(ChatRunner.running == 0 ? "Отправить" : "Ожидаем ответ…", true, this::send);
-    send.setEnabled(ChatRunner.running == 0);
-    send.setAlpha(ChatRunner.running == 0 ? 1 : .55f);
-    content.addView(send);
+    // Одна строка ввода: изображение, поле и отправка.
+    chatInput = input("Сообщение или просьба создать заметку…", true);
+    chatInput.setMinLines(1);
+    chatInput.setMaxLines(4);
+    chatInput.setFilters(new InputFilter[] {new InputFilter.LengthFilter(2000)});
+    chatInput.setText(prefs.getString("chatDraft." + chat, ""));
+    LinearLayout composer = row();
+    composer.setGravity(Gravity.BOTTOM);
+    ImageView attach = new ImageView(this);
+    attach.setScaleType(ImageView.ScaleType.CENTER);
+    attach.setImageDrawable(new Glyph("image", GREEN, 22));
+    attach.setBackground(ripple(WHITE, 10));
+    attach.setContentDescription("Прикрепить изображение");
+    attach.setFocusable(true);
+    attach.setOnClickListener(v -> pickImage(true));
+    composer.addView(attach, new LinearLayout.LayoutParams(dp(50), dp(50)));
+    LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, -2, 1);
+    inputParams.leftMargin = dp(8);
+    inputParams.rightMargin = dp(8);
+    composer.addView(chatInput, inputParams);
+    ImageView sendButton = new ImageView(this);
+    sendButton.setScaleType(ImageView.ScaleType.CENTER);
+    sendButton.setImageDrawable(new Glyph("send", WHITE, 22));
+    sendButton.setBackground(ripple(GREEN, 10));
+    sendButton.setContentDescription(ChatRunner.running == 0 ? "Отправить" : "Ожидаем ответ");
+    sendButton.setFocusable(true);
+    sendButton.setEnabled(ChatRunner.running == 0);
+    sendButton.setAlpha(ChatRunner.running == 0 ? 1 : .4f);
+    sendButton.setOnClickListener(v -> send());
+    composer.addView(sendButton, new LinearLayout.LayoutParams(dp(50), dp(50)));
+    content.addView(composer);
     if (LocalLlm.enabled(this) && ChatRunner.running != 0) {
       gap(content, 6);
       content.addView(
@@ -3126,6 +3175,22 @@ public final class MainActivity extends Activity
         case "add" -> {
           c.drawLine(12, 5, 12, 19, paint);
           c.drawLine(5, 12, 19, 12, paint);
+        }
+        case "send" -> {
+          c.drawLine(12, 19, 12, 5, paint);
+          c.drawLine(12, 5, 6, 11, paint);
+          c.drawLine(12, 5, 18, 11, paint);
+        }
+        case "image" -> {
+          c.drawRoundRect(4, 5, 20, 19, 3, 3, paint);
+          c.drawCircle(9, 10, 1.5f, paint);
+          Path hills = new Path();
+          hills.moveTo(4, 17);
+          hills.lineTo(9, 13);
+          hills.lineTo(13, 16);
+          hills.lineTo(16, 13.5f);
+          hills.lineTo(20, 17);
+          c.drawPath(hills, paint);
         }
         case "close" -> {
           c.drawLine(6, 6, 18, 18, paint);
