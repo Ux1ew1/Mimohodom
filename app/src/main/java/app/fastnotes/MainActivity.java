@@ -36,8 +36,7 @@ public final class MainActivity extends Activity
   private FrameLayout frame, dock;
   private int lastDockTab = -1;
   private View dockFade;
-  private int navInset, imeBottom;
-  private View saveFab;
+  private int navInset;
   private boolean keyboardUp, searchOpen;
   private Runnable closeSearch;
   private EditText searchField;
@@ -567,7 +566,6 @@ public final class MainActivity extends Activity
 
   private void render() {
     rendering = true;
-    saveFab = null;
     analysisStatusView = null;
     editorActive = false;
     titleField = null;
@@ -589,7 +587,6 @@ public final class MainActivity extends Activity
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
             navInset = insets.getInsets(WindowInsets.Type.systemBars()).bottom;
             keyboardUp = insets.isVisible(WindowInsets.Type.ime());
-            imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom;
             placeDock();
             return WindowInsets.CONSUMED;
           });
@@ -771,12 +768,6 @@ public final class MainActivity extends Activity
     lastDockTab = to;
     frame.addView(
         dock, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
-    if (saveFab != null) {
-      FrameLayout.LayoutParams fabParams =
-          new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.BOTTOM | Gravity.END);
-      fabParams.rightMargin = dp(16);
-      frame.addView(saveFab, fabParams);
-    }
     placeDock();
   }
 
@@ -791,15 +782,6 @@ public final class MainActivity extends Activity
     dockFade.setLayoutParams(fade);
     dock.setVisibility(visible ? View.VISIBLE : View.GONE);
     dockFade.setVisibility(visible ? View.VISIBLE : View.GONE);
-    if (saveFab != null) {
-      // Выше нижней панели; при клавиатуре поднимается над ней.
-      FrameLayout.LayoutParams fab = (FrameLayout.LayoutParams) saveFab.getLayoutParams();
-      fab.bottomMargin =
-          keyboardUp
-              ? (Build.VERSION.SDK_INT >= 30 ? imeBottom : 0) + dp(16)
-              : navInset + dp(96);
-      saveFab.setLayoutParams(fab);
-    }
     // Пока открыта клавиатура, панели нет, и запас под неё внизу страницы не нужен.
     if (content != null && !"notes".equals(page) && !"chat".equals(page))
       content.setPadding(
@@ -1306,6 +1288,19 @@ public final class MainActivity extends Activity
     LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(-2, dp(40));
     reminderParams.leftMargin = dp(8);
     footer.addView(reminderButton, reminderParams);
+    if (id == 0) {
+      // Компактная кнопка сохранения в правом краю нижней полосы листа.
+      footer.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+      TextView save = text("Сохранить", 14, WHITE);
+      save.setTypeface(null, Typeface.BOLD);
+      save.setGravity(Gravity.CENTER);
+      save.setPadding(dp(18), 0, dp(18), 0);
+      save.setBackground(ripple(GREEN, 10));
+      save.setFocusable(true);
+      save.setContentDescription("Сохранить заметку");
+      save.setOnClickListener(v -> saveNote());
+      footer.addView(save, new LinearLayout.LayoutParams(-2, dp(40)));
+    }
     sheet.addView(footer);
     content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
     if (note != null && note.suggestion > 0) {
@@ -1344,18 +1339,6 @@ public final class MainActivity extends Activity
                 proposal.setVisibility(View.GONE);
               }));
       content.addView(proposal);
-    }
-    if (id == 0) {
-      // Кнопка сохранения плавает у правого нижнего угла, выше нижней панели.
-      ImageView fab = new ImageView(this);
-      fab.setScaleType(ImageView.ScaleType.CENTER);
-      fab.setImageDrawable(new Glyph("check", WHITE, 26));
-      fab.setBackground(ripple(GREEN, 16));
-      fab.setElevation(dp(6));
-      fab.setContentDescription("Сохранить заметку");
-      fab.setFocusable(true);
-      fab.setOnClickListener(v -> saveNote());
-      saveFab = fab;
     }
     gap(content, 16);
     secondary(
