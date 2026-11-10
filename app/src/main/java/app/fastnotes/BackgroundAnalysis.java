@@ -151,7 +151,7 @@ public final class BackgroundAnalysis extends JobService {
       String today = LocalDate.now().toString();
       int count =
           today.equals(prefs.getString("analysisDay", "")) ? prefs.getInt("analysisCount", 0) : 0;
-      if (count >= 4) {
+      if (!ReviewPolicy.allowed(count, prefs.getBoolean("unlimitedAi", false))) {
         status("Дневной лимит: 4 пакета. Следующая проверка — завтра.");
         return;
       }
@@ -207,11 +207,7 @@ public final class BackgroundAnalysis extends JobService {
   }
 
   private void status(String value) {
-    getSharedPreferences("settings", 0)
-        .edit()
-        .putString("analysisStatus", value)
-        .putLong("analysisTime", System.currentTimeMillis())
-        .apply();
+    ReviewLog.record(this, value);
   }
 
   private void notifySuggestion(long id) {

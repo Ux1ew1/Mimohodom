@@ -39,13 +39,16 @@ public final class MainActivity extends Activity
   private boolean editorActive = false, rendering = false;
   private String returnPage = "notes";
   private TextView reminderButton, analysisStatusView;
-  private AlertDialog managerPreview;
+  private AlertDialog managerPreview, analysisLogDialog;
+  private TextView analysisLogText;
   private final SharedPreferences.OnSharedPreferenceChangeListener analysisListener =
       (preferences, key) -> {
         if ("analysisTime".equals(key) || "analysisStatus".equals(key))
           runOnUiThread(
               () -> {
                 if (isDestroyed()) return;
+                if (analysisLogDialog != null && analysisLogDialog.isShowing())
+                  analysisLogText.setText(analysisHistoryText());
                 if ("analysisTime".equals(key)
                     && "manager".equals(page)
                     && !rendering
@@ -582,8 +585,11 @@ public final class MainActivity extends Activity
 
   private String analysisStatusText() {
     long time = prefs.getLong("analysisTime", 0);
-    return prefs.getString("analysisStatus", "Проверок ещё не было.")
-        + (time > 0 ? "\n" + date(time) : "");
+    return time == 0
+        ? "Проверок пока не было"
+        : ReviewPolicy.summary(prefs.getString("analysisStatus", ""))
+            + " · "
+            + new java.text.SimpleDateFormat("HH:mm", new Locale("ru")).format(new Date(time));
   }
 
   private void showAnalysisStatus() {
@@ -610,7 +616,8 @@ public final class MainActivity extends Activity
       }
       String today = java.time.LocalDate.now().toString();
       if (today.equals(prefs.getString("analysisDay", ""))
-          && prefs.getInt("analysisCount", 0) >= 4) {
+          && !ReviewPolicy.allowed(
+              prefs.getInt("analysisCount", 0), prefs.getBoolean("unlimitedAi", false))) {
         toast("На сегодня использованы все 4 пакета проверки");
         return;
       }
@@ -624,9 +631,9 @@ public final class MainActivity extends Activity
             .setMessage(
                 "Один платный запрос проверит автоматические названия, даты для напоминаний и"
                     + " возможность объединения записей. До 8 заметок и 12 000 символов; включает"
-                    + " записи после прежних ошибок. Общий лимит — 4 запроса в сутки. Авторские"
-                    + " названия сохраняются. Напоминания и объединения — после подтверждения."
-                    + " Фоновая работа от этого не включается.")
+                    + " записи после прежних ошибок. Дневной лимит можно изменить на экране"
+                    + " помощника. Авторские названия сохраняются. Напоминания и объединения —"
+                    + " после подтверждения. Фоновая работа от этого не включается.")
             .setNegativeButton("Отмена", null)
             .setPositiveButton(
                 "Проверить",
@@ -639,14 +646,10 @@ public final class MainActivity extends Activity
       }
       boolean queued = BackgroundAnalysis.enqueueManual(this);
       if (queued)
-        prefs
-            .edit()
-            .putString(
-                "analysisStatus",
-                "Общая проверка поставлена в очередь Android. Нужен интернет; повтор после ошибок"
-                    + " включён.")
-            .putLong("analysisTime", System.currentTimeMillis())
-            .apply();
+        ReviewLog.record(
+            this,
+            "Общая проверка поставлена в очередь Android. Нужен интернет; повтор после ошибок"
+                + " включён.");
       toast(
           queued
               ? "Запущена проверка названий, напоминаний и объединений"
@@ -1214,67 +1217,151 @@ public final class MainActivity extends Activity
 
   private String proposalLabel(String type) {
     return switch (type) {
-      case "merge" -> "Объединить заметки";
-      case "link" -> "Связанные записи";
-      case "task" -> "Возможное незавершённое дело";
-      default -> "Вопрос для уточнения";
+      case "merge" -> "Готовый общий текст";
+      case "link" -> "Общая тема";
+      case "task" -> "Идея для дела";
+      default -> "Стоит уточнить";
     };
   }
 
+  private TextView quietAction(String label, Runnable action) {
+    TextView view = button(label, false, action);
+    view.setBackground(ripple(android.graphics.Color.TRANSPARENT, 12));
+    view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+    view.setPadding(dp(8), dp(8), dp(8), dp(8));
+    view.setMinHeight(dp(48));
+    return view;
+  }
+
+  private TextView limitButton() {
+    TextView control =
+        quietAction(
+            prefs.getBoolean("unlimitedAi", false) ? "Вернуть лимит" : "Снять лимит 4/день",
+            () -> {});
+    control.setOnClickListener(
+        view -> {
+          boolean unlimited = !prefs.getBoolean("unlimitedAi", false);
+          prefs.edit().putBoolean("unlimitedAi", unlimited).apply();
+          if ("manager".equals(page)) render();
+          else control.setText(unlimited ? "Вернуть лимит" : "Снять лимит 4/день");
+          toast(
+              unlimited
+                  ? "Дневной лимит снят. Ручные и фоновые запросы остаются платными."
+                  : "Лимит 4 проверки в день возвращён. Выполненные запросы учитываются.");
+        });
+    return control;
+  }
+
+  private String analysisHistoryText() {
+    StringBuilder result = new StringBuilder();
+    try {
+      JSONArray entries = new JSONArray(prefs.getString("analysisHistory", "[]"));
+      for (int i = 0; i < entries.length(); i++) {
+        JSONObject entry = entries.getJSONObject(i);
+        if (i > 0) result.append("\n\n");
+        result.append(date(entry.getLong("time"))).append("\n").append(entry.getString("text"));
+      }
+    } catch (Exception ignored) {
+    }
+    if (result.length() == 0) {
+      long time = prefs.getLong("analysisTime", 0);
+      if (time > 0)
+        result.append(date(time)).append("\n").append(prefs.getString("analysisStatus", ""));
+      else result.append("Проверок пока не было.");
+    }
+    return result.toString();
+  }
+
+  private void showAnalysisLog() {
+    LinearLayout body = column();
+    pad(body, 16);
+    analysisLogText = text(analysisHistoryText(), 14, INK);
+    analysisLogText.setTextIsSelectable(true);
+    body.addView(analysisLogText);
+    analysisLogDialog =
+        new AlertDialog.Builder(this)
+            .setTitle("История проверок")
+            .setView(scroll(body))
+            .setPositiveButton("Закрыть", null)
+            .create();
+    analysisLogDialog.show();
+  }
+
   private void managerPage() {
-    heading("Предложения помощника", "Решаете вы. ИИ помогает разобраться в записях.");
-    content.addView(
-        button(
-            "Назад к заметкам",
-            false,
+    LinearLayout header = row();
+    TextView back =
+        quietAction(
+            "",
             () -> {
               page = "notes";
               render();
-            }));
+            });
+    back.setCompoundDrawablesWithIntrinsicBounds(new Glyph("back", GREEN, 22), null, null, null);
+    back.setContentDescription("Назад к заметкам");
+    header.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+    TextView title = text("Помощник", 26, INK);
+    title.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+    header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+    content.addView(header);
+    secondary(content, "Находит связи и помогает собрать заметки в стопки.");
+    gap(content, 14);
+    content.addView(button("Проверить заметки", true, this::manualAnalysis));
+    gap(content, 8);
+    showAnalysisStatus();
+    LinearLayout tools = row();
+    tools.addView(
+        quietAction("История проверок", this::showAnalysisLog),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    tools.addView(limitButton(), new LinearLayout.LayoutParams(0, -2, 1));
+    content.addView(tools);
+    if (prefs.getBoolean("unlimitedAi", false))
+      secondary(content, "Без дневного лимита · запросы платные");
+    gap(content, 12);
     ManagerStore manager = new ManagerStore(store);
     List<JSONObject> proposals = manager.pending();
-    showAnalysisStatus();
-    int merges = 0, links = 0, tasks = 0, questions = 0;
-    for (JSONObject p : proposals)
-      switch (p.optString("type")) {
-        case "merge" -> merges++;
-        case "link" -> links++;
-        case "task" -> tasks++;
-        default -> questions++;
-      }
-    secondary(
-        content,
-        "Сводка: объединения — "
-            + merges
-            + ", связи — "
-            + links
-            + ", дела — "
-            + tasks
-            + ", вопросы — "
-            + questions
-            + ".");
-    content.addView(button("Проверить сейчас", false, this::manualAnalysis));
-    content.addView(button("Обновить", false, this::render));
-    if (proposals.isEmpty()) secondary(content, "Новых предложений пока нет.");
+    TextView count = text("Предложения · " + proposals.size(), 18, INK);
+    count.setTypeface(null, Typeface.BOLD);
+    content.addView(count);
+    if (proposals.isEmpty()) {
+      gap(content, 8);
+      secondary(
+          content,
+          "Пока нет предложений. Проверка ищет общие темы, дубли и дела в ваших заметках.");
+    }
     for (JSONObject p : proposals) {
       gap(content, 12);
       LinearLayout card = column();
       pad(card, 16);
       card.setBackground(shape(WHITE, 18));
-      card.addView(text(proposalLabel(p.optString("type")), 18, INK));
-      card.addView(text(p.optString("reason"), 15, MUTED));
+      String type = p.optString("type");
+      TextView label = text(proposalLabel(type), 18, INK);
+      label.setTypeface(null, Typeface.BOLD);
+      card.addView(label);
+      gap(card, 6);
+      card.addView(text(p.optString("reason"), 14, MUTED));
+      if (type.equals("link"))
+        secondary(card, "Можно собрать в стопку. Полные тексты и исходники сохранятся.");
+      if (type.equals("merge"))
+        secondary(card, "ИИ подготовил общий текст. Проверьте его перед созданием стопки.");
+      gap(card, 8);
       JSONArray sources = p.optJSONArray("sources");
       if (sources != null)
         for (int i = 0; i < sources.length(); i++) {
           long id = sources.optJSONObject(i).optLong("id");
           Note n = store.note(id);
-          if (n != null) card.addView(button(n.title, false, () -> openNote(id)));
+          if (n != null) card.addView(quietAction(n.title + "  ↗", () -> openNote(id)));
         }
-      card.addView(button("Посмотреть", false, () -> previewProposal(p)));
+      gap(card, 8);
       card.addView(
           button(
-              "Отклонить",
-              false,
+              type.equals("link")
+                  ? "Собрать в стопку"
+                  : type.equals("merge") ? "Проверить и собрать" : "Посмотреть черновик",
+              true,
+              () -> previewProposal(p)));
+      card.addView(
+          quietAction(
+              "Не нужно",
               () -> {
                 manager.state(p.optLong("id"), "dismissed");
                 render();
@@ -1296,21 +1383,27 @@ public final class MainActivity extends Activity
       return;
     }
     if (p.optString("type").equals("link")) {
-      new AlertDialog.Builder(this)
-          .setTitle("Связанные записи")
-          .setMessage(p.optString("reason"))
-          .setPositiveButton(
-              "Понятно",
-              (d, w) -> {
-                manager.state(p.optLong("id"), "reviewed");
-                render();
-              })
-          .setNegativeButton("Назад", null)
-          .show();
-      return;
+      try {
+        List<Note> sources = new ArrayList<>();
+        JSONArray refs = p.getJSONArray("sources");
+        for (int i = 0; i < refs.length(); i++)
+          sources.add(store.note(refs.getJSONObject(i).getLong("id")));
+        JSONObject draft = ManagerAnalysis.groupDraft(sources);
+        p.put("title", draft.getString("title")).put("body", draft.getString("body"));
+      } catch (Exception e) {
+        toast("Исходники изменились. Обновите предложения.");
+        return;
+      }
     }
     LinearLayout form = column();
     pad(form, 20);
+    if (p.optString("type").equals("link") || p.optString("type").equals("merge")) {
+      secondary(
+          form,
+          "Сверху стопки появится эта заметка. Исходники останутся под ней; их тексты и напоминания"
+              + " сохранятся.");
+      gap(form, 12);
+    }
     EditText title = input("Заголовок", false), body = input("Текст", true);
     String key = "managerDraft." + p.optLong("id");
     title.setText(prefs.getString(key + ".title", p.optString("title")));
@@ -1321,10 +1414,17 @@ public final class MainActivity extends Activity
     watch(body, () -> prefs.edit().putString(key + ".body", body.getText().toString()).apply());
     AlertDialog dialog =
         new AlertDialog.Builder(this)
-            .setTitle(proposalLabel(p.optString("type")))
+            .setTitle(
+                p.optString("type").equals("link") || p.optString("type").equals("merge")
+                    ? "Новая стопка"
+                    : "Сохранить заметку")
             .setView(scroll(form))
             .setNegativeButton("Назад", null)
-            .setPositiveButton("Сохранить", null)
+            .setPositiveButton(
+                p.optString("type").equals("link") || p.optString("type").equals("merge")
+                    ? "Создать стопку"
+                    : "Сохранить",
+                null)
             .create();
     dialog.setOnShowListener(
         d ->
@@ -1340,7 +1440,11 @@ public final class MainActivity extends Activity
                         page = "notes";
                         search = "";
                         render();
-                        toast("✓ Заметка сохранена");
+                        toast(
+                            p.optString("type").equals("link")
+                                    || p.optString("type").equals("merge")
+                                ? "✓ Стопка создана"
+                                : "✓ Заметка сохранена");
                       } catch (Exception e) {
                         toast(
                             e instanceof IllegalStateException
@@ -2164,9 +2268,10 @@ public final class MainActivity extends Activity
                 .setTitle("Включить менеджера заметок?")
                 .setMessage(
                     "Выбранные тексты из всей коллекции будут передаваться в Polza.AI примерно"
-                        + " каждые 6 часов, даже при закрытом приложении. Общий лимит — 4 платных"
-                        + " запроса в сутки, до 8 заметок и 12 000 символов на запрос. Изменения —"
-                        + " только после подтверждения. Сохраните настройки для включения.")
+                        + " каждые 6 часов, даже при закрытом приложении. По умолчанию — 4 платных"
+                        + " запроса в сутки; дневной лимит можно снять. До 8 заметок и 12 000"
+                        + " символов на запрос. Изменения — только после подтверждения. Сохраните"
+                        + " настройки для включения.")
                 .setPositiveButton("Согласен", (d, w) -> {})
                 .setNegativeButton("Отмена", (d, w) -> manager.setChecked(false))
                 .setOnCancelListener(d -> manager.setChecked(false))
@@ -2181,11 +2286,14 @@ public final class MainActivity extends Activity
     secondary(
         content,
         "При включении новые и изменённые заметки передаются в Polza.AI даже при закрытом"
-            + " приложении. До 4 платных пакетов по 5 заметок в сутки. Проверка примерно раз в 6"
-            + " часов; Android может отложить её. ИИ улучшает автоматические заголовки и предлагает"
-            + " напоминания. События назначаются только после подтверждения.");
+            + " приложении. По умолчанию до 4 платных пакетов в сутки; дневной лимит можно снять."
+            + " Проверка примерно раз в 6 часов; Android может отложить её. ИИ улучшает"
+            + " автоматические заголовки и предлагает напоминания. События назначаются только после"
+            + " подтверждения.");
     gap(content, 10);
     showAnalysisStatus();
+    content.addView(quietAction("История проверок", this::showAnalysisLog));
+    content.addView(limitButton());
     gap(content, 10);
     content.addView(button("Проверить сейчас", false, this::manualAnalysis));
     secondary(

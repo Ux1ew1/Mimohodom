@@ -30,7 +30,7 @@ final class ManagerJob {
           store.totalNotes() == 0
               ? "Нет заметок для проверки."
               : "Все доступные записи ожидают ручного повтора после ошибки. Нажмите «Проверить"
-                    + " сейчас».");
+                  + " сейчас».");
       return;
     }
     long runId;
@@ -39,7 +39,7 @@ final class ManagerJob {
       String today = LocalDate.now().toString();
       int count =
           today.equals(prefs.getString("analysisDay", "")) ? prefs.getInt("analysisCount", 0) : 0;
-      if (count >= 4) {
+      if (!ReviewPolicy.allowed(count, prefs.getBoolean("unlimitedAi", false))) {
         status(context, "Дневной лимит: 4 пакета. Следующая проверка — завтра.");
         return;
       }
@@ -119,12 +119,7 @@ final class ManagerJob {
   }
 
   private static void status(Context context, String text) {
-    context
-        .getSharedPreferences("settings", 0)
-        .edit()
-        .putString("analysisStatus", text)
-        .putLong("analysisTime", System.currentTimeMillis())
-        .apply();
+    ReviewLog.record(context, text);
   }
 
   private static void notify(Context context, int count) {

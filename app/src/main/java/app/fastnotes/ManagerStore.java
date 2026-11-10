@@ -268,12 +268,13 @@ public final class ManagerStore {
     List<JSONObject> out = new ArrayList<>();
     try (Cursor c =
         db.rawQuery(
-            "SELECT id,data FROM manager_proposals WHERE state='pending' ORDER BY created DESC,id"
-                + " DESC",
+            "SELECT id,data,state FROM manager_proposals WHERE state IN ('pending','reviewed')"
+                + " ORDER BY created DESC,id DESC",
             null)) {
       while (c.moveToNext()) {
         try {
           JSONObject p = new JSONObject(c.getString(1)).put("id", c.getLong(0));
+          if (c.getString(2).equals("reviewed") && !p.optString("type").equals("link")) continue;
           if (current(p)) out.add(p);
           else state(c.getLong(0), "stale");
         } catch (Exception e) {
@@ -286,7 +287,7 @@ public final class ManagerStore {
 
   public void state(long id, String state) {
     db.execSQL(
-        "UPDATE manager_proposals SET state=? WHERE id=? AND state='pending'",
+        "UPDATE manager_proposals SET state=? WHERE id=? AND state IN ('pending','reviewed')",
         new Object[] {state, id});
   }
 
@@ -298,11 +299,13 @@ public final class ManagerStore {
       if (!c.moveToFirst()) throw new IllegalStateException("Предложение не найдено");
       if (c.getString(1).equals("accepted")) return c.getLong(2);
       JSONObject p = new JSONObject(c.getString(0));
-      if (!c.getString(1).equals("pending") || !current(p))
+      if (!(c.getString(1).equals("pending")
+              || (c.getString(1).equals("reviewed") && p.optString("type").equals("link")))
+          || !current(p))
         throw new IllegalStateException("Исходные заметки изменились. Нужна новая проверка.");
       if (body.trim().isEmpty()) throw new IllegalStateException("Добавьте текст заметки");
       long result = store.save(0, title, body, 0);
-      if (p.getString("type").equals("merge")) {
+      if (p.getString("type").equals("merge") || p.getString("type").equals("link")) {
         LinkedHashSet<Long> members = new LinkedHashSet<>();
         JSONArray sources = p.getJSONArray("sources");
         for (int i = 0; i < sources.length(); i++) {

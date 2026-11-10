@@ -109,6 +109,38 @@ public final class ReviewTest {
     check(
         !ReviewAnalysis.error(new Exception("private note or key")).contains("private"),
         "Unexpected error hides sensitive details");
+    check(ReviewPolicy.allowed(0, false), "Default budget allows first request");
+    check(ReviewPolicy.allowed(3, false), "Default budget allows fourth request");
+    check(!ReviewPolicy.allowed(4, false), "Default budget stops fifth request");
+    check(ReviewPolicy.allowed(4, true), "User can remove exhausted daily cap");
+    check(ReviewPolicy.allowed(100, true), "Unlimited mode has no daily cap");
+    check(!ReviewPolicy.allowed(100, false), "Restored cap respects already used requests");
+    check(
+        ReviewPolicy.summary("Просмотрено записей: 8 из 17. " + "Подробности ".repeat(100))
+            .equals("Проверка завершена"),
+        "Verbose log stays out of UI summary");
+    check(
+        ReviewPolicy.summary("Проверка не завершена. Ошибка")
+            .equals("Не удалось завершить проверку"),
+        "Short failure is distinguishable");
+    check(
+        ReviewPolicy.summary("Дневной лимит: 4 пакета").contains("исчерпан"),
+        "Cap has clear status");
+    a.body = "Полный текст " + "длинный ".repeat(2000);
+    JSONObject draft = ManagerAnalysis.groupDraft(notes);
+    check(
+        draft.getString("body").contains(a.body) && draft.getString("body").contains(b.body),
+        "Link draft includes full sources beyond API budget");
+    check(
+        draft.getString("body").contains(a.title) && draft.getString("body").contains(b.title),
+        "Source headings retained");
+    boolean single = false;
+    try {
+      ManagerAnalysis.groupDraft(Collections.singletonList(a));
+    } catch (IllegalArgumentException e) {
+      single = true;
+    }
+    check(single, "Single-source stack rejected");
     System.out.println("PASS: " + checks + " unified review checks");
   }
 }

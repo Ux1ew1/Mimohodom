@@ -114,6 +114,35 @@ final class ManagerStorageTest {
       require(
           m.accept(pending.getLong("id"), "Итог", "Мука, молоко, соль") > 0,
           "Merge remains acceptable after rename");
+      long linkA = store.save(0, "Авто", "Папка в бардачке", 12345),
+          linkB = store.save(0, "Масло", "Пробег 186612", 0);
+      List<Note> linked = Arrays.asList(store.note(linkA), store.note(linkB));
+      List<JSONObject> linkProposals = proposal(linked);
+      JSONObject link = linkProposals.get(0);
+      link.put("type", "link").put("title", "").put("body", "");
+      ManagerStore.attachGroups(link, m.groupSnapshot(linked));
+      m.finish(m.claim(linked), linked, linkProposals);
+      JSONObject savedLink =
+          m.pending().stream()
+              .filter(p -> p.optString("type").equals("link"))
+              .findFirst()
+              .orElseThrow();
+      long linkId = savedLink.getLong("id");
+      m.state(linkId, "reviewed");
+      require(
+          m.pending().stream().anyMatch(p -> p.optLong("id") == linkId),
+          "Previously viewed link is available for grouping");
+      JSONObject localDraft = ManagerAnalysis.groupDraft(linked);
+      long linkedTop =
+          m.accept(linkId, localDraft.getString("title"), localDraft.getString("body"));
+      require(m.members(linkedTop).size() == 2, "Link acceptance creates a stack");
+      require(
+          store.note(linkA).reminder == 12345 && store.note(linkA).body.equals("Папка в бардачке"),
+          "Link grouping preserves original text and reminder");
+      require(m.accept(linkId, "Повтор", "Повтор") == linkedTop, "Link acceptance is idempotent");
+      require(
+          m.pending().stream().noneMatch(p -> p.optLong("id") == linkId),
+          "Accepted link leaves pending list");
       // Recreate a real v5 database by removing only the v6 additions, then reopen it.
       for (String table :
           new String[] {
