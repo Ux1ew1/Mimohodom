@@ -11,6 +11,7 @@ import android.text.*;
 import android.text.method.*;
 import android.text.style.ClickableSpan;
 import android.view.*;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
 import java.util.*;
@@ -31,9 +32,17 @@ public final class MainActivity extends Activity
   private final ExecutorService io = Executors.newSingleThreadExecutor();
   private Store store;
   private SharedPreferences prefs;
-  private LinearLayout root, content, nav;
+  private LinearLayout root, content, dock;
+  private FrameLayout frame;
+  private View dockFade;
+  private int navInset;
+  private boolean keyboardUp, searchOpen;
+  private Runnable closeSearch;
+  private EditText searchField;
+  private PopupWindow suggestionsPopup;
   private EditText titleField, bodyField, chatInput;
-  private int tab = 0;
+  // Вкладки слева направо: 0 «Заметки», 1 «Записать», 2 «ИИ-чат». 3 — настройки вне нижней панели.
+  private int tab = 1;
   private String page = "home";
   private long editing = 0, reminder = 0, chat = 0;
   private boolean editorActive = false, rendering = false;
@@ -75,7 +84,8 @@ public final class MainActivity extends Activity
       swipeConsumed = false;
       Rect bounds = new Rect();
       swipeAllowed =
-          pageSurface().getGlobalVisibleRect(bounds)
+          tab != 3
+              && pageSurface().getGlobalVisibleRect(bounds)
               && bounds.contains((int) swipeX, (int) swipeY)
               && swipeX > bounds.left + dp(24)
               && swipeX < bounds.right - dp(24)
@@ -106,7 +116,7 @@ public final class MainActivity extends Activity
       if (swipeConsumed) {
         int width = pageSurface().getWidth();
         // At the first and last tabs, resist dragging beyond the available pages.
-        if ((tab == 0 && dx > 0) || (tab == 3 && dx < 0)) dx *= 0.2f;
+        if ((tab == 0 && dx > 0) || (tab == 2 && dx < 0)) dx *= 0.2f;
         pageSurface().setTranslationX(Math.max(-width, Math.min(width, dx)));
         return true;
       }
@@ -125,7 +135,7 @@ public final class MainActivity extends Activity
     View surface = pageSurface();
     float offset = surface.getTranslationX();
     int next = tab + (offset < 0 ? 1 : -1);
-    if (released && next >= 0 && next < 4 && Math.abs(offset) >= surface.getWidth() * 0.25f) {
+    if (released && next >= 0 && next < 3 && Math.abs(offset) >= surface.getWidth() * 0.25f) {
       animateNavigate(next);
     } else {
       pageAnimating = true;
@@ -161,7 +171,7 @@ public final class MainActivity extends Activity
     prefs.registerOnSharedPreferenceChangeListener(analysisListener);
     Reminders.channel(this);
     if (state != null) {
-      tab = state.getInt("tab");
+      tab = state.getInt("tab", 1);
       page = state.getString("page", "home");
       editing = state.getLong("editing");
       chat = state.getLong("chat");
@@ -174,11 +184,11 @@ public final class MainActivity extends Activity
     if (state == null && requested > 0) {
       editing = requested;
       page = "edit";
-      tab = 1;
+      tab = 0;
     }
     if (state == null && getIntent().getBooleanExtra("manager", false)) {
       page = "manager";
-      tab = 1;
+      tab = 0;
     }
     ChatRunner.listen(this);
     ImageRunner.listen(this);
@@ -244,11 +254,19 @@ public final class MainActivity extends Activity
   }
 
   private void goBack() {
+    if (suggestionsPopup != null && suggestionsPopup.isShowing()) {
+      suggestionsPopup.dismiss();
+      return;
+    }
+    if ("notes".equals(page) && searchOpen && closeSearch != null) {
+      closeSearch.run();
+      return;
+    }
     if ("edit".equals(page)) {
       stash();
       if (!persistEditedNote()) return;
       page = returnPage;
-      tab = page.equals("chat") ? 2 : 1;
+      tab = page.equals("chat") ? 2 : page.equals("home") ? 1 : 0;
       render();
     } else if ("manager".equals(page)) {
       page = "notes";
@@ -257,8 +275,8 @@ public final class MainActivity extends Activity
       stash();
       page = "chats";
       render();
-    } else if (tab != 0) {
-      navigate(0);
+    } else if (tab != 1) {
+      navigate(1);
     } else super.onBackPressed();
   }
 
@@ -286,12 +304,12 @@ public final class MainActivity extends Activity
           LinearLayout card = column();
           card.setGravity(Gravity.CENTER);
           pad(card, 22);
-          GradientDrawable background = shape(WHITE, 24);
+          GradientDrawable background = shape(WHITE, 14);
           background.setStroke(dp(1), LINE);
           card.setBackground(background);
           card.setElevation(dp(12));
           ImageView check = new ImageView(this);
-          check.setBackground(shape(LIME, 28));
+          check.setBackground(shape(LIME, 14));
           check.setPadding(dp(14), dp(14), dp(14), dp(14));
           check.setImageDrawable(new Glyph("check", GREEN, 28));
           card.addView(check, new LinearLayout.LayoutParams(dp(56), dp(56)));
@@ -406,7 +424,7 @@ public final class MainActivity extends Activity
     b.setGravity(Gravity.CENTER);
     b.setMinHeight(dp(50));
     b.setPadding(dp(16), dp(10), dp(16), dp(10));
-    b.setBackground(ripple(primary ? GREEN : LIME, 16));
+    b.setBackground(ripple(primary ? GREEN : LIME, 12));
     b.setFocusable(true);
     b.setOnClickListener(v -> click.run());
     return b;
@@ -450,7 +468,7 @@ public final class MainActivity extends Activity
     e.setHint(hint);
     e.setContentDescription(hint);
     e.setPadding(dp(16), dp(14), dp(16), dp(14));
-    e.setBackground(shape(WHITE, 14));
+    e.setBackground(shape(WHITE, 10));
     e.setInputType(
         android.text.InputType.TYPE_CLASS_TEXT
             | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -478,7 +496,7 @@ public final class MainActivity extends Activity
     if (!persistEditedNote()) return;
     hideKeyboard();
     tab = next;
-    page = new String[] {"home", "notes", "chats", "settings"}[next];
+    page = new String[] {"notes", "home", "chats", "settings"}[next];
     editing = 0;
     render();
   }
@@ -552,9 +570,13 @@ public final class MainActivity extends Activity
     titleField = null;
     bodyField = null;
     chatInput = null;
+    if (suggestionsPopup != null) suggestionsPopup.dismiss();
     root = column();
     root.setBackgroundColor(PAPER);
-    setContentView(root);
+    frame = new FrameLayout(this);
+    frame.setBackgroundColor(PAPER);
+    frame.addView(root, new FrameLayout.LayoutParams(-1, -1));
+    setContentView(frame);
     if (Build.VERSION.SDK_INT >= 30) {
       getWindow().setDecorFitsSystemWindows(false);
       root.setOnApplyWindowInsetsListener(
@@ -562,11 +584,30 @@ public final class MainActivity extends Activity
             android.graphics.Insets bars =
                 insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            navInset = insets.getInsets(WindowInsets.Type.systemBars()).bottom;
+            keyboardUp = insets.isVisible(WindowInsets.Type.ime());
+            placeDock();
             return WindowInsets.CONSUMED;
           });
-    } else root.setFitsSystemWindows(true);
+    } else {
+      root.setOnApplyWindowInsetsListener(
+          (v, insets) -> {
+            v.setPadding(
+                insets.getSystemWindowInsetLeft(),
+                insets.getSystemWindowInsetTop(),
+                insets.getSystemWindowInsetRight(),
+                insets.getSystemWindowInsetBottom());
+            navInset = insets.getStableInsetBottom();
+            keyboardUp = insets.getSystemWindowInsetBottom() > navInset + dp(100);
+            placeDock();
+            return insets.consumeSystemWindowInsets();
+          });
+    }
     content = column();
-    content.setPadding(dp(22), dp(8), dp(22), dp(16));
+    // Плавающая нижняя панель перекрывает низ страницы, поэтому внизу оставляем под неё место.
+    boolean notesList = "notes".equals(page);
+    content.setPadding(
+        dp(22), dp(8), dp(22), notesList ? 0 : dp("chat".equals(page) ? 16 : 100));
     if ("notes".equals(page) || "chat".equals(page)) {
       root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
     } else root.addView(scroll(content), new LinearLayout.LayoutParams(-1, 0, 1));
@@ -659,39 +700,393 @@ public final class MainActivity extends Activity
     }
   }
 
+  /** Плавающая панель: три значка без подписей, по центру внизу поверх страницы. */
   private void bottomNav() {
-    View line = new View(this);
-    line.setBackgroundColor(LINE);
-    root.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
-    nav = row();
-    nav.setPadding(dp(6), dp(6), dp(6), dp(6));
-    String[] labels = {"Записать", "Заметки", "ИИ-чат", "Настройки"};
-    String[] icons = {"plus", "notes", "chat", "settings"};
-    for (int i = 0; i < 4; i++) {
+    dock = null;
+    dockFade = null;
+    // Мягкий переход под панелью. Касания проходят сквозь него к списку.
+    dockFade = new View(this);
+    dockFade.setBackground(
+        new GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0x00F7F8F2, PAPER}));
+    frame.addView(dockFade, new FrameLayout.LayoutParams(-1, dp(110), Gravity.BOTTOM));
+    dock = row();
+    dock.setPadding(dp(14), dp(9), dp(14), dp(9));
+    GradientDrawable background = shape(0xF2FFFFFF, 20);
+    background.setStroke(dp(1), LINE);
+    dock.setBackground(background);
+    dock.setElevation(dp(8));
+    String[] labels = {"Заметки", "Записать", "ИИ-чат"};
+    String[] icons = {"notes", "add", "chat"};
+    for (int i = 0; i < 3; i++) {
       final int target = i;
-      LinearLayout item = column();
-      item.setGravity(Gravity.CENTER);
-      item.setMinimumHeight(dp(72));
-      item.setPadding(dp(2), dp(10), dp(2), dp(10));
-      ImageView icon = new ImageView(this);
-      icon.setImageDrawable(new Glyph(icons[i], i == tab ? GREEN : MUTED, 22));
-      item.addView(icon, new LinearLayout.LayoutParams(dp(22), dp(22)));
-      gap(item, 6);
-      TextView label = text(labels[i], 11, i == tab ? GREEN : MUTED);
-      label.setGravity(Gravity.CENTER);
-      label.setIncludeFontPadding(false);
-      item.addView(label, new LinearLayout.LayoutParams(-1, -2));
+      boolean add = i == 1, active = i == tab;
+      ImageView item = new ImageView(this);
+      item.setScaleType(ImageView.ScaleType.CENTER);
+      item.setImageDrawable(new Glyph(icons[i], add ? WHITE : active ? GREEN : MUTED, 24));
+      item.setBackground(
+          ripple(add ? GREEN : active ? LIME : android.graphics.Color.TRANSPARENT, 14));
       item.setContentDescription(labels[i]);
-      item.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
-      icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-      label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-      item.setBackground(ripple(i == tab ? LIME : PAPER, 14));
       item.setFocusable(true);
-      item.setSelected(i == tab);
+      item.setClickable(true);
+      item.setSelected(active);
       item.setOnClickListener(v -> navigate(target));
-      nav.addView(item, new LinearLayout.LayoutParams(0, -2, 1));
+      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(46), dp(46));
+      if (i > 0) lp.leftMargin = dp(14);
+      dock.addView(item, lp);
     }
-    root.addView(nav);
+    frame.addView(
+        dock, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
+    placeDock();
+  }
+
+  private void placeDock() {
+    if (dock == null || dockFade == null) return;
+    boolean visible = !keyboardUp && !"chat".equals(page);
+    FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) dock.getLayoutParams();
+    lp.bottomMargin = navInset + dp(16);
+    dock.setLayoutParams(lp);
+    FrameLayout.LayoutParams fade = (FrameLayout.LayoutParams) dockFade.getLayoutParams();
+    fade.height = dp(110) + navInset;
+    dockFade.setLayoutParams(fade);
+    dock.setVisibility(visible ? View.VISIBLE : View.GONE);
+    dockFade.setVisibility(visible ? View.VISIBLE : View.GONE);
+  }
+
+  private ImageView barIcon(String icon, String description, Runnable click) {
+    ImageView view = new ImageView(this);
+    view.setScaleType(ImageView.ScaleType.CENTER);
+    view.setImageDrawable(new Glyph(icon, INK, 24));
+    view.setBackground(ripple(android.graphics.Color.TRANSPARENT, 14));
+    view.setContentDescription(description);
+    view.setFocusable(true);
+    view.setOnClickListener(v -> click.run());
+    return view;
+  }
+
+  /**
+   * Верхняя строка: назад слева, поиск по центру, колокольчик с предложениями ИИ и настройки справа.
+   * Поле поиска раскрывается поверх остальных кнопок, быстро в начале и медленнее к концу.
+   */
+  private View topBar(boolean back, boolean searchable, boolean actions) {
+    searchOpen = false;
+    closeSearch = null;
+    searchField = null;
+    FrameLayout bar = new FrameLayout(this);
+    int size = dp(44);
+    List<View> fading = new ArrayList<>();
+    if (back) {
+      View button = barIcon("back", "Назад", this::goBack);
+      bar.addView(
+          button, new FrameLayout.LayoutParams(size, size, Gravity.START | Gravity.CENTER_VERTICAL));
+      fading.add(button);
+    }
+    if (actions) {
+      View settingsButton = barIcon("settings", "Настройки", () -> navigate(3));
+      bar.addView(
+          settingsButton,
+          new FrameLayout.LayoutParams(size, size, Gravity.END | Gravity.CENTER_VERTICAL));
+      int pending = new ManagerStore(store).pending().size();
+      FrameLayout bell = new FrameLayout(this);
+      bell.addView(
+          barIcon(
+              "bell",
+              pending > 0 ? "Предложения ИИ: " + pending : "Предложения ИИ",
+              () -> showSuggestions(bar)),
+          new FrameLayout.LayoutParams(size, size));
+      if (pending > 0) {
+        TextView badge = text(pending > 9 ? "9+" : String.valueOf(pending), 10, WHITE);
+        badge.setTypeface(null, Typeface.BOLD);
+        badge.setGravity(Gravity.CENTER);
+        badge.setIncludeFontPadding(false);
+        badge.setMinWidth(dp(16));
+        badge.setPadding(dp(4), 0, dp(4), 0);
+        badge.setBackground(shape(GREEN, 6));
+        badge.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams badgeParams =
+            new FrameLayout.LayoutParams(-2, dp(16), Gravity.TOP | Gravity.END);
+        badgeParams.topMargin = dp(5);
+        badgeParams.rightMargin = dp(3);
+        bell.addView(badge, badgeParams);
+      }
+      FrameLayout.LayoutParams bellParams =
+          new FrameLayout.LayoutParams(size, size, Gravity.END | Gravity.CENTER_VERTICAL);
+      bellParams.rightMargin = dp(48);
+      bar.addView(bell, bellParams);
+      fading.add(bell);
+      fading.add(settingsButton);
+    }
+    if (!searchable) return bar;
+
+    // Фокус по умолчанию держит сама строка, чтобы поле не раскрывалось само.
+    bar.setFocusableInTouchMode(true);
+    bar.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+    EditText field = new EditText(this);
+    field.setBackground(null);
+    field.setHintTextColor(MUTED);
+    field.setTextColor(INK);
+    field.setTextSize(15);
+    field.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+    field.setSingleLine(true);
+    field.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+    field.setPadding(dp(8), 0, dp(8), 0);
+    field.setContentDescription("Поиск по заметкам");
+    field.setOnEditorActionListener(
+        (v, action, event) -> {
+          hideKeyboard();
+          return true;
+        });
+    field.setText(search);
+    LinearLayout box = row();
+    box.setPadding(dp(14), 0, dp(6), 0);
+    GradientDrawable boxBackground = shape(WHITE, 14);
+    boxBackground.setStroke(dp(1), LINE);
+    box.setBackground(boxBackground);
+    ImageView glass = new ImageView(this);
+    glass.setImageDrawable(new Glyph("search", MUTED, 20));
+    box.addView(glass, new LinearLayout.LayoutParams(dp(20), dp(20)));
+    box.addView(field, new LinearLayout.LayoutParams(0, -1, 1));
+    ImageView clear = new ImageView(this);
+    clear.setScaleType(ImageView.ScaleType.CENTER);
+    clear.setImageDrawable(new Glyph("close", GREEN, 18));
+    clear.setBackground(shape(LIME, 10));
+    clear.setContentDescription("Закрыть поиск");
+    box.addView(clear, new LinearLayout.LayoutParams(dp(32), dp(32)));
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, size, Gravity.CENTER_VERTICAL);
+    int left = back ? dp(52) : 0, right = actions ? dp(96) : 0;
+    bar.addView(box, params);
+    SearchMotion motion = new SearchMotion(params, box, clear, field, fading, left, right);
+    searchField = field;
+    closeSearch =
+        () -> {
+          field.setText("");
+          bar.requestFocus();
+          hideKeyboard();
+          motion.set(false, true);
+        };
+    clear.setOnClickListener(v -> closeSearch.run());
+    box.setOnClickListener(
+        v -> {
+          motion.set(true, true);
+          field.requestFocus();
+          getSystemService(InputMethodManager.class).showSoftInput(field, 0);
+        });
+    field.setOnFocusChangeListener(
+        (v, focused) -> {
+          if (focused) motion.set(true, true);
+          else if (field.getText().length() == 0) motion.set(false, true);
+        });
+    motion.set(!search.isEmpty(), false);
+    return bar;
+  }
+
+  /** Раскрытие поля поиска: 480 мс с быстрым стартом, закрытие короче и спокойнее. */
+  private final class SearchMotion {
+    final FrameLayout.LayoutParams params;
+    final View box, clear;
+    final EditText field;
+    final List<View> fading;
+    final int left, right;
+    android.animation.ValueAnimator running;
+    float fraction;
+
+    SearchMotion(
+        FrameLayout.LayoutParams params,
+        View box,
+        View clear,
+        EditText field,
+        List<View> fading,
+        int left,
+        int right) {
+      this.params = params;
+      this.box = box;
+      this.clear = clear;
+      this.field = field;
+      this.fading = fading;
+      this.left = left;
+      this.right = right;
+    }
+
+    void apply(float f) {
+      fraction = f;
+      params.leftMargin = Math.round(left * (1 - f));
+      params.rightMargin = Math.round(right * (1 - f));
+      box.setLayoutParams(params);
+      clear.setAlpha(f);
+      clear.setClickable(f > .5f);
+    }
+
+    void set(boolean open, boolean animated) {
+      if (animated && open == searchOpen) return;
+      searchOpen = open;
+      field.setHint(open ? "Поиск по заметкам" : "Поиск");
+      if (running != null) running.cancel();
+      float target = open ? 1 : 0;
+      if (!animated || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+        apply(target);
+        for (View v : fading) {
+          v.animate().cancel();
+          v.setAlpha(1 - target);
+        }
+        return;
+      }
+      running = android.animation.ValueAnimator.ofFloat(fraction, target);
+      running.setDuration(open ? 480 : 320);
+      running.setInterpolator(
+          open
+              ? new android.view.animation.PathInterpolator(0.16f, 1f, 0.3f, 1f)
+              : new android.view.animation.PathInterpolator(0.65f, 0f, 0.35f, 1f));
+      running.addUpdateListener(a -> apply((float) a.getAnimatedValue()));
+      running.start();
+      for (View v : fading)
+        v.animate().alpha(1 - target).setStartDelay(open ? 0 : 160).setDuration(160).start();
+    }
+  }
+
+  private TextView smallButton(String label, boolean primary, Runnable click) {
+    TextView b = button(label, primary, click);
+    b.setTextSize(13);
+    b.setMinHeight(dp(38));
+    b.setPadding(dp(14), dp(6), dp(14), dp(6));
+    return b;
+  }
+
+  /** Выпадающее меню колокольчика. Предложения применяются только по явному нажатию. */
+  private void showSuggestions(View anchor) {
+    if (suggestionsPopup != null && suggestionsPopup.isShowing()) {
+      suggestionsPopup.dismiss();
+      return;
+    }
+    ManagerStore manager = new ManagerStore(store);
+    List<JSONObject> proposals = manager.pending();
+    int width = Math.min(dp(344), getResources().getDisplayMetrics().widthPixels - dp(44));
+    LinearLayout panel = column();
+    GradientDrawable background = shape(WHITE, 14);
+    background.setStroke(dp(1), LINE);
+    panel.setBackground(background);
+    LinearLayout head = row();
+    head.setPadding(dp(16), dp(14), dp(16), dp(6));
+    ImageView spark = new ImageView(this);
+    spark.setImageDrawable(new Glyph("spark", GREEN, 20));
+    head.addView(spark, new LinearLayout.LayoutParams(dp(20), dp(20)));
+    TextView title = text("Предложения ИИ", 16, INK);
+    title.setTypeface(null, Typeface.BOLD);
+    title.setPadding(dp(8), 0, 0, 0);
+    head.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+    if (!proposals.isEmpty()) head.addView(text("новых: " + proposals.size(), 12, MUTED));
+    panel.addView(head);
+    LinearLayout items = column();
+    items.setPadding(dp(8), 0, dp(8), dp(4));
+    if (proposals.isEmpty()) {
+      TextView empty =
+          text("Новых предложений нет. Проверка ищет общие темы, дубли и дела в заметках.", 13, MUTED);
+      empty.setPadding(dp(8), dp(8), dp(8), dp(12));
+      items.addView(empty);
+    }
+    for (JSONObject p : proposals) {
+      String type = p.optString("type");
+      boolean stack = type.equals("link") || type.equals("merge");
+      LinearLayout item = column();
+      item.setPadding(dp(8), dp(12), dp(8), dp(12));
+      LinearLayout top = row();
+      top.setGravity(Gravity.TOP);
+      ImageView mark = new ImageView(this);
+      mark.setScaleType(ImageView.ScaleType.CENTER);
+      mark.setBackground(shape(stack ? 0xFFF0E8FA : LIME, 10));
+      mark.setImageDrawable(new Glyph(stack ? "notes" : "spark", stack ? 0xFF75449B : GREEN, 20));
+      top.addView(mark, new LinearLayout.LayoutParams(dp(36), dp(36)));
+      LinearLayout words = column();
+      words.setPadding(dp(12), 0, 0, 0);
+      TextView name = text(proposalLabel(type), 14, INK);
+      name.setTypeface(null, Typeface.BOLD);
+      words.addView(name);
+      TextView reason = text(p.optString("reason"), 12, MUTED);
+      reason.setMaxLines(3);
+      reason.setEllipsize(TextUtils.TruncateAt.END);
+      words.addView(reason);
+      top.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+      item.addView(top);
+      boolean ready = false;
+      try {
+        ready = manager.summaryProgress(p.optLong("id")).optBoolean("ready");
+      } catch (Exception ignored) {
+      }
+      LinearLayout buttons = row();
+      buttons.setPadding(dp(48), dp(10), 0, 0);
+      buttons.addView(
+          smallButton(
+              ready
+                  ? "Посмотреть выжимку"
+                  : stack ? "Подготовить выжимку" : "Посмотреть черновик",
+              true,
+              () -> {
+                suggestionsPopup.dismiss();
+                previewProposal(p);
+              }));
+      TextView skip =
+          smallButton(
+              "Не нужно",
+              false,
+              () -> {
+                manager.state(p.optLong("id"), "dismissed");
+                suggestionsPopup.dismiss();
+                render();
+              });
+      LinearLayout.LayoutParams skipParams = new LinearLayout.LayoutParams(-2, -2);
+      skipParams.leftMargin = dp(8);
+      buttons.addView(skip, skipParams);
+      item.addView(buttons);
+      items.addView(item);
+      View rule = new View(this);
+      rule.setBackgroundColor(LINE);
+      items.addView(rule, new LinearLayout.LayoutParams(-1, dp(1)));
+    }
+    ScrollView list = new ScrollView(this);
+    list.addView(items);
+    panel.addView(list, new LinearLayout.LayoutParams(-1, proposals.size() > 2 ? dp(300) : -2));
+    LinearLayout foot = column();
+    foot.setPadding(dp(16), dp(10), dp(8), dp(6));
+    String today = java.time.LocalDate.now().toString();
+    int used =
+        today.equals(prefs.getString("analysisDay", "")) ? prefs.getInt("analysisCount", 0) : 0;
+    foot.addView(
+        text(
+            prefs.getBoolean("unlimitedAi", false)
+                ? "Без дневного лимита · запросы платные"
+                : "Проверок сегодня: " + used + " из 4",
+            12,
+            MUTED));
+    foot.addView(
+        quietAction(
+            "Помощник и проверка заметок",
+            () -> {
+              suggestionsPopup.dismiss();
+              page = "manager";
+              render();
+            }));
+    panel.addView(foot);
+    PopupWindow popup = new PopupWindow(panel, width, -2, true);
+    popup.setBackgroundDrawable(new ColorDrawable(android.graphics.Color.TRANSPARENT));
+    popup.setOutsideTouchable(true);
+    suggestionsPopup = popup;
+    popup.showAsDropDown(anchor, 0, dp(4), Gravity.END);
+    if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+      panel.setPivotX(width);
+      panel.setPivotY(0);
+      panel.setAlpha(0);
+      panel.setScaleX(.92f);
+      panel.setScaleY(.92f);
+      panel.setTranslationY(-dp(6));
+      panel
+          .animate()
+          .alpha(1)
+          .scaleX(1)
+          .scaleY(1)
+          .translationY(0)
+          .setDuration(240)
+          .setInterpolator(new android.view.animation.PathInterpolator(0.16f, 1f, 0.3f, 1f))
+          .start();
+    }
   }
 
   private String draftPrefix() {
@@ -729,14 +1124,14 @@ public final class MainActivity extends Activity
     Note note = id == 0 ? null : store.note(id);
     if (id > 0 && note == null) {
       heading("Заметка удалена", "");
-      content.addView(button("К заметкам", false, () -> navigate(1)));
+      content.addView(button("К заметкам", false, () -> navigate(0)));
       return;
     }
     if (id > 0) {
       LinearLayout toolbar = row();
       ImageButton back = new ImageButton(this);
       back.setImageDrawable(new Glyph("back", GREEN, 22));
-      back.setBackground(ripple(LIME, 14));
+      back.setBackground(ripple(LIME, 10));
       back.setContentDescription("Назад");
       back.setOnClickListener(v -> goBack());
       toolbar.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
@@ -759,6 +1154,9 @@ public final class MainActivity extends Activity
       toolbar.addView(menu, new LinearLayout.LayoutParams(dp(48), dp(48)));
       toolbar.setPadding(dp(22), dp(4), dp(22), dp(4));
       root.addView(toolbar, 0);
+    } else {
+      content.addView(topBar(false, false, true), new LinearLayout.LayoutParams(-1, dp(44)));
+      gap(content, 10);
     }
     heading(
         id == 0 ? "Поймать мысль." : "Ваша заметка",
@@ -811,7 +1209,7 @@ public final class MainActivity extends Activity
       gap(content, 12);
       LinearLayout proposal = column();
       pad(proposal, 14);
-      proposal.setBackground(shape(LIME, 16));
+      proposal.setBackground(shape(LIME, 12));
       secondary(
           proposal, "Предложение ИИ: " + date(note.suggestion) + "\n" + note.suggestionReason);
       gap(proposal, 8);
@@ -1011,19 +1409,9 @@ public final class MainActivity extends Activity
   }
 
   private void notes() {
-    heading("Всё под рукой.", "Ваши заметки и напоминания");
-    content.addView(
-        button(
-            "Предложения помощника · " + new ManagerStore(store).pending().size(),
-            false,
-            () -> {
-              page = "manager";
-              render();
-            }));
-    EditText find = input("Найти в заметках", false);
-    find.setText(search);
-    content.addView(find);
-    gap(content, 12);
+    content.addView(topBar(true, true, true), new LinearLayout.LayoutParams(-1, dp(44)));
+    EditText find = searchField;
+    gap(content, 14);
     LinearLayout controls = row();
     TextView count = text("", 13, MUTED);
     controls.addView(count, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1040,6 +1428,8 @@ public final class MainActivity extends Activity
     content.addView(controls);
     gap(content, 12);
     LinearLayout listing = column();
+    // Список прокручивается под плавающей панелью, поэтому внизу оставлен запас.
+    listing.setPadding(0, 0, 0, dp(100));
     content.addView(scroll(listing), new LinearLayout.LayoutParams(-1, 0, 1));
     Runnable refresh =
         () -> {
@@ -1125,7 +1515,7 @@ public final class MainActivity extends Activity
             new ManagerStore(store).top(n.id) != 0
                 ? 0xFFF0E8FA
                 : n.reminder > 0 ? 0xFFEDF0E2 : WHITE,
-            18));
+            12));
     card.setOnClickListener(v -> openNote(n.id));
     TextView title = text(n.title, 17, INK);
     title.setTypeface(null, Typeface.BOLD);
@@ -1206,7 +1596,7 @@ public final class MainActivity extends Activity
     stack.setLayoutParams(new LinearLayout.LayoutParams(-1, height + dp(layers * 5)));
     for (int i = layers; i > 0; i--) {
       View layer = new View(this);
-      GradientDrawable shape = shape(0xFFE1CEEF, 18);
+      GradientDrawable shape = shape(0xFFE1CEEF, 12);
       shape.setStroke(dp(1), 0xFFAD83CA);
       layer.setBackground(shape);
       FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, height);
@@ -1230,7 +1620,7 @@ public final class MainActivity extends Activity
 
   private TextView quietAction(String label, Runnable action) {
     TextView view = button(label, false, action);
-    view.setBackground(ripple(android.graphics.Color.TRANSPARENT, 12));
+    view.setBackground(ripple(android.graphics.Color.TRANSPARENT, 10));
     view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
     view.setPadding(dp(8), dp(8), dp(8), dp(8));
     view.setMinHeight(dp(48));
@@ -1336,7 +1726,7 @@ public final class MainActivity extends Activity
       gap(content, 12);
       LinearLayout card = column();
       pad(card, 16);
-      card.setBackground(shape(WHITE, 18));
+      card.setBackground(shape(WHITE, 12));
       String type = p.optString("type");
       TextView label = text(proposalLabel(type), 18, INK);
       label.setTypeface(null, Typeface.BOLD);
@@ -1518,6 +1908,8 @@ public final class MainActivity extends Activity
   }
 
   private void chats() {
+    content.addView(topBar(false, false, true), new LinearLayout.LayoutParams(-1, dp(44)));
+    gap(content, 10);
     heading("Спросите свои\nзаметки.", "Найдите рецепт, идею или важную дату.");
     content.addView(
         button(
@@ -1540,7 +1932,7 @@ public final class MainActivity extends Activity
       long id = Long.parseLong(c[0]);
       LinearLayout item = row();
       pad(item, 14);
-      item.setBackground(shape(WHITE, 16));
+      item.setBackground(shape(WHITE, 12));
       LinearLayout words = column();
       TextView title = text(c[1], 16, INK);
       title.setMaxLines(2);
@@ -1667,7 +2059,7 @@ public final class MainActivity extends Activity
         boolean user = m.getString("role").equals("user");
         LinearLayout bubble = column();
         pad(bubble, 16);
-        bubble.setBackground(shape(user ? LIME : WHITE, 18));
+        bubble.setBackground(shape(user ? LIME : WHITE, 12));
         secondary(bubble, user ? "Вы" : "Помощник");
         gap(bubble, 8);
         TextView body = text("", 16, INK);
@@ -1713,7 +2105,7 @@ public final class MainActivity extends Activity
             LinearLayout source = row();
             source.setMinimumHeight(dp(64));
             pad(source, 12);
-            source.setBackground(ripple(LIME, 12));
+            source.setBackground(ripple(LIME, 10));
             source.setGravity(Gravity.CENTER_VERTICAL);
             ImageView icon = new ImageView(this);
             icon.setImageDrawable(new Glyph("notes", GREEN, 22));
@@ -2077,7 +2469,7 @@ public final class MainActivity extends Activity
         stash();
         if (!persistEditedNote()) return;
         page = "notes";
-        tab = 1;
+        tab = 0;
         openNote(result);
       }
       celebrateNote(result);
@@ -2088,6 +2480,8 @@ public final class MainActivity extends Activity
   }
 
   private void settings() {
+    content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
+    gap(content, 10);
     heading("По-вашему.", "Меньше лишнего. Больше полезного.");
     Switch local = new Switch(this);
     local.setText(R.string.local_gguf);
@@ -2177,7 +2571,7 @@ public final class MainActivity extends Activity
     gap(content, 10);
     LinearLayout account = column();
     pad(account, 16);
-    account.setBackground(shape(LIME, 16));
+    account.setBackground(shape(LIME, 12));
     TextView balance = text("Баланс Polza.AI", 20, GREEN);
     account.addView(balance);
     TextView balanceStatus = text("Введите API-ключ, чтобы узнать баланс", 13, MUTED);
@@ -2728,6 +3122,30 @@ public final class MainActivity extends Activity
           c.drawLine(19, 12, 5, 12, paint);
           c.drawLine(5, 12, 11, 6, paint);
           c.drawLine(5, 12, 11, 18, paint);
+        }
+        case "add" -> {
+          c.drawLine(12, 5, 12, 19, paint);
+          c.drawLine(5, 12, 19, 12, paint);
+        }
+        case "close" -> {
+          c.drawLine(6, 6, 18, 18, paint);
+          c.drawLine(18, 6, 6, 18, paint);
+        }
+        case "search" -> {
+          c.drawCircle(11, 11, 6.5f, paint);
+          c.drawLine(16, 16, 20.5f, 20.5f, paint);
+        }
+        case "bell" -> {
+          Path bell = new Path();
+          bell.moveTo(6, 17);
+          bell.lineTo(6, 11);
+          bell.arcTo(new RectF(6, 5, 18, 17), 180, 180);
+          bell.lineTo(18, 17);
+          bell.lineTo(19.5f, 19);
+          bell.lineTo(4.5f, 19);
+          bell.close();
+          c.drawPath(bell, paint);
+          c.drawArc(new RectF(10, 17, 14, 22), 0, 180, false, paint);
         }
         case "grid" -> {
           for (int x = 3; x < 20; x += 11)
