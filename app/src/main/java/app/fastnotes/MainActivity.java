@@ -34,7 +34,7 @@ public final class MainActivity extends Activity
   private SharedPreferences prefs;
   private LinearLayout root, content;
   private FrameLayout frame, dock;
-  private int lastDockTab = -1;
+  private int lastDockTab = -2;
   private View dockFade;
   private int navInset;
   private boolean keyboardUp, searchOpen;
@@ -727,9 +727,16 @@ public final class MainActivity extends Activity
     LinearLayout items = row();
     items.setPadding(dp(14), dp(9), dp(14), dp(9));
     dock.addView(items, new FrameLayout.LayoutParams(-2, -2));
-    final int to = tab, from = lastDockTab < 0 ? tab : lastDockTab;
+    // Настройки (вкладка 3) вне панели: подсветка гаснет и ничего не выделено (индекс -1).
+    final int to = tab < 3 ? tab : -1;
+    final int from = lastDockTab == -2 ? to : lastDockTab;
     boolean animate = from != to && android.animation.ValueAnimator.areAnimatorsEnabled();
-    marker.setTranslationX(step * (animate ? from : to));
+    final int endIndex = to >= 0 ? to : (from >= 0 ? from : 1);
+    final int startIndex = from >= 0 ? from : endIndex;
+    final float startAlpha = animate ? (from >= 0 ? 1f : 0f) : (to >= 0 ? 1f : 0f);
+    final float endAlpha = to >= 0 ? 1f : 0f;
+    marker.setTranslationX(step * (animate ? startIndex : endIndex));
+    marker.setAlpha(startAlpha);
     String[] labels = {"Заметки", "Записать", "ИИ-чат"};
     String[] icons = {"notes", "add", "chat"};
     ImageView[] views = new ImageView[3];
@@ -759,9 +766,12 @@ public final class MainActivity extends Activity
       slide.addUpdateListener(
           a -> {
             float f = (float) a.getAnimatedValue();
-            marker.setTranslationX(step * (from + (to - from) * f));
-            if (from != 1) views[from].setColorFilter((int) argb.evaluate(f, GREEN, MUTED));
-            if (to != 1) views[to].setColorFilter((int) argb.evaluate(f, MUTED, GREEN));
+            marker.setTranslationX(step * (startIndex + (endIndex - startIndex) * f));
+            marker.setAlpha(startAlpha + (endAlpha - startAlpha) * f);
+            if (from >= 0 && from != 1)
+              views[from].setColorFilter((int) argb.evaluate(f, GREEN, MUTED));
+            if (to >= 0 && to != 1)
+              views[to].setColorFilter((int) argb.evaluate(f, MUTED, GREEN));
           });
       slide.start();
     }
