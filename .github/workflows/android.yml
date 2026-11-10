@@ -1,0 +1,91 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android toolchain
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+          if ($LASTEXITCODE -ne 0) { throw 'Android SDK installation failed' }
+      - name: Prepare test dependency
+        run: ./scripts/prepare-ci.ps1
+      - name: Restore signing key for trusted builds
+        if: github.event_name != 'pull_request'
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if ($env:DEBUG_KEYSTORE_BASE64) {
+            $keyDirectory = Join-Path $env:USERPROFILE '.android'
+            New-Item -ItemType Directory -Force $keyDirectory | Out-Null
+            [IO.File]::WriteAllBytes((Join-Path $keyDirectory 'debug.keystore'), [Convert]::FromBase64String($env:DEBUG_KEYSTORE_BASE64))
+          } else {
+            Write-Warning 'No signing secret: APK will use a temporary CI debug key and cannot update the locally signed app.'
+          }
+      - name: Core, Polza and manager tests
+        run: |
+          ./scripts/test-core.ps1
+          ./scripts/test-polza.ps1
+          ./scripts/test-manager.ps1
+          node tests/metadata-sql.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Metadata SQL tests failed' }
+          node tests/manager-sql.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Manager SQL tests failed' }
+      - name: Build APK, test APK and lint
+        run: |
+          ./gradlew.bat --no-daemon --console=plain assembleDebug assembleDebugAndroidTest lintDebug
+          if ($LASTEXITCODE -ne 0) { throw 'Android build failed' }
+      - name: Verify and package APK
+        env:
+          EXPECT_EXISTING_SIGNATURE: ${{ github.event_name != 'pull_request' && secrets.DEBUG_KEYSTORE_BASE64 != '' }}
+        run: ./scripts/package-ci.ps1
+      - name: Upload APK and verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: mimohodom-debug-${{ github.run_number }}
+          path: dist/ci/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-${{ github.run_number }}
+          path: app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Remove restored signing key
+        if: always()
+        run: |
+          $keyFile = Join-Path $env:USERPROFILE '.android/debug.keystore'
+          if (Test-Path -LiteralPath $keyFile) { Remove-Item -LiteralPath $keyFile -Force }
