@@ -7,4 +7,12 @@
     <string name="balance_available">Доступно для запросов: %1$s\nПроверено: %2$s</string>
     <string name="notes_count">Заметок: %1$d</string>
     <string name="note_manager">Менеджер заметок · Polza.AI</string>
+    <string name="shortcut_new_note_short">Записать</string>
+    <string name="shortcut_new_note_long">Новая заметка</string>
+    <string name="shortcut_new_chat_short">Новый чат</string>
+    <string name="shortcut_new_chat_long">Новый чат с ИИ</string>
+    <string name="shortcut_notes_short">Заметки</string>
+    <string name="shortcut_notes_long">Все заметки</string>
+    <string name="shortcut_search_short">Поиск</string>
+    <string name="shortcut_search_long">Поиск по заметкам</string>
 </resources>

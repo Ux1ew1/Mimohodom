@@ -37,7 +37,7 @@ public final class MainActivity extends Activity
   private int lastDockTab = -2;
   private View dockFade;
   private int navInset;
-  private boolean keyboardUp, searchOpen;
+  private boolean keyboardUp, searchOpen, focusEditor, focusSearch;
   private Runnable closeSearch;
   private EditText searchField;
   private PopupWindow suggestionsPopup;
@@ -137,6 +137,7 @@ public final class MainActivity extends Activity
     float offset = surface.getTranslationX();
     int next = tab + (offset < 0 ? 1 : -1);
     if (released && next >= 0 && next < 3 && Math.abs(offset) >= surface.getWidth() * 0.25f) {
+      buzz(0);
       animateNavigate(next);
     } else {
       pageAnimating = true;
@@ -181,16 +182,7 @@ public final class MainActivity extends Activity
       pickerPage = state.getString("pickerPage", "");
       pickerTarget = state.getLong("pickerTarget");
     }
-    long requested = getIntent().getLongExtra("note", 0);
-    if (state == null && requested > 0) {
-      editing = requested;
-      page = "edit";
-      tab = 0;
-    }
-    if (state == null && getIntent().getBooleanExtra("manager", false)) {
-      page = "manager";
-      tab = 0;
-    }
+    if (state == null) routeIntent(getIntent());
     ChatRunner.listen(this);
     ImageRunner.listen(this);
     BackgroundAnalysis.configure(this);
@@ -205,6 +197,61 @@ public final class MainActivity extends Activity
         });
     if (Build.VERSION.SDK_INT >= 33)
       getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::goBack);
+  }
+
+  /** Открывает нужный экран по уведомлению или по быстрому действию на значке приложения. */
+  private void routeIntent(Intent intent) {
+    if (intent == null) return;
+    long requested = intent.getLongExtra("note", 0);
+    if (requested > 0) {
+      editing = requested;
+      page = "edit";
+      tab = 0;
+      return;
+    }
+    if (intent.getBooleanExtra("manager", false)) {
+      page = "manager";
+      tab = 0;
+      return;
+    }
+    String action = intent.getAction();
+    if (action == null) return;
+    switch (action) {
+      case "app.fastnotes.action.NEW_NOTE" -> {
+        tab = 1;
+        page = "home";
+        editing = 0;
+        focusEditor = true;
+      }
+      case "app.fastnotes.action.NEW_CHAT" -> {
+        tab = 2;
+        page = "chat";
+        chat = 0;
+      }
+      case "app.fastnotes.action.OPEN_NOTES" -> {
+        tab = 0;
+        page = "notes";
+        search = "";
+      }
+      case "app.fastnotes.action.SEARCH" -> {
+        tab = 0;
+        page = "notes";
+        search = "";
+        focusSearch = true;
+      }
+      default -> {}
+    }
+  }
+
+  @Override
+  protected void onNewIntent(Intent intent) {
+    super.onNewIntent(intent);
+    setIntent(intent);
+    stash();
+    if (!persistEditedNote()) return;
+    hideKeyboard();
+    routeIntent(intent);
+    render();
   }
 
   @Override
@@ -373,6 +420,29 @@ public final class MainActivity extends Activity
         });
   }
 
+  /** Короткая вибрация: 0 лёгкий отклик, 1 подтверждение, 2 отказ. Выключается в настройках. */
+  private void buzz(int kind) {
+    vibrate(kind, prefs == null || prefs.getBoolean("haptics", true));
+  }
+
+  private void vibrate(int kind, boolean enabled) {
+    if (!enabled) return;
+    Vibrator vibrator = getSystemService(Vibrator.class);
+    if (vibrator == null || !vibrator.hasVibrator()) return;
+    VibrationEffect effect;
+    if (Build.VERSION.SDK_INT >= 29)
+      effect =
+          VibrationEffect.createPredefined(
+              kind == 0
+                  ? VibrationEffect.EFFECT_TICK
+                  : kind == 1 ? VibrationEffect.EFFECT_CLICK : VibrationEffect.EFFECT_DOUBLE_CLICK);
+    else if (kind == 2) effect = VibrationEffect.createWaveform(new long[] {0, 25, 60, 25}, -1);
+    else
+      effect =
+          VibrationEffect.createOneShot(kind == 0 ? 12 : 25, VibrationEffect.DEFAULT_AMPLITUDE);
+    vibrator.vibrate(effect);
+  }
+
   private int dp(float n) {
     return Math.round(n * getResources().getDisplayMetrics().density);
   }
@@ -427,7 +497,11 @@ public final class MainActivity extends Activity
     b.setPadding(dp(16), dp(10), dp(16), dp(10));
     b.setBackground(ripple(primary ? GREEN : LIME, 12));
     b.setFocusable(true);
-    b.setOnClickListener(v -> click.run());
+    b.setOnClickListener(
+        v -> {
+          buzz(0);
+          click.run();
+        });
     return b;
   }
 
@@ -752,7 +826,11 @@ public final class MainActivity extends Activity
       item.setFocusable(true);
       item.setClickable(true);
       item.setSelected(i == to);
-      item.setOnClickListener(v -> animateNavigate(target));
+      item.setOnClickListener(
+          v -> {
+            buzz(0);
+            animateNavigate(target);
+          });
       LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(46), dp(46));
       if (i > 0) lp.leftMargin = dp(14);
       items.addView(item, lp);
@@ -808,7 +886,11 @@ public final class MainActivity extends Activity
     view.setBackground(ripple(android.graphics.Color.TRANSPARENT, 14));
     view.setContentDescription(description);
     view.setFocusable(true);
-    view.setOnClickListener(v -> click.run());
+    view.setOnClickListener(
+        v -> {
+          buzz(0);
+          click.run();
+        });
     return view;
   }
 
@@ -916,6 +998,7 @@ public final class MainActivity extends Activity
     clear.setOnClickListener(v -> closeSearch.run());
     box.setOnClickListener(
         v -> {
+          buzz(0);
           motion.set(true, true);
           field.requestFocus();
           getSystemService(InputMethodManager.class).showSoftInput(field, 0);
@@ -1280,7 +1363,11 @@ public final class MainActivity extends Activity
     imageTool.setContentDescription(
         noteImage.isEmpty() ? "Прикрепить изображение" : "Заменить изображение");
     imageTool.setFocusable(true);
-    imageTool.setOnClickListener(v -> pickImage(false));
+    imageTool.setOnClickListener(
+        v -> {
+          buzz(0);
+          pickImage(false);
+        });
     footer.addView(imageTool, new LinearLayout.LayoutParams(dp(40), dp(40)));
     reminderButton = text("", 13, GREEN);
     reminderButton.setTypeface(null, Typeface.BOLD);
@@ -1293,7 +1380,11 @@ public final class MainActivity extends Activity
     reminderButton.setCompoundDrawablesWithIntrinsicBounds(
         new Glyph("clock", GREEN, 20), null, null, null);
     reminderButton.setFocusable(true);
-    reminderButton.setOnClickListener(v -> pickReminder());
+    reminderButton.setOnClickListener(
+        v -> {
+          buzz(0);
+          pickReminder();
+        });
     refreshReminder();
     LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(-2, dp(40));
     reminderParams.leftMargin = dp(8);
@@ -1308,7 +1399,11 @@ public final class MainActivity extends Activity
       save.setBackground(ripple(GREEN, 10));
       save.setFocusable(true);
       save.setContentDescription("Сохранить заметку");
-      save.setOnClickListener(v -> saveNote());
+      save.setOnClickListener(
+          v -> {
+            buzz(0);
+            saveNote();
+          });
       footer.addView(save, new LinearLayout.LayoutParams(-2, dp(40)));
     }
     sheet.addView(footer);
@@ -1359,6 +1454,16 @@ public final class MainActivity extends Activity
     editorActive = true;
     watch(titleField, this::stash);
     watch(bodyField, this::stash);
+    if (focusEditor && id == 0) {
+      // Быстрое действие «Записать»: сразу открыть клавиатуру в тексте заметки.
+      focusEditor = false;
+      EditText target = bodyField;
+      target.post(
+          () -> {
+            target.requestFocus();
+            getSystemService(InputMethodManager.class).showSoftInput(target, 0);
+          });
+    }
   }
 
   private void deleteNote(long id) {
@@ -1483,6 +1588,7 @@ public final class MainActivity extends Activity
   private void saveNote() {
     String title = titleField.getText().toString(), body = bodyField.getText().toString();
     if (title.trim().isEmpty() && body.trim().isEmpty() && noteImage.isEmpty()) {
+      buzz(2);
       bodyField.setError("Напишите текст или название");
       bodyField.requestFocus();
       return;
@@ -1509,6 +1615,7 @@ public final class MainActivity extends Activity
       page = wasNew ? "home" : returnPage;
       render();
       celebrateNote(id);
+      buzz(1);
       if (denied) toast("Сохранено. Разрешите уведомления в настройках Android.");
     } catch (Exception e) {
       toast("Не удалось сохранить заметку. Черновик сохранён.");
@@ -1527,6 +1634,15 @@ public final class MainActivity extends Activity
   private void notes() {
     content.addView(topBar(true, true, true), new LinearLayout.LayoutParams(-1, dp(44)));
     EditText find = searchField;
+    if (focusSearch) {
+      // Быстрое действие «Поиск»: раскрыть поле и открыть клавиатуру.
+      focusSearch = false;
+      find.post(
+          () -> {
+            find.requestFocus();
+            getSystemService(InputMethodManager.class).showSoftInput(find, 0);
+          });
+    }
     gap(content, 14);
     LinearLayout controls = row();
     TextView count = text("", 13, MUTED);
@@ -1632,7 +1748,11 @@ public final class MainActivity extends Activity
                 ? 0xFFF0E8FA
                 : n.reminder > 0 ? 0xFFEDF0E2 : WHITE,
             12));
-    card.setOnClickListener(v -> openNote(n.id));
+    card.setOnClickListener(
+        v -> {
+          buzz(0);
+          openNote(n.id);
+        });
     TextView title = text(n.title, 17, INK);
     title.setTypeface(null, Typeface.BOLD);
     title.setMaxLines(grid ? 2 : 1);
@@ -2062,6 +2182,7 @@ public final class MainActivity extends Activity
             secondary(words, date(Long.parseLong(c[2])));
             words.setOnClickListener(
                 v -> {
+                  buzz(0);
                   chat = id;
                   page = "chat";
                   render();
@@ -2347,7 +2468,11 @@ public final class MainActivity extends Activity
     attach.setBackground(ripple(WHITE, 10));
     attach.setContentDescription("Прикрепить изображение");
     attach.setFocusable(true);
-    attach.setOnClickListener(v -> pickImage(true));
+    attach.setOnClickListener(
+        v -> {
+          buzz(0);
+          pickImage(true);
+        });
     composer.addView(attach, new LinearLayout.LayoutParams(dp(50), dp(50)));
     LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, -2, 1);
     inputParams.leftMargin = dp(8);
@@ -2361,7 +2486,11 @@ public final class MainActivity extends Activity
     sendButton.setFocusable(true);
     sendButton.setEnabled(ChatRunner.running == 0);
     sendButton.setAlpha(ChatRunner.running == 0 ? 1 : .4f);
-    sendButton.setOnClickListener(v -> send());
+    sendButton.setOnClickListener(
+        v -> {
+          buzz(0);
+          send();
+        });
     composer.addView(sendButton, new LinearLayout.LayoutParams(dp(50), dp(50)));
     content.addView(composer);
     if (LocalLlm.enabled(this) && ChatRunner.running != 0) {
@@ -2652,6 +2781,7 @@ public final class MainActivity extends Activity
     local.setTextColor(INK);
     local.setMinHeight(dp(52));
     local.setChecked(LocalLlm.enabled(this));
+    local.setOnCheckedChangeListener((v, checked) -> buzz(0));
     content.addView(local);
     gap(content, 8);
     secondary(
@@ -2865,13 +2995,26 @@ public final class MainActivity extends Activity
     large.setTextColor(INK);
     large.setMinHeight(dp(52));
     large.setChecked(prefs.getBoolean("large", false));
+    large.setOnCheckedChangeListener((v, checked) -> buzz(0));
     content.addView(large);
+    Switch haptics = new Switch(this);
+    haptics.setText("Вибрация в приложении");
+    haptics.setTextColor(INK);
+    haptics.setMinHeight(dp(52));
+    haptics.setChecked(prefs.getBoolean("haptics", true));
+    // Включение сразу показывает отклик, даже пока настройка не сохранена.
+    haptics.setOnCheckedChangeListener((v, checked) -> vibrate(0, checked));
+    content.addView(haptics);
+    secondary(
+        content,
+        "Короткий отклик при нажатиях, переходах между вкладками и сохранении заметки.");
     section("Помощник заметок", true);
     Switch background = new Switch(this);
     background.setText("Фоновый помощник ИИ");
     background.setTextColor(INK);
     background.setMinHeight(dp(52));
     background.setChecked(prefs.getBoolean("backgroundAi", false));
+    background.setOnCheckedChangeListener((v, checked) -> buzz(0));
     content.addView(background);
     Switch manager = new Switch(this);
     manager.setText(R.string.note_manager);
@@ -2880,6 +3023,7 @@ public final class MainActivity extends Activity
     manager.setChecked(prefs.getBoolean("managerAi", false));
     manager.setOnCheckedChangeListener(
         (v, checked) -> {
+          buzz(0);
           if (checked && !prefs.getBoolean("managerAi", false))
             new AlertDialog.Builder(this)
                 .setTitle("Включить менеджера заметок?")
@@ -2948,6 +3092,7 @@ public final class MainActivity extends Activity
                     .putBoolean("backgroundAi", background.isChecked())
                     .putBoolean("managerAi", manager.isChecked())
                     .putBoolean("localLlm", local.isChecked())
+                    .putBoolean("haptics", haptics.isChecked())
                     .apply();
                 BackgroundAnalysis.configure(this);
                 io.execute(

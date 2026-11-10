@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_note"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_add"
+        android:shortcutShortLabel="@string/shortcut_new_note_short"
+        android:shortcutLongLabel="@string/shortcut_new_note_long">
+        <intent
+            android:action="app.fastnotes.action.NEW_NOTE"
+            android:targetPackage="app.fastnotes"
+            android:targetClass="app.fastnotes.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="new_chat"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_chat"
+        android:shortcutShortLabel="@string/shortcut_new_chat_short"
+        android:shortcutLongLabel="@string/shortcut_new_chat_long">
+        <intent
+            android:action="app.fastnotes.action.NEW_CHAT"
+            android:targetPackage="app.fastnotes"
+            android:targetClass="app.fastnotes.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="notes"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_notes"
+        android:shortcutShortLabel="@string/shortcut_notes_short"
+        android:shortcutLongLabel="@string/shortcut_notes_long">
+        <intent
+            android:action="app.fastnotes.action.OPEN_NOTES"
+            android:targetPackage="app.fastnotes"
+            android:targetClass="app.fastnotes.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="search"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_search"
+        android:shortcutShortLabel="@string/shortcut_search_short"
+        android:shortcutLongLabel="@string/shortcut_search_long">
+        <intent
+            android:action="app.fastnotes.action.SEARCH"
+            android:targetPackage="app.fastnotes"
+            android:targetClass="app.fastnotes.MainActivity" />
+    </shortcut>
+</shortcuts>
