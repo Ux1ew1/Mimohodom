@@ -1,0 +1,10 @@
+<resources>
+    <string name="local_gguf">Локальная GGUF · экспериментально</string>
+    <string name="create_dialog_note">Создай заметку на базе нашего диалога: собери важную информацию в краткий самостоятельный текст.</string>
+    <string name="polza_balance">Баланс Polza.AI</string>
+    <string name="balance_key_required">Сначала введите API-ключ</string>
+    <string name="balance_amount">Баланс: %1$s</string>
+    <string name="balance_available">Доступно для запросов: %1$s\nПроверено: %2$s</string>
+    <string name="notes_count">Заметок: %1$d</string>
+    <string name="note_manager">Менеджер заметок · Polza.AI</string>
+</resources>
