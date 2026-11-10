@@ -29,13 +29,21 @@ final class ManagerJob {
           context,
           store.totalNotes() == 0
               ? "Нет заметок для проверки."
-              : "Все доступные записи ожидают ручного повтора после ошибки. Нажмите «Проверить"
-                  + " сейчас».");
+              : manager.failedCount() > 0
+                  ? "Все доступные записи ожидают ручного повтора после ошибки. Нажмите «Проверить"
+                        + " заметки»."
+                  : "Нет доступных заметок для проверки. Стопки и их исходники уже просмотрены и"
+                        + " исключены из анализа.");
       return;
     }
     long runId;
     synchronized (lock) {
       if (!enabled.getAsBoolean()) return;
+      batch.removeIf(n -> manager.top(n.id) != 0);
+      if (batch.isEmpty()) {
+        status(context, "Нет доступных заметок для проверки. Все выбранные записи уже в стопках.");
+        return;
+      }
       if (!ReviewBudget.reserve(context)) {
         status(context, "Дневной лимит: 4 пакета. Следующая проверка — завтра.");
         return;

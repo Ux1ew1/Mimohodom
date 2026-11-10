@@ -57,7 +57,7 @@ public final class ManagerStore {
                 || c.getInt(2) == 0)) seeds.add(n);
       }
     }
-    seeds.removeIf(n -> top(n.id) != 0 && top(n.id) != n.id);
+    seeds.removeIf(n -> top(n.id) != 0);
     return TopicSelection.select(seeds);
   }
 
@@ -258,7 +258,7 @@ public final class ManagerStore {
 
   public int failedCount() {
     int count = 0;
-    for (Note n : store.notes()) if (failedUnchanged(n)) count++;
+    for (Note n : store.notes()) if (top(n.id) == 0 && failedUnchanged(n)) count++;
     return count;
   }
 

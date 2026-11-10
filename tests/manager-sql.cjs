@@ -50,5 +50,25 @@ db.exec('INSERT INTO note_groups(top) VALUES(99)');
 db.exec('ROLLBACK');
 check(!db.prepare('SELECT id FROM notes WHERE id=99').get(),'Rolled-back acceptance leaves no summary');
 check(db.prepare('SELECT count(*) n FROM note_groups').get().n===0,'Rolled-back acceptance leaves no group');
+const storeSource=fs.readFileSync('app/src/main/java/app/fastnotes/Store.java','utf8');
+const pendingSql=[...storeSource.matchAll(/\.rawQuery\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+),/g)]
+  .map(x=>[...x[1].matchAll(/"(?:\\.|[^"\\])*"/g)].map(s=>JSON.parse(s[0])).join(''))
+  .find(sql=>sql.startsWith('SELECT * FROM notes WHERE ai_checked<>updated'));
+check(!!pendingSql,'Production pending analysis SQL extracted');
+db.exec('ALTER TABLE notes ADD COLUMN ai_checked INTEGER DEFAULT 0');
+db.exec('ALTER TABLE notes ADD COLUMN updated INTEGER DEFAULT 1');
+db.exec('ALTER TABLE notes ADD COLUMN created INTEGER DEFAULT 1');
+for(let id=45;id<=48;id++) db.prepare('INSERT INTO notes(id,title,body,created) VALUES(?,?,?,100)').run(id,'Авто','Текст');
+db.exec('INSERT INTO note_groups(top) VALUES(47)');
+db.exec('INSERT INTO note_members(note,top) VALUES(45,47),(46,47)');
+let candidates=db.prepare(pendingSql).all().map(n=>n.id);
+check(candidates.includes(48) && !candidates.some(id=>[45,46,47].includes(id)),'Standalone note eligible, whole stack excluded');
+db.exec('UPDATE note_groups SET expanded=1 WHERE top=47');
+db.exec('UPDATE notes SET updated=2 WHERE id IN (45,47)');
+candidates=db.prepare(pendingSql).all().map(n=>n.id);
+check(!candidates.some(id=>[45,46,47].includes(id)),'Expanded and edited stack remains excluded');
+db.exec('DELETE FROM notes WHERE id=47');
+candidates=db.prepare(pendingSql).all().map(n=>n.id);
+check(candidates.includes(45) && candidates.includes(46),'Deleting top makes released standalone notes eligible');
 db.close();
 console.log(`PASS: ${checks} manager SQLite checks (production migration SQL)`);

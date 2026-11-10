@@ -29,6 +29,10 @@ final class SummaryRunner {
                   throw new IllegalStateException(
                       "Исходники изменились. Запустите новую проверку.");
                 List<Note> sources = manager.summarySources(proposal);
+                for (Note source : sources)
+                  if (manager.top(source.id) != 0)
+                    throw new IllegalStateException(
+                        "Эти заметки уже в стопке и исключены из повторного анализа.");
                 StringBuilder version = new StringBuilder("summary-v1");
                 for (Note n : sources)
                   version

@@ -189,8 +189,23 @@ final class ManagerStorageTest {
         require(
             m.members(allTop).contains(original.id), "No original lost after repeated grouping");
       require(
-          m.batch(true).stream().noneMatch(n -> m.top(n.id) != 0 && m.top(n.id) != n.id),
-          "Hidden sources excluded from fresh grouping candidates");
+          m.batch(true).stream().noneMatch(n -> m.top(n.id) != 0),
+          "Both stack summary and members excluded from manual review");
+      require(
+          m.batch().stream().noneMatch(n -> m.top(n.id) != 0),
+          "Stacks excluded from automatic review");
+      require(
+          store.pendingAnalysis().stream().noneMatch(n -> m.top(n.id) != 0),
+          "Stacks excluded from legacy analysis");
+      require(
+          !store.claimAnalysis(store.note(allTop)), "Stack summary cannot be claimed for analysis");
+      store.save(eight.get(0).id, "Исправленный исходник", "Исправление в стопке", 0);
+      require(
+          m.batch(true).stream().noneMatch(n -> m.top(n.id) != 0),
+          "Editing a grouped source does not re-enable review");
+      require(
+          store.pendingAnalysis().stream().noneMatch(n -> m.top(n.id) != 0),
+          "Edited grouped source excluded from legacy analysis");
       // Recreate a real v5 database by removing only the v6 additions, then reopen it.
       for (String table :
           new String[] {

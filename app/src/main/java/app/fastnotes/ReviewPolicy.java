@@ -17,8 +17,8 @@ public final class ReviewPolicy {
     if (status.contains("поставлена в очередь")) return "Ожидаем запуска проверки";
     if (status.startsWith("Проверка не завершена")) return "Не удалось завершить проверку";
     if (status.startsWith("Дневной лимит")) return "Дневной лимит исчерпан";
-    if (status.startsWith("Все доступные") || status.startsWith("Нет доступных"))
-      return "Нужен ручной повтор проверки";
+    if (status.startsWith("Нет доступных")) return "Нет новых заметок вне стопок";
+    if (status.startsWith("Все доступные")) return "Нужен ручной повтор проверки";
     if (status.startsWith("Нет заметок")) return "Добавьте заметки для проверки";
     if (status.startsWith("Для фоновой")) return "Подключите модель в настройках";
     if (status.startsWith("Локальный")) return "Обзор доступен через Polza.AI";

@@ -279,7 +279,10 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT * FROM notes WHERE ai_checked<>updated ORDER BY created DESC LIMIT 5",
+                "SELECT * FROM notes WHERE ai_checked<>updated"
+                    + " AND id NOT IN (SELECT top FROM note_groups)"
+                    + " AND id NOT IN (SELECT note FROM note_members)"
+                    + " ORDER BY created DESC LIMIT 5",
                 null)) {
       while (c.moveToNext()) out.add(read(c));
     }
@@ -287,6 +290,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   public boolean claimAnalysis(Note note) {
+    if (new ManagerStore(this).top(note.id) != 0) return false;
     ContentValues v = new ContentValues();
     v.put("ai_checked", note.updated);
     v.put("ai_failed", 1);
@@ -313,7 +317,9 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
 
   private boolean applyAnalysisLocked(Note snapshot, Analysis.Result result) {
     Note note = note(snapshot.id);
-    if (note == null || note.updated != snapshot.updated) return false;
+    if (note == null
+        || note.updated != snapshot.updated
+        || new ManagerStore(this).top(note.id) != 0) return false;
     ContentValues v = new ContentValues();
     v.put("ai_failed", 0);
     if (note.autoTitle && !result.title.isEmpty()) {
