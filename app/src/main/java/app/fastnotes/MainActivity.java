@@ -36,7 +36,8 @@ public final class MainActivity extends Activity
   private FrameLayout frame, dock;
   private int lastDockTab = -1;
   private View dockFade;
-  private int navInset;
+  private int navInset, imeBottom;
+  private View saveFab;
   private boolean keyboardUp, searchOpen;
   private Runnable closeSearch;
   private EditText searchField;
@@ -566,6 +567,7 @@ public final class MainActivity extends Activity
 
   private void render() {
     rendering = true;
+    saveFab = null;
     analysisStatusView = null;
     editorActive = false;
     titleField = null;
@@ -587,6 +589,7 @@ public final class MainActivity extends Activity
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
             navInset = insets.getInsets(WindowInsets.Type.systemBars()).bottom;
             keyboardUp = insets.isVisible(WindowInsets.Type.ime());
+            imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom;
             placeDock();
             return WindowInsets.CONSUMED;
           });
@@ -768,6 +771,12 @@ public final class MainActivity extends Activity
     lastDockTab = to;
     frame.addView(
         dock, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
+    if (saveFab != null) {
+      FrameLayout.LayoutParams fabParams =
+          new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.BOTTOM | Gravity.END);
+      fabParams.rightMargin = dp(16);
+      frame.addView(saveFab, fabParams);
+    }
     placeDock();
   }
 
@@ -782,6 +791,15 @@ public final class MainActivity extends Activity
     dockFade.setLayoutParams(fade);
     dock.setVisibility(visible ? View.VISIBLE : View.GONE);
     dockFade.setVisibility(visible ? View.VISIBLE : View.GONE);
+    if (saveFab != null) {
+      // Выше нижней панели; при клавиатуре поднимается над ней.
+      FrameLayout.LayoutParams fab = (FrameLayout.LayoutParams) saveFab.getLayoutParams();
+      fab.bottomMargin =
+          keyboardUp
+              ? (Build.VERSION.SDK_INT >= 30 ? imeBottom : 0) + dp(16)
+              : navInset + dp(96);
+      saveFab.setLayoutParams(fab);
+    }
     // Пока открыта клавиатура, панели нет, и запас под неё внизу страницы не нужен.
     if (content != null && !"notes".equals(page) && !"chat".equals(page))
       content.setPadding(
@@ -1206,52 +1224,46 @@ public final class MainActivity extends Activity
     if (id > 0) heading("Ваша заметка", "");
     String p = draftPrefix();
     noteImage = prefs.getString(p + "image", note == null ? "" : note.image);
-    // Название и текст лежат на одном листе, как в бумажной записной книжке.
+    // Название, текст и значки действий лежат на одном листе с тенью.
     LinearLayout sheet = column();
     GradientDrawable sheetBackground = shape(WHITE, 14);
-    sheetBackground.setStroke(dp(1), LINE);
+    sheetBackground.setStroke(dp(1), 0xFFAEBBA8);
     sheet.setBackground(sheetBackground);
+    sheet.setElevation(dp(6));
     titleField = input("Название — необязательно", false);
     titleField.setBackground(null);
     titleField.setTypeface(null, Typeface.BOLD);
     titleField.setTextSize(prefs.getBoolean("large", false) ? 22 : 20);
-    titleField.setPadding(dp(16), dp(16), dp(16), dp(6));
+    titleField.setPadding(dp(16), dp(16), dp(16), dp(10));
     titleField.setText(prefs.getString(p + "title", note == null ? "" : note.title));
     titleField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(160)});
     sheet.addView(titleField, new LinearLayout.LayoutParams(-1, -2));
+    View titleRule = new View(this);
+    titleRule.setBackgroundColor(LINE);
+    LinearLayout.LayoutParams titleRuleParams = new LinearLayout.LayoutParams(-1, dp(1));
+    titleRuleParams.leftMargin = dp(16);
+    titleRuleParams.rightMargin = dp(16);
+    sheet.addView(titleRule, titleRuleParams);
     bodyField = input("Что хочется запомнить?", true);
     bodyField.setBackground(null);
-    bodyField.setPadding(dp(16), dp(6), dp(16), dp(16));
+    bodyField.setPadding(dp(16), dp(12), dp(16), dp(16));
     bodyField.setMinLines(10);
     bodyField.setMinHeight(dp(280));
     bodyField.setText(prefs.getString(p + "body", note == null ? "" : note.body));
     bodyField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(100000)});
     sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, -2));
-    content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
-    gap(content, 12);
-    reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
-    LinearLayout tools = row();
-    tools.addView(
-        iconButton(
-            noteImage.isEmpty() ? "Изображение" : "Заменить", "image", () -> pickImage(false)));
-    reminderButton = iconButton(reminderLabel(), "clock", this::pickReminder);
-    reminderButton.setSingleLine(true);
-    reminderButton.setEllipsize(TextUtils.TruncateAt.END);
-    LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(0, -2, 1);
-    reminderParams.leftMargin = dp(8);
-    tools.addView(reminderButton, reminderParams);
-    content.addView(tools);
     if (!noteImage.isEmpty()) {
-      gap(content, 8);
-      content.addView(imagePreview(noteImage, 220));
-      gap(content, 8);
-      content.addView(
+      LinearLayout imageBox = column();
+      imageBox.setPadding(dp(12), 0, dp(12), dp(12));
+      imageBox.addView(imagePreview(noteImage, 220));
+      gap(imageBox, 8);
+      imageBox.addView(
           button(
               ImageRunner.running ? "Изображение анализируется…" : "Создать заметку по изображению",
               false,
               this::analyzeNoteImage));
-      gap(content, 6);
-      content.addView(
+      gap(imageBox, 6);
+      imageBox.addView(
           button(
               "Убрать изображение",
               false,
@@ -1261,7 +1273,41 @@ public final class MainActivity extends Activity
                 prefs.edit().putString(draftPrefix() + "image", "").apply();
                 render();
               }));
+      sheet.addView(imageBox);
     }
+    View footerRule = new View(this);
+    footerRule.setBackgroundColor(LINE);
+    sheet.addView(footerRule, new LinearLayout.LayoutParams(-1, dp(1)));
+    reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
+    LinearLayout footer = row();
+    footer.setPadding(dp(12), dp(10), dp(12), dp(10));
+    ImageView imageTool = new ImageView(this);
+    imageTool.setScaleType(ImageView.ScaleType.CENTER);
+    imageTool.setImageDrawable(new Glyph("image", GREEN, 20));
+    imageTool.setBackground(ripple(LIME, 10));
+    imageTool.setContentDescription(
+        noteImage.isEmpty() ? "Прикрепить изображение" : "Заменить изображение");
+    imageTool.setFocusable(true);
+    imageTool.setOnClickListener(v -> pickImage(false));
+    footer.addView(imageTool, new LinearLayout.LayoutParams(dp(40), dp(40)));
+    reminderButton = text("", 13, GREEN);
+    reminderButton.setTypeface(null, Typeface.BOLD);
+    reminderButton.setGravity(Gravity.CENTER);
+    reminderButton.setMinWidth(dp(40));
+    reminderButton.setPadding(dp(10), 0, dp(10), 0);
+    reminderButton.setSingleLine(true);
+    reminderButton.setEllipsize(TextUtils.TruncateAt.END);
+    reminderButton.setBackground(ripple(LIME, 10));
+    reminderButton.setCompoundDrawablesWithIntrinsicBounds(
+        new Glyph("clock", GREEN, 20), null, null, null);
+    reminderButton.setFocusable(true);
+    reminderButton.setOnClickListener(v -> pickReminder());
+    refreshReminder();
+    LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(-2, dp(40));
+    reminderParams.leftMargin = dp(8);
+    footer.addView(reminderButton, reminderParams);
+    sheet.addView(footer);
+    content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
     if (note != null && note.suggestion > 0) {
       gap(content, 12);
       LinearLayout proposal = column();
@@ -1280,7 +1326,7 @@ public final class MainActivity extends Activity
                   return;
                 }
                 reminder = note.suggestion;
-                reminderButton.setText(reminderLabel());
+                refreshReminder();
                 stash();
                 if (Build.VERSION.SDK_INT >= 33
                     && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -1299,9 +1345,19 @@ public final class MainActivity extends Activity
               }));
       content.addView(proposal);
     }
-    gap(content, 18);
-    if (id == 0) content.addView(button("Сохранить заметку", true, this::saveNote));
-    gap(content, 12);
+    if (id == 0) {
+      // Кнопка сохранения плавает у правого нижнего угла, выше нижней панели.
+      ImageView fab = new ImageView(this);
+      fab.setScaleType(ImageView.ScaleType.CENTER);
+      fab.setImageDrawable(new Glyph("check", WHITE, 26));
+      fab.setBackground(ripple(GREEN, 16));
+      fab.setElevation(dp(6));
+      fab.setContentDescription("Сохранить заметку");
+      fab.setFocusable(true);
+      fab.setOnClickListener(v -> saveNote());
+      saveFab = fab;
+    }
+    gap(content, 16);
     secondary(
         content,
         id == 0
@@ -1359,7 +1415,17 @@ public final class MainActivity extends Activity
   }
 
   private String reminderLabel() {
-    return reminder == 0 ? "Добавить напоминание" : date(reminder);
+    return reminder == 0 ? "" : date(reminder);
+  }
+
+  /** Кнопка напоминания без даты показывает только значок часов. */
+  private void refreshReminder() {
+    if (reminderButton == null) return;
+    String label = reminderLabel();
+    reminderButton.setText(label);
+    reminderButton.setCompoundDrawablePadding(label.isEmpty() ? 0 : dp(6));
+    reminderButton.setContentDescription(
+        label.isEmpty() ? "Добавить напоминание" : "Напоминание: " + label);
   }
 
   private void pickReminder() {
@@ -1372,7 +1438,7 @@ public final class MainActivity extends Activity
                 if (w == 0) datePicker();
                 else {
                   reminder = 0;
-                  reminderButton.setText(reminderLabel());
+                  refreshReminder();
                   stash();
                 }
               })
@@ -1401,7 +1467,7 @@ public final class MainActivity extends Activity
                           return;
                         }
                         reminder = cal.getTimeInMillis();
-                        reminderButton.setText(reminderLabel());
+                        refreshReminder();
                         stash();
                         if (Build.VERSION.SDK_INT >= 33
                             && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
