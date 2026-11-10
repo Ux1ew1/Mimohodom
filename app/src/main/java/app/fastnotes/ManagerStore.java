@@ -37,6 +37,10 @@ public final class ManagerStore {
   }
 
   public List<Note> batch() {
+    return batch(false);
+  }
+
+  public List<Note> batch(boolean manual) {
     List<Note> seeds = new ArrayList<>();
     try (Cursor c =
         db.rawQuery(
@@ -46,9 +50,11 @@ public final class ManagerStore {
             null)) {
       while (c.moveToNext()) {
         Note n = store.note(c.getLong(0));
-        if (c.isNull(1)
-            || !ManagerAnalysis.fingerprint(n).equals(c.getString(1))
-            || c.getInt(2) == 0) seeds.add(n);
+        if (n != null
+            && (manual
+                || c.isNull(1)
+                || !ManagerAnalysis.fingerprint(n).equals(c.getString(1))
+                || c.getInt(2) == 0)) seeds.add(n);
       }
     }
     LinkedHashMap<Long, Note> selected = new LinkedHashMap<>();
@@ -58,7 +64,7 @@ public final class ManagerStore {
       for (Note n :
           store.searchNotes(seed.title + " " + Retrieval.excerpt(seed.searchText, "", 200))) {
         if (selected.size() >= 8) break;
-        if (!failedUnchanged(n)) selected.put(n.id, n);
+        if (manual || !failedUnchanged(n)) selected.put(n.id, n);
       }
     }
     for (Note n : seeds) {
@@ -137,6 +143,85 @@ public final class ManagerStore {
 
   public void retryFailed() {
     db.execSQL("DELETE FROM manager_review WHERE failed=1");
+  }
+
+  public static void attachGroups(JSONObject proposal, JSONObject snapshot) throws Exception {
+    JSONObject groups = new JSONObject();
+    JSONArray sources = proposal.getJSONArray("sources");
+    StringBuilder identity = new StringBuilder(proposal.getString("type"));
+    for (int i = 0; i < sources.length(); i++) {
+      JSONObject source = sources.getJSONObject(i);
+      String id = "" + source.getLong("id"), revision = source.getString("revision");
+      identity
+          .append('|')
+          .append(id)
+          .append(':')
+          .append(revision.length())
+          .append(':')
+          .append(revision);
+    }
+    for (int i = 0; i < sources.length(); i++) {
+      String id = "" + sources.getJSONObject(i).getLong("id"), revision = snapshot.getString(id);
+      groups.put(id, revision);
+      identity.append('|').append(revision.length()).append(':').append(revision);
+    }
+    proposal.put("groups", groups).put("identity", identity.toString());
+  }
+
+  public static final class ReviewOutcome {
+    public int renamed, reminders, added, reviewed;
+  }
+
+  public ReviewOutcome finishReview(
+      long run, List<Note> notes, List<JSONObject> proposals, Map<Long, Analysis.Result> analysis)
+      throws Exception {
+    db.beginTransaction();
+    try {
+      ReviewOutcome outcome = new ReviewOutcome();
+      List<JSONObject> valid = new ArrayList<>();
+      for (JSONObject p : proposals) if (current(p)) valid.add(p);
+      List<Note> unchanged = new ArrayList<>();
+      for (Note snapshot : notes) {
+        Note current = store.note(snapshot.id);
+        if (current == null
+            || !ManagerAnalysis.fingerprint(current).equals(ManagerAnalysis.fingerprint(snapshot)))
+          continue;
+        Analysis.Result result = analysis.get(snapshot.id);
+        if (result != null && store.applyAnalysis(snapshot, result)) {
+          Note after = store.note(snapshot.id);
+          if (!after.title.equals(current.title)) outcome.renamed++;
+          if (after.suggestion > 0 && after.suggestion != current.suggestion) outcome.reminders++;
+          outcome.reviewed++;
+        }
+        unchanged.add(store.note(snapshot.id));
+      }
+      // Only our own title changes are rebased. User changes were rejected above, under this
+      // transaction.
+      JSONObject groups = groupSnapshot(unchanged);
+      for (JSONObject p : valid) {
+        JSONArray sources = p.getJSONArray("sources");
+        for (int i = 0; i < sources.length(); i++) {
+          JSONObject source = sources.getJSONObject(i);
+          source.put("revision", ManagerAnalysis.fingerprint(store.note(source.getLong("id"))));
+        }
+        attachGroups(p, groups);
+      }
+      outcome.added = finish(run, notes, valid);
+      for (Note n : unchanged)
+        db.execSQL(
+            "UPDATE manager_review SET revision=?,failed=0 WHERE note=?",
+            new Object[] {ManagerAnalysis.fingerprint(n), n.id});
+      db.setTransactionSuccessful();
+      return outcome;
+    } finally {
+      db.endTransaction();
+    }
+  }
+
+  public int failedCount() {
+    int count = 0;
+    for (Note n : store.notes()) if (failedUnchanged(n)) count++;
+    return count;
   }
 
   public boolean current(JSONObject p) throws Exception {

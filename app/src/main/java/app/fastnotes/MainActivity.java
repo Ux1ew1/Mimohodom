@@ -38,7 +38,22 @@ public final class MainActivity extends Activity
   private long editing = 0, reminder = 0, chat = 0;
   private boolean editorActive = false, rendering = false;
   private String returnPage = "notes";
-  private TextView reminderButton;
+  private TextView reminderButton, analysisStatusView;
+  private AlertDialog managerPreview;
+  private final SharedPreferences.OnSharedPreferenceChangeListener analysisListener =
+      (preferences, key) -> {
+        if ("analysisTime".equals(key) || "analysisStatus".equals(key))
+          runOnUiThread(
+              () -> {
+                if (isDestroyed()) return;
+                if ("analysisTime".equals(key)
+                    && "manager".equals(page)
+                    && !rendering
+                    && (managerPreview == null || !managerPreview.isShowing())) render();
+                else if (analysisStatusView != null)
+                  analysisStatusView.setText(analysisStatusText());
+              });
+      };
   private String search = "";
   private final List<Note> visibleNotes = new ArrayList<>();
   private float swipeX, swipeY;
@@ -140,6 +155,7 @@ public final class MainActivity extends Activity
     super.onCreate(state);
     store = new Store(this);
     prefs = getSharedPreferences("settings", 0);
+    prefs.registerOnSharedPreferenceChangeListener(analysisListener);
     Reminders.channel(this);
     if (state != null) {
       tab = state.getInt("tab");
@@ -199,6 +215,7 @@ public final class MainActivity extends Activity
 
   @Override
   protected void onDestroy() {
+    if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(analysisListener);
     io.shutdown();
     store.close();
     super.onDestroy();
@@ -527,6 +544,7 @@ public final class MainActivity extends Activity
 
   private void render() {
     rendering = true;
+    analysisStatusView = null;
     editorActive = false;
     titleField = null;
     bodyField = null;
@@ -562,7 +580,23 @@ public final class MainActivity extends Activity
     rendering = false;
   }
 
+  private String analysisStatusText() {
+    long time = prefs.getLong("analysisTime", 0);
+    return prefs.getString("analysisStatus", "Проверок ещё не было.")
+        + (time > 0 ? "\n" + date(time) : "");
+  }
+
+  private void showAnalysisStatus() {
+    analysisStatusView = text(analysisStatusText(), 14, MUTED);
+    content.addView(analysisStatusView);
+  }
+
   private void manualAnalysis() {
+    if (LocalLlm.enabled(this)) {
+      toast(
+          "Общий обзор пока доступен только через Polza.AI. Выберите облачный режим в настройках.");
+      return;
+    }
     if (!persistEditedNote()) return;
     try {
       if (Secrets.read(this).isEmpty() || prefs.getString("model", "").isEmpty()) {
@@ -580,13 +614,42 @@ public final class MainActivity extends Activity
         toast("На сегодня использованы все 4 пакета проверки");
         return;
       }
-      if (store.pendingAnalysis().isEmpty()) {
-        toast("Новых или изменённых заметок для проверки нет");
+      if (store.totalNotes() == 0) {
+        toast("Нет заметок для проверки");
         return;
       }
+      if (!prefs.getBoolean("manualReviewConsent", false)) {
+        new AlertDialog.Builder(this)
+            .setTitle("Проверить заметки через Polza.AI?")
+            .setMessage(
+                "Один платный запрос проверит автоматические названия, даты для напоминаний и"
+                    + " возможность объединения записей. До 8 заметок и 12 000 символов; включает"
+                    + " записи после прежних ошибок. Общий лимит — 4 запроса в сутки. Авторские"
+                    + " названия сохраняются. Напоминания и объединения — после подтверждения."
+                    + " Фоновая работа от этого не включается.")
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton(
+                "Проверить",
+                (d, w) -> {
+                  prefs.edit().putBoolean("manualReviewConsent", true).apply();
+                  manualAnalysis();
+                })
+            .show();
+        return;
+      }
+      boolean queued = BackgroundAnalysis.enqueueManual(this);
+      if (queued)
+        prefs
+            .edit()
+            .putString(
+                "analysisStatus",
+                "Общая проверка поставлена в очередь Android. Нужен интернет; повтор после ошибок"
+                    + " включён.")
+            .putLong("analysisTime", System.currentTimeMillis())
+            .apply();
       toast(
-          BackgroundAnalysis.enqueueManual(this)
-              ? "Проверка заголовков и напоминаний поставлена в очередь. Требуется интернет."
+          queued
+              ? "Запущена проверка названий, напоминаний и объединений"
               : "Проверка уже выполняется или ожидает запуска");
     } catch (Exception e) {
       toast("Не удалось запустить проверку. Проверьте API-ключ в настройках.");
@@ -1170,10 +1233,7 @@ public final class MainActivity extends Activity
             }));
     ManagerStore manager = new ManagerStore(store);
     List<JSONObject> proposals = manager.pending();
-    secondary(
-        content,
-        prefs.getString(
-            "analysisStatus", "Включите менеджера в настройках для регулярного обзора."));
+    showAnalysisStatus();
     int merges = 0, links = 0, tasks = 0, questions = 0;
     for (JSONObject p : proposals)
       switch (p.optString("type")) {
@@ -1193,16 +1253,7 @@ public final class MainActivity extends Activity
             + ", вопросы — "
             + questions
             + ".");
-    content.addView(
-        button(
-            "Проверить сейчас",
-            false,
-            () ->
-                toast(
-                    prefs.getBoolean("managerAi", false) && BackgroundAnalysis.enqueue(this)
-                        ? "Проверка поставлена в очередь Android"
-                        : "Включите помощника в настройках. В локальном режиме обзор"
-                              + " недоступен.")));
+    content.addView(button("Проверить сейчас", false, this::manualAnalysis));
     content.addView(button("Обновить", false, this::render));
     if (proposals.isEmpty()) secondary(content, "Новых предложений пока нет.");
     for (JSONObject p : proposals) {
@@ -1297,6 +1348,8 @@ public final class MainActivity extends Activity
                                 : "Не удалось сохранить предложение");
                       }
                     }));
+    managerPreview = dialog;
+    dialog.setOnDismissListener(d -> managerPreview = null);
     dialog.show();
   }
 
@@ -2132,45 +2185,15 @@ public final class MainActivity extends Activity
             + " часов; Android может отложить её. ИИ улучшает автоматические заголовки и предлагает"
             + " напоминания. События назначаются только после подтверждения.");
     gap(content, 10);
-    secondary(content, prefs.getString("analysisStatus", "Фоновых проверок ещё не было."));
-    long checkedAt = prefs.getLong("analysisTime", 0);
-    if (checkedAt > 0) secondary(content, date(checkedAt));
+    showAnalysisStatus();
     gap(content, 10);
-    content.addView(
-        button(
-            "Проверить сейчас",
-            false,
-            () ->
-                toast(
-                    LocalLlm.enabled(this)
-                        ? "В локальном режиме фоновые проверки пока недоступны"
-                        : BackgroundAnalysis.enqueue(this)
-                            ? "Проверка поставлена в очередь Android"
-                            : "Сначала включите помощника и сохраните настройки")));
+    content.addView(button("Проверить сейчас", false, this::manualAnalysis));
+    secondary(
+        content,
+        "Ручная проверка запускает названия, напоминания и объединения независимо от фоновых"
+            + " переключателей. Включает повтор записей после ошибок.");
     gap(content, 8);
-    content.addView(
-        button(
-            "Повторить неудачные проверки",
-            false,
-            () -> {
-              if (LocalLlm.enabled(this)) {
-                toast("Локальная GGUF пока работает только в текстовом чате");
-                return;
-              }
-              if (!prefs.getBoolean("backgroundAi", false)
-                  && !prefs.getBoolean("managerAi", false)) {
-                toast("Сначала включите помощника и сохраните настройки");
-                return;
-              }
-              if (BackgroundAnalysis.isRunning()) {
-                toast("Дождитесь завершения текущей проверки");
-                return;
-              }
-              store.retryFailed();
-              new ManagerStore(store).retryFailed();
-              BackgroundAnalysis.enqueue(this);
-              toast("Повтор поставлен в очередь. Дневной лимит сохраняется.");
-            }));
+    content.addView(button("Повторить неудачные проверки", false, this::manualAnalysis));
     gap(content, 12);
     content.addView(
         button(

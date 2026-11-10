@@ -34,7 +34,7 @@ public final class BackgroundAnalysis extends JobService {
       synchronized (COMMIT_LOCK) {
         scheduler.cancel(PERIODIC);
         scheduler.cancel(ONCE);
-        scheduler.cancel(MANUAL);
+        if (LocalLlm.enabled(context)) scheduler.cancel(MANUAL);
       }
       return;
     }
@@ -66,8 +66,10 @@ public final class BackgroundAnalysis extends JobService {
   }
 
   public static boolean enqueueManual(Context context) {
+    if (LocalLlm.enabled(context)) return false;
     JobScheduler scheduler = context.getSystemService(JobScheduler.class);
     if (isRunning() || scheduler.getPendingJob(MANUAL) != null) return false;
+    scheduler.cancel(ONCE);
     PersistableBundle extras = new PersistableBundle();
     extras.putBoolean("manual", true);
     return scheduler.schedule(
@@ -135,14 +137,15 @@ public final class BackgroundAnalysis extends JobService {
         status("Для фоновой проверки сохраните ключ и модель.");
         return;
       }
-      if (prefs.getBoolean("managerAi", false)) {
+      if (run.manual || prefs.getBoolean("managerAi", false)) {
         ManagerJob.work(
             this,
             store,
             key,
             model,
-            () -> enabled(run) && prefs.getBoolean("managerAi", false),
-            COMMIT_LOCK);
+            () -> enabled(run) && (run.manual || prefs.getBoolean("managerAi", false)),
+            COMMIT_LOCK,
+            run.manual);
         return;
       }
       String today = LocalDate.now().toString();
@@ -196,7 +199,10 @@ public final class BackgroundAnalysis extends JobService {
         if (firstSuggestion != 0) notifySuggestion(firstSuggestion);
       }
     } catch (Exception e) {
-      status("Проверка не завершена. Повторите вручную в настройках; запрос мог быть оплачен.");
+      status(
+          "Проверка не завершена. "
+              + ReviewAnalysis.error(e)
+              + " Нажмите «Проверить сейчас» для ручного повтора; запрос мог быть оплачен.");
     }
   }
 

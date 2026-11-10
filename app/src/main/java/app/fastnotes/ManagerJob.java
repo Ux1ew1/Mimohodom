@@ -11,14 +11,26 @@ import org.json.*;
 
 final class ManagerJob {
   static void work(
-      Context context, Store store, String key, String model, BooleanSupplier enabled, Object lock)
+      Context context,
+      Store store,
+      String key,
+      String model,
+      BooleanSupplier enabled,
+      Object lock,
+      boolean manual)
       throws Exception {
     var prefs = context.getSharedPreferences("settings", 0);
+    boolean perNote = manual || prefs.getBoolean("backgroundAi", false);
     ManagerStore manager = new ManagerStore(store);
-    List<Note> batch = manager.batch();
+    List<Note> batch = manager.batch(manual);
     JSONObject groupSnapshot = manager.groupSnapshot(batch);
     if (batch.isEmpty()) {
-      status(context, "Нет доступных записей. Неудачные проверки можно повторить вручную.");
+      status(
+          context,
+          store.totalNotes() == 0
+              ? "Нет заметок для проверки."
+              : "Все доступные записи ожидают ручного повтора после ошибки. Нажмите «Проверить"
+                    + " сейчас».");
       return;
     }
     long runId;
@@ -36,84 +48,73 @@ final class ManagerJob {
       runId = manager.claim(batch);
     }
     if (!enabled.getAsBoolean()) return;
-    JSONObject payload = ManagerAnalysis.payload(batch, model);
-    if (prefs.getBoolean("backgroundAi", false)) {
-      String extra =
-          Analysis.payload(batch, model, System.currentTimeMillis(), ZoneId.systemDefault())
-              .getJSONArray("messages")
-              .getJSONObject(0)
-              .getString("content");
-      JSONObject instruction = payload.getJSONArray("messages").getJSONObject(0);
-      instruction.put(
-          "content",
-          instruction.getString("content")
-              + " Дополнительно добавь в тот же JSON поле notes. "
-              + extra
-              + " Итоговый ответ обязательно содержит ОБА массива: suggestions и notes."
-              + " needs_title=false: заголовки не меняй.");
-      // Include the dates needed to interpret the optional reminder suggestions.
-      JSONArray data =
-          new JSONArray(payload.getJSONArray("messages").getJSONObject(1).getString("content"));
-      for (int i = 0; i < batch.size(); i++) {
-        Note n = batch.get(i);
-        data.getJSONObject(i)
-            .put(
-                "created",
-                Instant.ofEpochMilli(n.created).atZone(ZoneId.systemDefault()).toString())
-            .put(
-                "updated",
-                Instant.ofEpochMilli(n.updated).atZone(ZoneId.systemDefault()).toString())
-            .put("needs_title", false)
-            .put("has_reminder", n.reminder > 0);
-      }
-      payload.getJSONArray("messages").getJSONObject(1).put("content", data.toString());
-    }
+    status(
+        context,
+        "Проверяем "
+            + batch.size()
+            + " из "
+            + store.totalNotes()
+            + " заметок: "
+            + (perNote ? "названия, напоминания, связи и объединения…" : "связи и объединения…"));
+    JSONObject payload =
+        perNote
+            ? ReviewAnalysis.payload(
+                batch, model, System.currentTimeMillis(), ZoneId.systemDefault())
+            : ManagerAnalysis.payload(batch, model);
     JSONObject response = Polza.request("chat/completions", key, payload);
-    String text =
-        response
-            .getJSONArray("choices")
-            .getJSONObject(0)
-            .getJSONObject("message")
-            .getString("content");
-    List<JSONObject> proposals = ManagerAnalysis.parse(text, batch);
-    for (JSONObject p : proposals) {
-      JSONObject groups = new JSONObject();
-      JSONArray sources = p.getJSONArray("sources");
-      StringBuilder identity = new StringBuilder(p.getString("identity"));
-      for (int i = 0; i < sources.length(); i++) {
-        String id = "" + sources.getJSONObject(i).getLong("id");
-        String revision = groupSnapshot.getString(id);
-        groups.put(id, revision);
-        identity.append('|').append(revision.length()).append(':').append(revision);
-      }
-      p.put("groups", groups).put("identity", identity.toString());
+    List<JSONObject> proposals;
+    Map<Long, Analysis.Result> results = Collections.emptyMap();
+    if (perNote) {
+      ReviewAnalysis.Result parsed =
+          ReviewAnalysis.parse(response, batch, System.currentTimeMillis());
+      proposals = parsed.proposals;
+      results = parsed.notes;
+    } else {
+      JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
+      if ("length".equals(choice.optString("finish_reason")))
+        throw new ReviewAnalysis.Failure(
+            "Ответ модели оборвался по лимиту 1200 токенов. Попробуйте другую модель или более"
+                + " короткие заметки.");
+      proposals =
+          ManagerAnalysis.parse(choice.getJSONObject("message").getString("content"), batch);
     }
+    for (JSONObject p : proposals) ManagerStore.attachGroups(p, groupSnapshot);
     synchronized (lock) {
       if (!enabled.getAsBoolean()) return;
-      int added = manager.finish(runId, batch, proposals);
-      if (prefs.getBoolean("backgroundAi", false)) {
-        try {
-          Map<Long, Analysis.Result> results =
-              Analysis.parse(text, batch, System.currentTimeMillis());
-          for (Note n : batch) {
-            Analysis.Result result = results.get(n.id);
-            if (result != null) {
-              result.title = "";
-              store.applyAnalysis(n, result);
-            }
-          }
-        } catch (Exception ignored) {
-          /* Optional per-note output does not invalidate manager output. */
-        }
-      }
+      ManagerStore.ReviewOutcome outcome = manager.finishReview(runId, batch, proposals, results);
+      int merges = 0;
+      for (JSONObject p : manager.pending()) if (p.optString("type").equals("merge")) merges++;
+      int failed = manager.failedCount();
       status(
           context,
           "Просмотрено записей: "
               + batch.size()
-              + ". Новых предложений: "
-              + added
-              + ". Это часть коллекции; обзор продолжается постепенно.");
-      if (added > 0) notify(context, added);
+              + " из "
+              + store.totalNotes()
+              + ". Переименовано: "
+              + outcome.renamed
+              + ". Новых предложений напоминаний: "
+              + outcome.reminders
+              + ". Новых предложений менеджера: "
+              + outcome.added
+              + ". Объединений к просмотру: "
+              + merges
+              + "."
+              + (batch.size() < 2
+                  ? " Для объединения нужны минимум две доступные заметки."
+                  : " Объединения и напоминания требуют подтверждения.")
+              + (failed > 0
+                  ? " После ошибки пропущено: "
+                      + failed
+                      + ". «Проверить сейчас» включает их в ручной повтор."
+                  : "")
+              + (batch.size() < store.totalNotes()
+                  ? " Проверена часть коллекции; за запрос — до 8 записей."
+                  : "")
+              + (perNote && outcome.reviewed < batch.size()
+                  ? " Часть записей изменилась во время запроса; их правки сохранены."
+                  : ""));
+      if (outcome.added + outcome.reminders > 0) notify(context, outcome.added + outcome.reminders);
     }
   }
 

@@ -14,6 +14,10 @@ final class ManagerStorageTest {
       List<Note> notes = Arrays.asList(store.note(a), store.note(b));
       long run = m.claim(notes);
       require(m.batch().isEmpty(), "Ambiguous requests not automatically retried");
+      require(
+          m.batch(true).size() == 2,
+          "Manual review includes failed notes without resetting automatic retry protection");
+      require(m.batch().isEmpty(), "Selecting a manual batch does not unblock automatic retries");
       m.retryFailed();
       require(m.batch().size() == 2, "Manual retry releases failed snapshots");
       run = m.claim(notes);
@@ -77,6 +81,39 @@ final class ManagerStorageTest {
       Set<Long> ids = new HashSet<>();
       for (Note n : first) ids.add(n.id);
       require(m.batch().stream().anyMatch(n -> !ids.contains(n.id)), "Review queue advances");
+      long auto = store.save(0, "", "Мука и молоко", 0),
+          extra = store.save(0, "Дополнение", "Соль", 0);
+      List<Note> combined = Arrays.asList(store.note(auto), store.note(extra));
+      List<JSONObject> combinedProposals = proposal(combined);
+      for (JSONObject p : combinedProposals)
+        ManagerStore.attachGroups(p, m.groupSnapshot(combined));
+      Analysis.Result rename = new Analysis.Result();
+      rename.title = "Блины";
+      rename.reminder = System.currentTimeMillis() + 3600000;
+      rename.reason = "Явная дата";
+      Map<Long, Analysis.Result> results = new HashMap<>();
+      results.put(auto, rename);
+      results.put(extra, new Analysis.Result());
+      ManagerStore.ReviewOutcome outcome =
+          m.finishReview(m.claim(combined), combined, combinedProposals, results);
+      require(
+          outcome.renamed == 1 && outcome.reminders == 1 && outcome.added == 1,
+          "All features applied from one response");
+      require(
+          store.note(auto).reminder == 0 && store.note(auto).suggestion > 0,
+          "Reminder remains unconfirmed");
+      JSONObject pending =
+          m.pending().stream()
+              .filter(
+                  p ->
+                      p.optString("type").equals("merge")
+                          && p.optJSONArray("sources").optJSONObject(0).optLong("id") == auto)
+              .findFirst()
+              .orElseThrow();
+      require(m.current(pending), "Same-response rename does not invalidate merge");
+      require(
+          m.accept(pending.getLong("id"), "Итог", "Мука, молоко, соль") > 0,
+          "Merge remains acceptable after rename");
       // Recreate a real v5 database by removing only the v6 additions, then reopen it.
       for (String table :
           new String[] {
