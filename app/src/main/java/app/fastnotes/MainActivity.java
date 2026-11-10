@@ -276,7 +276,7 @@ public final class MainActivity extends Activity
       page = "chats";
       render();
     } else if (tab != 1) {
-      navigate(1);
+      animateNavigate(1);
     } else super.onBackPressed();
   }
 
@@ -730,7 +730,7 @@ public final class MainActivity extends Activity
       item.setFocusable(true);
       item.setClickable(true);
       item.setSelected(active);
-      item.setOnClickListener(v -> navigate(target));
+      item.setOnClickListener(v -> animateNavigate(target));
       LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(46), dp(46));
       if (i > 0) lp.leftMargin = dp(14);
       dock.addView(item, lp);
@@ -782,7 +782,7 @@ public final class MainActivity extends Activity
       fading.add(button);
     }
     if (actions) {
-      View settingsButton = barIcon("settings", "Настройки", () -> navigate(3));
+      View settingsButton = barIcon("settings", "Настройки", () -> animateNavigate(3));
       bar.addView(
           settingsButton,
           new FrameLayout.LayoutParams(size, size, Gravity.END | Gravity.CENTER_VERTICAL));
@@ -2531,7 +2531,8 @@ public final class MainActivity extends Activity
   private void settings() {
     content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 10);
-    heading("По-вашему.", "Меньше лишнего. Больше полезного.");
+    heading("Настройки", "");
+    section("ИИ на телефоне", false);
     Switch local = new Switch(this);
     local.setText(R.string.local_gguf);
     local.setTextColor(INK);
@@ -2602,9 +2603,7 @@ public final class MainActivity extends Activity
                       })
                   .show();
             }));
-    gap(content, 20);
-    secondary(content, "Подключение Polza.AI");
-    gap(content, 10);
+    section("Polza.AI", true);
     EditText key = input("API-ключ Polza.AI", false);
     key.setInputType(
         android.text.InputType.TYPE_CLASS_TEXT
@@ -2721,6 +2720,7 @@ public final class MainActivity extends Activity
     tokens.setMinimumHeight(dp(50));
     content.addView(tokens);
     gap(content, 12);
+    section("Напоминания", true);
     Switch large = new Switch(this);
     secondary(content, "Напоминать до события");
     Spinner lead = new Spinner(this);
@@ -2746,13 +2746,13 @@ public final class MainActivity extends Activity
         content,
         "Применяется ко всем будущим событиям. Если выбранное время уже прошло, напоминание придёт"
             + " в ближайшее время. Уже доставленные напоминания не повторяются.");
-    gap(content, 16);
+    section("Внешний вид", true);
     large.setText("Крупный текст заметок");
     large.setTextColor(INK);
     large.setMinHeight(dp(52));
     large.setChecked(prefs.getBoolean("large", false));
     content.addView(large);
-    gap(content, 12);
+    section("Помощник заметок", true);
     Switch background = new Switch(this);
     background.setText("Фоновый помощник ИИ");
     background.setTextColor(INK);
@@ -2858,14 +2858,7 @@ public final class MainActivity extends Activity
                 toast("Не удалось безопасно сохранить ключ");
               }
             }));
-    gap(content, 24);
-    secondary(
-        content,
-        "Экономия без подписки приложения\n\n"
-            + "Локальный поиск по всем заметкам. До 8 фрагментов и 6 последних сообщений на запрос."
-            + " Повторные одинаковые запросы — из кеша в течение суток. Точная цена зависит от"
-            + " выбранной модели.");
-    gap(content, 20);
+    section("Уведомления", true);
     content.addView(
         iconButton(
             "Уведомления Android",
@@ -2881,7 +2874,7 @@ public final class MainActivity extends Activity
         content,
         "Напоминания могут приходить с задержкой из-за энергосбережения Android. После"
             + " принудительной остановки откройте приложение снова.");
-    gap(content, 20);
+    section("Данные", true);
     content.addView(
         button(
             "Экспортировать заметки",
@@ -2893,13 +2886,46 @@ public final class MainActivity extends Activity
                         .setType("application/json")
                         .putExtra(Intent.EXTRA_TITLE, "mimohodom-notes.json"),
                     77)));
-    gap(content, 16);
+    gap(content, 12);
     secondary(
         content,
-        "Мимоходом 0.4.2\n"
+        "Экономия без подписки приложения\n\n"
+            + "Локальный поиск по всем заметкам. До 8 фрагментов и 6 последних сообщений на запрос."
+            + " Повторные одинаковые запросы — из кеша в течение суток. Точная цена зависит от"
+            + " выбранной модели.");
+    section("О приложении", true);
+    secondary(
+        content,
+        "Мимоходом "
+            + appVersion()
+            + "\n"
             + "Заметки и чаты хранятся на устройстве. API-ключ зашифрован Android Keystore."
             + " Удаление приложения удалит локальные данные; предварительно экспортируйте"
             + " заметки.");
+  }
+
+  /** Заголовок раздела настроек; у всех, кроме первого, сверху тонкая линия. */
+  private void section(String title, boolean rule) {
+    if (rule) {
+      gap(content, 22);
+      View line = new View(this);
+      line.setBackgroundColor(LINE);
+      content.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
+      gap(content, 16);
+    }
+    TextView header = text(title, 17, GREEN);
+    header.setTypeface(null, Typeface.BOLD);
+    if (Build.VERSION.SDK_INT >= 28) header.setAccessibilityHeading(true);
+    content.addView(header);
+    gap(content, 10);
+  }
+
+  private String appVersion() {
+    try {
+      return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+    } catch (Exception e) {
+      return "";
+    }
   }
 
   private void loadModels(String key, EditText field) {
