@@ -40,6 +40,11 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   @Override
+  public boolean aicoreMode() {
+    return local && LocalLlm.aicore(appContext);
+  }
+
+  @Override
   public JSONObject complete(String key, JSONObject payload) throws Exception {
     return localMode()
         ? LocalLlm.complete(appContext, payload)

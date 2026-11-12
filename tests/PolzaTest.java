@@ -219,6 +219,52 @@ public final class PolzaTest {
     JSONArray localNotes =
         new JSONArray(localSystem.substring(localSystem.indexOf("ДАННЫЕ: ") + 8));
     check(localNotes.length() <= 2, "Local note context bounded");
+    final JSONObject[] nanoPayload = {null};
+    Memory nanoNotes = new Memory();
+    nanoNotes.notes.add(new Note(41, "Рецепт блинов", "Мука, молоко и яйца", 1000, 2000, 0));
+    Polza.Memory nanoMemory =
+        new Polza.Memory() {
+          public List<Note> notes() {
+            return nanoNotes.notes;
+          }
+
+          public String cached(String key) {
+            return null;
+          }
+
+          public void cache(String key, String value) {}
+
+          public boolean localMode() {
+            return true;
+          }
+
+          public boolean aicoreMode() {
+            return true;
+          }
+
+          public JSONObject complete(String key, JSONObject payload) {
+            nanoPayload[0] = payload;
+            return new JSONObject(response("Нашёл: Рецепт блинов — нужны мука и молоко."));
+          }
+        };
+    Polza.Answer nanoAnswer =
+        Polza.ask(nanoMemory, "", "aicore:gemini-nano", "рецепт блинов", new JSONArray(), 256);
+    String nanoSystem = nanoPayload[0].getJSONArray("messages").getJSONObject(0).getString("content");
+    check(nanoSystem.contains("[[note:12]]") && nanoSystem.contains("[[draft]]"), "Nano prompt teaches links and drafts");
+    check(nanoSystem.indexOf("ДАННЫЕ: ") > nanoSystem.indexOf("ПРАВИЛА"), "Nano data after rules");
+    check(
+        nanoAnswer.text.contains("Рецепт блинов [[note:41]]")
+            && nanoAnswer.sources.length() == 1
+            && nanoAnswer.sources.getJSONObject(0).getLong("id") == 41,
+        "Mentioned note title gets a link when the model forgets the format");
+    List<Note> linkNotes = List.of(new Note(7, "Блины", "x", 1, 2, 0), new Note(8, "Ёжик", "x", 1, 2, 0));
+    check(
+        Polza.linkMentionedNotes("Это блины и ёжик", linkNotes).equals("Это блины [[note:7]] и ёжик [[note:8]]"),
+        "Case and yo insensitive title linking");
+    check(
+        Polza.linkMentionedNotes("Это блины [[note:7]]", linkNotes).equals("Это блины [[note:7]]"),
+        "Existing link not duplicated");
+    check(Polza.linkMentionedNotes("абв", List.of(new Note(9, "аб", "x", 1, 2, 0))).equals("абв"), "Short titles ignored");
     Memory indexedMemory = new Memory();
     indexedMemory.notes.add(new Note(101, "Блины", "Мука и молоко", 1000, 2000, 0));
     reply =
