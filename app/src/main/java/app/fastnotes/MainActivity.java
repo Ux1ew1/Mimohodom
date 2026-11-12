@@ -2181,7 +2181,9 @@ public final class MainActivity extends Activity
         button(
             "Проверить и скачать Gemini Nano",
             false,
-            () -> checkAiCore(aicoreStatus)));
+            () -> checkAiCore(aicoreStatus, true)));
+    // Статус читается из системного AICore без скачивания: уже скачанная модель подхватывается сама.
+    checkAiCore(aicoreStatus, false);
     gap(content, 20);
     secondary(content, "Подключение Polza.AI");
     gap(content, 10);
@@ -2663,9 +2665,9 @@ public final class MainActivity extends Activity
   }
 
   /** Проверяет AICore и при необходимости скачивает Gemini Nano. Работает вне UI-потока. */
-  private void checkAiCore(TextView status) {
+  private void checkAiCore(TextView status, boolean allowDownload) {
     if (LocalLlm.busy()) {
-      toast("Дождитесь завершения локального ответа");
+      if (allowDownload) toast("Дождитесь завершения локального ответа");
       return;
     }
     status.setText("Проверяю Gemini Nano…");
@@ -2675,7 +2677,8 @@ public final class MainActivity extends Activity
               String result;
               try {
                 int state = AiCore.status();
-                if (state == com.google.mlkit.genai.common.FeatureStatus.DOWNLOADABLE) {
+                if (allowDownload
+                    && state == com.google.mlkit.genai.common.FeatureStatus.DOWNLOADABLE) {
                   runOnUiThread(() -> status.setText("Скачиваю Gemini Nano через AICore…"));
                   AiCore.download(text -> runOnUiThread(() -> status.setText(text)));
                   state = AiCore.status();
@@ -2688,7 +2691,7 @@ public final class MainActivity extends Activity
               String shown = result;
               runOnUiThread(
                   () -> {
-                    if (!isDestroyed()) status.setText(shown);
+                    if (!isDestroyed() && page.equals("settings")) status.setText(shown);
                   });
             },
             "aicore-check")
