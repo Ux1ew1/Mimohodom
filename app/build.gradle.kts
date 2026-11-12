@@ -4,7 +4,7 @@ android {
     compileSdk = 35
     ndkVersion = "28.2.13676358"
     if (rootProject.file(".tools/ndk/android-ndk-r28c/source.properties").exists()) { ndkPath = rootProject.file(".tools/ndk/android-ndk-r28c").absolutePath }
-    defaultConfig { applicationId = "app.fastnotes"; minSdk = 26; targetSdk = 35; versionCode = 21; versionName = "0.5.4"; testInstrumentationRunner = "app.fastnotes.SmokeInstrumentation"
+    defaultConfig { applicationId = "app.fastnotes"; minSdk = 26; targetSdk = 35; versionCode = 22; versionName = "0.5.5-aicore-test"; testInstrumentationRunner = "app.fastnotes.SmokeInstrumentation"
         ndk { abiFilters += listOf("arm64-v8a","x86_64") }
         externalNativeBuild { cmake { cppFlags += "-O3"; arguments += "-DANDROID_STL=c++_shared" } }
     }
@@ -12,4 +12,8 @@ android {
     buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
-dependencies { implementation("androidx.exifinterface:exifinterface:1.4.2") }
+dependencies {
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
+    // Gemini Nano через Google AICore (ML Kit GenAI Prompt API, бета).
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta5")
+}

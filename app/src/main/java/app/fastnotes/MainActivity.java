@@ -419,10 +419,11 @@ public final class MainActivity extends Activity
     return b;
   }
 
-  private void secondary(LinearLayout l, String value) {
+  private TextView secondary(LinearLayout l, String value) {
     TextView t = text(value, 13, MUTED);
     t.setLineSpacing(dp(3), 1);
     l.addView(t);
+    return t;
   }
 
   private void heading(String title, String subtitle) {
@@ -1771,7 +1772,9 @@ public final class MainActivity extends Activity
     secondary(
         content,
         LocalLlm.enabled(this)
-            ? "Локальный режим GGUF · модель отвечает на телефоне"
+            ? (LocalLlm.aicore(this)
+                ? "Локальный режим · Gemini Nano (Google AICore) отвечает на телефоне"
+                : "Локальный режим GGUF · модель отвечает на телефоне")
             : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
     gap(content, 8);
     chatInput = input("Сообщение или просьба создать заметку…", true);
@@ -1928,11 +1931,11 @@ public final class MainActivity extends Activity
     boolean local = LocalLlm.enabled(this);
     if (local && !image.isEmpty()) {
       toast(
-          "Локальная GGUF пока работает только с текстом. Уберите картинку или выберите Polza.AI в"
-              + " настройках.");
+          "Локальная модель пока работает только с текстом. Уберите картинку или выберите"
+              + " Polza.AI в настройках.");
       return;
     }
-    if (local && !LocalLlm.hasModel(this)) {
+    if (local && !LocalLlm.ready(this)) {
       toast("Сначала импортируйте GGUF-модель в настройках");
       return;
     }
@@ -1983,12 +1986,7 @@ public final class MainActivity extends Activity
         this,
         chat,
         key,
-        local
-            ? "local-gguf:"
-                + LocalLlm.model(this).lastModified()
-                + ":"
-                + LocalLlm.model(this).length()
-            : prefs.getString("model", ""),
+        local ? LocalLlm.modelId(this) : prefs.getString("model", ""),
         query,
         prefs.getInt("maxTokens", 600),
         image);
@@ -2159,6 +2157,31 @@ public final class MainActivity extends Activity
                       })
                   .show();
             }));
+    gap(content, 16);
+    Switch aicore = new Switch(this);
+    aicore.setText(R.string.local_aicore);
+    aicore.setTextColor(INK);
+    aicore.setMinHeight(dp(52));
+    aicore.setChecked(LocalLlm.aicore(this));
+    content.addView(aicore);
+    gap(content, 8);
+    secondary(
+        content,
+        "Gemini Nano работает на самом телефоне через системный Google AICore: файл модели"
+            + " импортировать не нужно, ключ и сеть не требуются. Нужен поддерживаемый телефон"
+            + " (например, Samsung Galaxy S25), актуальные Google AICore и система, разблокированный"
+            + " экран. Модель отвечает, только пока приложение открыто. Ответ до 256 токенов,"
+            + " запрос ограничен лимитом AICore. Для работы включите и «Локальный ИИ на"
+            + " телефоне», и этот переключатель, затем сохраните настройки. GGUF при этом не"
+            + " используется.");
+    gap(content, 10);
+    TextView aicoreStatus = secondary(content, "Состояние Gemini Nano не проверено");
+    gap(content, 10);
+    content.addView(
+        button(
+            "Проверить и скачать Gemini Nano",
+            false,
+            () -> checkAiCore(aicoreStatus)));
     gap(content, 20);
     secondary(content, "Подключение Polza.AI");
     gap(content, 10);
@@ -2369,8 +2392,8 @@ public final class MainActivity extends Activity
             true,
             () -> {
               try {
-                if (local.isChecked() && !LocalLlm.hasModel(this)) {
-                  toast("Сначала импортируйте GGUF-модель");
+                if (local.isChecked() && !aicore.isChecked() && !LocalLlm.hasModel(this)) {
+                  toast("Сначала импортируйте GGUF-модель или включите Gemini Nano");
                   return;
                 }
                 if (!local.isChecked()
@@ -2391,6 +2414,7 @@ public final class MainActivity extends Activity
                     .putBoolean("backgroundAi", background.isChecked())
                     .putBoolean("managerAi", manager.isChecked())
                     .putBoolean("localLlm", local.isChecked())
+                    .putString("localEngine", aicore.isChecked() ? "aicore" : "gguf")
                     .apply();
                 BackgroundAnalysis.configure(this);
                 io.execute(
@@ -2527,7 +2551,12 @@ public final class MainActivity extends Activity
                 if (cursor != null && cursor.moveToFirst()) name = cursor.getString(0);
               }
               LocalLlm.importModel(getApplicationContext(), uri);
-              prefs.edit().putString("localModelName", name).putBoolean("localLlm", true).apply();
+              prefs
+                  .edit()
+                  .putString("localModelName", name)
+                  .putBoolean("localLlm", true)
+                  .putString("localEngine", "gguf")
+                  .apply();
               BackgroundAnalysis.configure(getApplicationContext());
               runOnUiThread(
                   () -> {
@@ -2631,6 +2660,39 @@ public final class MainActivity extends Activity
 
   private String shortDate(long ms) {
     return new java.text.SimpleDateFormat("d MMM yyyy", new Locale("ru")).format(new Date(ms));
+  }
+
+  /** Проверяет AICore и при необходимости скачивает Gemini Nano. Работает вне UI-потока. */
+  private void checkAiCore(TextView status) {
+    if (LocalLlm.busy()) {
+      toast("Дождитесь завершения локального ответа");
+      return;
+    }
+    status.setText("Проверяю Gemini Nano…");
+    // Отдельный поток: скачивание модели может идти долго и не должно блокировать общую очередь.
+    new Thread(
+            () -> {
+              String result;
+              try {
+                int state = AiCore.status();
+                if (state == com.google.mlkit.genai.common.FeatureStatus.DOWNLOADABLE) {
+                  runOnUiThread(() -> status.setText("Скачиваю Gemini Nano через AICore…"));
+                  AiCore.download(text -> runOnUiThread(() -> status.setText(text)));
+                  state = AiCore.status();
+                }
+                result = AiCore.describe(state);
+              } catch (Exception e) {
+                result =
+                    e.getMessage() == null ? "Не удалось проверить Gemini Nano" : e.getMessage();
+              }
+              String shown = result;
+              runOnUiThread(
+                  () -> {
+                    if (!isDestroyed()) status.setText(shown);
+                  });
+            },
+            "aicore-check")
+        .start();
   }
 
   private void toast(String message) {

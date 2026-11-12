@@ -12,6 +12,12 @@ public final class LocalLlm {
   private static final AtomicBoolean BUSY = new AtomicBoolean();
   private static volatile boolean loaded;
   private static volatile String stage = "";
+  private static volatile boolean stageAicore;
+
+  /** Приёмник этапов генерации для движков, которые сообщают о ходе работы. */
+  interface Stage {
+    void report(int step);
+  }
 
   static String stage() {
     return stage;
@@ -19,7 +25,7 @@ public final class LocalLlm {
 
   private static void reportStage(int step) {
     stage = switch (step) {
-      case 1 -> "Загружаю модель GGUF…";
+      case 1 -> stageAicore ? "Проверяю Gemini Nano…" : "Загружаю модель GGUF…";
       case 2 -> "Обрабатываю вопрос и контекст…";
       case 3 -> "Генерирую ответ на телефоне…";
       default -> "";
@@ -29,6 +35,23 @@ public final class LocalLlm {
 
   public static boolean enabled(Context c) {
     return c.getSharedPreferences("settings", 0).getBoolean("localLlm", false);
+  }
+
+  /** Выбран Google AICore (Gemini Nano) вместо импортированной GGUF-модели. */
+  public static boolean aicore(Context c) {
+    return "aicore".equals(c.getSharedPreferences("settings", 0).getString("localEngine", "gguf"));
+  }
+
+  /** Локальный движок можно запускать: для AICore модель проверяется в самом запросе. */
+  public static boolean ready(Context c) {
+    return aicore(c) || hasModel(c);
+  }
+
+  /** Идентификатор модели для кеша ответов: меняется вместе с движком и файлом GGUF. */
+  public static String modelId(Context c) {
+    return aicore(c)
+        ? AiCore.MODEL_ID
+        : "local-gguf:" + model(c).lastModified() + ":" + model(c).length();
   }
 
   public static boolean busy() {
@@ -52,6 +75,7 @@ public final class LocalLlm {
 
   public static void cancel() {
     if (loaded) cancelNative();
+    if (stageAicore) AiCore.cancel();
   }
 
   private static native void cancelNative();
@@ -102,10 +126,17 @@ public final class LocalLlm {
   }
 
   public static JSONObject complete(Context c, JSONObject payload) throws Exception {
-    if (!hasModel(c)) throw new IOException("Выберите GGUF-модель в настройках");
+    boolean aicore = aicore(c);
+    if (!aicore && !hasModel(c)) throw new IOException("Выберите GGUF-модель в настройках");
     if (!BUSY.compareAndSet(false, true))
       throw new IOException("Локальный движок занят. Дождитесь завершения операции.");
+    stageAicore = aicore;
     try {
+      if (aicore)
+        return AiCore.complete(
+            payload.getJSONArray("messages"),
+            payload.optInt("max_tokens", 256),
+            LocalLlm::reportStage);
       android.app.ActivityManager.MemoryInfo memory = new android.app.ActivityManager.MemoryInfo();
       c.getSystemService(android.app.ActivityManager.class).getMemoryInfo(memory);
       if (memory.lowMemory || memory.availMem < model(c).length() + 256L * 1024 * 1024)

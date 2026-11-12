@@ -334,7 +334,7 @@ public final class Polza {
             ? "Из кеша · без нового запроса"
             : "Использовано заметок: " + selected.size() + " из " + total;
     if (store.localMode() && !answer.cached)
-      answer.usage = "Локальная GGUF · без облачного запроса · заметок: " + selected.size();
+      answer.usage = "Локальная модель · без облачного запроса · заметок: " + selected.size();
     if (!answer.cached && usage != null) {
       if (usage.has("total_tokens"))
         answer.usage += " · " + usage.optInt("total_tokens") + " токенов";

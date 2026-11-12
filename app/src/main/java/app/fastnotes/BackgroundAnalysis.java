@@ -126,7 +126,7 @@ public final class BackgroundAnalysis extends JobService {
   private void work(Run run) {
     var prefs = getSharedPreferences("settings", 0);
     if (LocalLlm.enabled(this)) {
-      status("Локальный GGUF: фоновая проверка пока приостановлена. Используйте текстовый чат.");
+      status("Локальный режим: фоновая проверка пока приостановлена. Используйте текстовый чат.");
       return;
     }
     List<Note> claimed = new ArrayList<>();
