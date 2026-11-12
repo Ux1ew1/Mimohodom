@@ -4,7 +4,9 @@ android {
     compileSdk = 35
     ndkVersion = "28.2.13676358"
     if (rootProject.file(".tools/ndk/android-ndk-r28c/source.properties").exists()) { ndkPath = rootProject.file(".tools/ndk/android-ndk-r28c").absolutePath }
-    defaultConfig { applicationId = "app.fastnotes"; minSdk = 26; targetSdk = 35; versionCode = 22; versionName = "0.5.5-aicore-test"; testInstrumentationRunner = "app.fastnotes.SmokeInstrumentation"
+    defaultConfig { applicationId = "app.fastnotes.aicore"; minSdk = 26; targetSdk = 35; versionCode = 22; versionName = "0.5.5-aicore-test"; testInstrumentationRunner = "app.fastnotes.SmokeInstrumentation"
+        // Тестовая ветка ставится рядом с основным приложением, а не поверх него.
+        manifestPlaceholders["appLabel"] = "Мимоходом AICore"
         ndk { abiFilters += listOf("arm64-v8a","x86_64") }
         externalNativeBuild { cmake { cppFlags += "-O3"; arguments += "-DANDROID_STL=c++_shared" } }
     }
