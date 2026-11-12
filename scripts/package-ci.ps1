@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $metadata = Get-Content (Join-Path $projectRoot 'app/build/outputs/apk/debug/output-metadata.json') -Raw | ConvertFrom-Json
-if ($metadata.applicationId -ne 'app.fastnotes' -or $metadata.elements.Count -ne 1) {
+if ($metadata.applicationId -notin @('app.fastnotes', 'app.fastnotes.aicore') -or $metadata.elements.Count -ne 1) {
     throw 'Unexpected application or APK output count'
 }
 $element = $metadata.elements[0]
@@ -22,7 +22,7 @@ if ($env:EXPECT_EXISTING_SIGNATURE -eq 'true' -and ($signature -join "`n") -notm
 $badging = & (Join-Path $buildTools 'aapt.exe') dump badging $apk
 if ($LASTEXITCODE -ne 0) { throw 'APK metadata verification failed' }
 $packageLine = $badging | Where-Object { $_ -match '^package:' }
-if ($packageLine -notmatch "name='app.fastnotes'" -or
+if ($packageLine -notmatch "name='$([regex]::Escape($metadata.applicationId))'" -or
     $packageLine -notmatch "versionName='$([regex]::Escape($version))'" -or
     $packageLine -notmatch "versionCode='$($element.versionCode)'") { throw 'APK version differs from build metadata' }
 $report = @("Commit: $env:GITHUB_SHA", "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID", $packageLine)
