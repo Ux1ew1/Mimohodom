@@ -19,6 +19,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -73,7 +74,7 @@ final class AiCore {
   static String describe(int status) {
     switch (status) {
       case FeatureStatus.AVAILABLE:
-        return "Gemini Nano готова к работе";
+        return "Gemini Nano уже скачана и готова к работе";
       case FeatureStatus.DOWNLOADABLE:
         return "Gemini Nano поддерживается, но модель ещё не скачана";
       case FeatureStatus.DOWNLOADING:
@@ -89,6 +90,7 @@ final class AiCore {
 
   /** Скачивает модель через AICore. Блокирует поток до завершения: вызывайте не из UI. */
   static void download(Progress progress) throws IOException {
+    AtomicLong total = new AtomicLong();
     try {
       await(
           model()
@@ -96,12 +98,24 @@ final class AiCore {
                   new DownloadCallback() {
                     @Override
                     public void onDownloadStarted(long bytesToDownload) {
-                      progress.report("Скачивание Gemini Nano: " + bytesToDownload / 1024 / 1024 + " МБ");
+                      total.set(bytesToDownload);
+                      progress.report(
+                          "Скачивание Gemini Nano: всего " + bytesToDownload / 1024 / 1024 + " МБ");
                     }
 
                     @Override
                     public void onDownloadProgress(long totalBytesDownloaded) {
-                      progress.report("Скачано " + totalBytesDownloaded / 1024 / 1024 + " МБ");
+                      long all = total.get();
+                      progress.report(
+                          all > 0
+                              ? "Скачано Gemini Nano: "
+                                  + Math.min(100, totalBytesDownloaded * 100 / all)
+                                  + "% ("
+                                  + totalBytesDownloaded / 1024 / 1024
+                                  + " из "
+                                  + all / 1024 / 1024
+                                  + " МБ)"
+                              : "Скачано " + totalBytesDownloaded / 1024 / 1024 + " МБ");
                     }
                   }),
           30 * 60);
