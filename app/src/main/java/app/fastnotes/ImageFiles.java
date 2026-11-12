@@ -116,7 +116,7 @@ public final class ImageFiles {
       Context c, String key, String model, String image, String question) throws Exception {
     if (LocalLlm.enabled(c))
       throw new IOException(
-          "Локальный GGUF пока поддерживает только текст. Для картинок выберите Polza.AI в"
+          "Локальная модель пока поддерживает только текст. Для картинок выберите Polza.AI в"
               + " настройках.");
     org.json.JSONObject response =
         Polza.request(

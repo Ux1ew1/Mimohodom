@@ -60,6 +60,7 @@ jobs:
           ./scripts/test-core.ps1
           ./scripts/test-polza.ps1
           ./scripts/test-manager.ps1
+          ./scripts/test-aicore.ps1
           node tests/metadata-sql.cjs
           if ($LASTEXITCODE -ne 0) { throw 'Metadata SQL tests failed' }
           node tests/manager-sql.cjs
