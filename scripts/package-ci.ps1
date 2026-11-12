@@ -6,7 +6,7 @@ if ($metadata.applicationId -ne 'app.fastnotes' -or $metadata.elements.Count -ne
 }
 $element = $metadata.elements[0]
 $version = $element.versionName
-if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Unexpected version name' }
+if ($version -notmatch '^\d+\.\d+\.\d+(-[a-z0-9]+)*$') { throw 'Unexpected version name' }
 $destination = Join-Path $projectRoot 'dist/ci'
 New-Item -ItemType Directory -Force $destination | Out-Null
 $apk = Join-Path $destination "mimohodom-$version-debug.apk"
