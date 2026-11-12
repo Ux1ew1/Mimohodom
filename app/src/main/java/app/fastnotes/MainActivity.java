@@ -1949,7 +1949,9 @@ public final class MainActivity extends Activity
     if (!local && (key.isEmpty() || prefs.getString("model", "").isEmpty())) {
       new AlertDialog.Builder(this)
           .setTitle("Подключите Polza.AI")
-          .setMessage("Укажите свой API-ключ и выберите модель в настройках.")
+          .setMessage(
+              "Укажите свой API-ключ и выберите модель в настройках или включите локальную модель"
+                  + " Gemini Nano (Google AICore) без ключа.")
           .setNegativeButton("Позже", null)
           .setPositiveButton("Настройки", (d, w) -> navigate(3))
           .show();
@@ -2162,7 +2164,16 @@ public final class MainActivity extends Activity
     aicore.setText(R.string.local_aicore);
     aicore.setTextColor(INK);
     aicore.setMinHeight(dp(52));
-    aicore.setChecked(LocalLlm.aicore(this));
+    aicore.setChecked(LocalLlm.enabled(this) && LocalLlm.aicore(this));
+    // Gemini Nano — это и есть локальный режим: отдельно включать второй переключатель не нужно.
+    aicore.setOnCheckedChangeListener(
+        (button, checked) -> {
+          if (checked) local.setChecked(true);
+        });
+    local.setOnCheckedChangeListener(
+        (button, checked) -> {
+          if (!checked) aicore.setChecked(false);
+        });
     content.addView(aicore);
     gap(content, 8);
     secondary(
@@ -2171,8 +2182,8 @@ public final class MainActivity extends Activity
             + " импортировать не нужно, ключ и сеть не требуются. Нужен поддерживаемый телефон"
             + " (например, Samsung Galaxy S25), актуальные Google AICore и система, разблокированный"
             + " экран. Модель отвечает, только пока приложение открыто. Ответ до 256 токенов,"
-            + " запрос ограничен лимитом AICore. Для работы включите и «Локальный ИИ на"
-            + " телефоне», и этот переключатель, затем сохраните настройки. GGUF при этом не"
+            + " запрос ограничен лимитом AICore. Достаточно включить этот переключатель и"
+            + " сохранить настройки: ключ Polza.AI для чата не нужен. GGUF при этом не"
             + " используется.");
     gap(content, 10);
     TextView aicoreStatus = secondary(content, "Состояние Gemini Nano не проверено");
