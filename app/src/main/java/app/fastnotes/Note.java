@@ -7,6 +7,10 @@ public final class Note {
   public String metadata = "{}", searchText = "";
   public boolean autoTitle;
   public long suggestion;
+  /** Повтор напоминания: 0 — нет, иначе {@link ReminderPolicy#REPEAT_DAILY} и далее. */
+  public int repeat;
+  /** Своё «напомнить за N минут» или -1, если действует общая настройка. */
+  public int lead = -1;
   public String suggestionReason = "";
 
   public Note(long id, String title, String body, long created, long updated, long reminder) {

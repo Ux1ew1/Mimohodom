@@ -47,6 +47,8 @@ public final class MainActivity extends Activity
   private int tab = 1;
   private String page = "home";
   private long editing = 0, reminder = 0, chat = 0;
+  /** Повтор и свой интервал напоминания в открытом редакторе (-1 — общая настройка). */
+  private int repeatMode = 0, leadChoice = -1;
   private boolean editorActive = false, rendering = false;
   private String returnPage = "notes";
   private TextView reminderButton, analysisStatusView;
@@ -1242,6 +1244,8 @@ public final class MainActivity extends Activity
           .putString(p + "title", titleField.getText().toString())
           .putString(p + "body", bodyField.getText().toString())
           .putLong(p + "reminder", reminder)
+          .putInt(p + "repeat", repeatMode)
+          .putInt(p + "lead", leadChoice)
           .putString(p + "image", noteImage)
           .apply();
     }
@@ -1256,6 +1260,8 @@ public final class MainActivity extends Activity
         .remove(p + "title")
         .remove(p + "body")
         .remove(p + "reminder")
+        .remove(p + "repeat")
+        .remove(p + "lead")
         .remove(p + "image")
         .apply();
   }
@@ -1362,6 +1368,8 @@ public final class MainActivity extends Activity
     footerRule.setBackgroundColor(LINE);
     sheet.addView(footerRule, new LinearLayout.LayoutParams(-1, dp(1)));
     reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
+    repeatMode = prefs.getInt(p + "repeat", note == null ? 0 : note.repeat);
+    leadChoice = prefs.getInt(p + "lead", note == null ? -1 : note.lead);
     LinearLayout footer = row();
     footer.setPadding(dp(12), dp(10), dp(12), dp(10));
     ImageView imageTool = new ImageView(this);
@@ -1500,14 +1508,17 @@ public final class MainActivity extends Activity
       Note old = store.note(editing);
       if (old == null) return true;
       String resolved = Note.autoTitle(title, body);
+      reconcileReminder(old);
       if (old.title.equals(resolved)
           && old.body.equals(body)
           && old.reminder == reminder
+          && old.repeat == (reminder == 0 ? 0 : repeatMode)
+          && old.lead == (reminder == 0 ? -1 : leadChoice)
           && old.image.equals(noteImage)) {
         clearDraft(editing);
         return true;
       }
-      store.save(editing, title, body, reminder);
+      store.save(editing, title, body, reminder, repeatMode, leadChoice);
       store.image(editing, noteImage);
       clearDraft(editing);
       Reminders.schedule(this, store.note(editing));
@@ -1520,8 +1531,26 @@ public final class MainActivity extends Activity
     }
   }
 
+  /**
+   * Повторяющееся напоминание могло сработать и передвинуться, пока заметка была открыта: прошлое
+   * время в редакторе не выбирается вручную, поэтому оно устарело и заменяется текущим из базы.
+   */
+  private void reconcileReminder(Note old) {
+    if (old != null
+        && old.repeat != 0
+        && reminder != 0
+        && reminder < old.reminder
+        && reminder <= System.currentTimeMillis()) reminder = old.reminder;
+  }
+
   private String reminderLabel() {
-    return reminder == 0 ? "" : date(reminder);
+    return reminder == 0 ? "" : date(reminder) + (repeatMode != 0 ? "  ↻" : "");
+  }
+
+  private String leadChoiceLabel() {
+    for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
+      if (Reminders.LEAD_MINUTES[i] == leadChoice) return LEAD_LABELS[i].toLowerCase(new Locale("ru"));
+    return "как в настройках";
   }
 
   /** Кнопка напоминания без даты показывает только значок часов. */
@@ -1531,7 +1560,11 @@ public final class MainActivity extends Activity
     reminderButton.setText(label);
     reminderButton.setCompoundDrawablePadding(label.isEmpty() ? 0 : dp(6));
     reminderButton.setContentDescription(
-        label.isEmpty() ? "Добавить напоминание" : "Напоминание: " + label);
+        label.isEmpty()
+            ? "Добавить напоминание"
+            : "Напоминание: "
+                + date(reminder)
+                + (repeatMode != 0 ? ". " + ReminderPolicy.repeatLabel(repeatMode) : ""));
   }
 
   private void pickReminder() {
@@ -1539,17 +1572,64 @@ public final class MainActivity extends Activity
       new AlertDialog.Builder(this)
           .setTitle("Напоминание")
           .setItems(
-              new String[] {"Изменить дату и время", "Убрать напоминание"},
+              new String[] {
+                "Изменить дату и время",
+                "Повтор: " + ReminderPolicy.repeatLabel(repeatMode).toLowerCase(new Locale("ru")),
+                "Напомнить за: " + leadChoiceLabel(),
+                "Убрать напоминание"
+              },
               (d, w) -> {
                 if (w == 0) datePicker();
+                else if (w == 1) pickRepeat();
+                else if (w == 2) pickLead();
                 else {
                   reminder = 0;
+                  repeatMode = 0;
+                  leadChoice = -1;
                   refreshReminder();
                   stash();
                 }
               })
           .show();
     } else datePicker();
+  }
+
+  private void pickRepeat() {
+    String[] labels = new String[5];
+    for (int i = 0; i < labels.length; i++) labels[i] = ReminderPolicy.repeatLabel(i);
+    new AlertDialog.Builder(this)
+        .setTitle("Повтор")
+        .setSingleChoiceItems(
+            labels,
+            repeatMode,
+            (d, w) -> {
+              repeatMode = w;
+              refreshReminder();
+              stash();
+              d.dismiss();
+            })
+        .show();
+  }
+
+  private void pickLead() {
+    String[] labels = new String[LEAD_LABELS.length + 1];
+    labels[0] = "Как в настройках";
+    System.arraycopy(LEAD_LABELS, 0, labels, 1, LEAD_LABELS.length);
+    int checked = 0;
+    for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
+      if (Reminders.LEAD_MINUTES[i] == leadChoice) checked = i + 1;
+    new AlertDialog.Builder(this)
+        .setTitle("Напомнить за")
+        .setSingleChoiceItems(
+            labels,
+            checked,
+            (d, w) -> {
+              leadChoice = w == 0 ? -1 : Reminders.LEAD_MINUTES[w - 1];
+              refreshReminder();
+              stash();
+              d.dismiss();
+            })
+        .show();
   }
 
   private void datePicker() {
@@ -1602,6 +1682,7 @@ public final class MainActivity extends Activity
       return;
     }
     Note old = editing == 0 ? null : store.note(editing);
+    reconcileReminder(old);
     if (reminder != 0
         && reminder <= System.currentTimeMillis()
         && (old == null || old.reminder != reminder)) {
@@ -1609,7 +1690,7 @@ public final class MainActivity extends Activity
       return;
     }
     try {
-      long id = store.save(editing, title, body, reminder);
+      long id = store.save(editing, title, body, reminder, repeatMode, leadChoice);
       store.image(id, noteImage);
       BackgroundAnalysis.enqueue(this);
       Reminders.schedule(this, store.note(id));
@@ -2790,6 +2871,7 @@ public final class MainActivity extends Activity
               if (n.reminder > System.currentTimeMillis())
                 Reminders.schedule(getApplicationContext(), n);
             Reminders.restoreSnoozed(getApplicationContext());
+            Reminders.scheduleDigest(getApplicationContext());
             Reminders.deliverMissed(getApplicationContext(), notes);
           }
         });
@@ -3076,10 +3158,18 @@ public final class MainActivity extends Activity
     if (Build.VERSION.SDK_INT >= 31 && !Reminders.exactAllowed(this))
       return "Время может быть неточным";
     int lead = Reminders.leadMinutes(this);
+    String digest =
+        Reminders.digestEnabled(this)
+            ? String.format(
+                Locale.US,
+                " · сводка в %02d:%02d",
+                Reminders.digestMinutes(this) / 60,
+                Reminders.digestMinutes(this) % 60)
+            : "";
     for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
       if (Reminders.LEAD_MINUTES[i] == lead)
-        return "Всё работает · " + LEAD_LABELS[i].toLowerCase(new Locale("ru"));
-    return "Всё работает";
+        return "Всё работает · " + LEAD_LABELS[i].toLowerCase(new Locale("ru")) + digest;
+    return "Всё работает" + digest;
   }
 
   private String assistantSummary() {
@@ -3379,7 +3469,48 @@ public final class MainActivity extends Activity
                 + " или на завтра, 9:00. Если телефон был выключен в нужное время, напоминание"
                 + " придёт как пропущенное при включении или открытии приложения (за последние 7"
                 + " дней). После принудительной остановки приложения откройте его снова."));
-    gap(content, 4);
+    gap(content, 12);
+    Switch digest = toggle("Утренняя сводка", Reminders.digestEnabled(this));
+    TextView digestTime = button("", false, () -> {});
+    Runnable showDigestTime =
+        () -> {
+          int minutes = Reminders.digestMinutes(this);
+          digestTime.setText(
+              String.format(Locale.US, "Время сводки: %02d:%02d", minutes / 60, minutes % 60));
+          digestTime.setVisibility(digest.isChecked() ? View.VISIBLE : View.GONE);
+        };
+    digest.setOnCheckedChangeListener(
+        (v, checked) -> {
+          buzz(0);
+          prefs.edit().putBoolean("digestOn", checked).apply();
+          Reminders.scheduleDigest(this);
+          if (checked) askNotificationPermission();
+          showDigestTime.run();
+        });
+    digestTime.setOnClickListener(
+        v -> {
+          buzz(0);
+          int minutes = Reminders.digestMinutes(this);
+          new TimePickerDialog(
+                  this,
+                  (tv, hour, minute) -> {
+                    prefs.edit().putInt("digestMinutes", hour * 60 + minute).apply();
+                    Reminders.scheduleDigest(this);
+                    showDigestTime.run();
+                  },
+                  minutes / 60,
+                  minutes % 60,
+                  true)
+              .show();
+        });
+    content.addView(digest);
+    content.addView(digestTime);
+    showDigestTime.run();
+    secondary(
+        content,
+        "Одно тихое уведомление утром со списком событий на сегодня. Если событий нет, сводки не"
+            + " будет.");
+    gap(content, 12);
     content.addView(
         button(
             "Проверочное уведомление",
@@ -3696,6 +3827,8 @@ public final class MainActivity extends Activity
                         .put("created", n.created)
                         .put("updated", n.updated)
                         .put("reminder", n.reminder)
+                        .put("repeat", n.repeat)
+                        .put("lead", n.lead)
                         .put("metadata", Metadata.read(n.metadata)));
               JSONObject export =
                   new JSONObject()

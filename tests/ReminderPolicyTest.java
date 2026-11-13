@@ -95,6 +95,83 @@ public final class ReminderPolicyTest {
         "tomorrow label");
     check(ReminderPolicy.snoozeLabel(0).equals("Через 10 мин"), "ten minute label");
 
+    // Повторы
+    ZoneId zu = ZoneId.of("UTC");
+    long first = at(zu, 2026, 11, 13, 9, 0);
+    check(
+        ReminderPolicy.nextOccurrence(first, ReminderPolicy.REPEAT_NONE, first + day, zu) == first,
+        "no repeat keeps the time");
+    check(
+        ReminderPolicy.nextOccurrence(first, ReminderPolicy.REPEAT_DAILY, first + 10, zu)
+            == first + day,
+        "daily goes to tomorrow");
+    check(
+        ReminderPolicy.nextOccurrence(first, ReminderPolicy.REPEAT_DAILY, first + 3 * day + hour, zu)
+            == first + 4 * day,
+        "daily skips missed days");
+    check(
+        ReminderPolicy.nextOccurrence(first, ReminderPolicy.REPEAT_DAILY, first, zu) == first + day,
+        "next occurrence is strictly after now");
+    check(
+        ReminderPolicy.nextOccurrence(first, ReminderPolicy.REPEAT_WEEKLY, first + 8 * day, zu)
+            == first + 14 * day,
+        "weekly skips a missed week");
+    check(
+        ReminderPolicy.nextOccurrence(
+                at(zu, 2026, 1, 31, 9, 0), ReminderPolicy.REPEAT_MONTHLY, at(zu, 2026, 2, 1, 0, 0), zu)
+            == at(zu, 2026, 2, 28, 9, 0),
+        "monthly clamps to the last day of a short month");
+    check(
+        ReminderPolicy.nextOccurrence(
+                at(zu, 2026, 1, 31, 9, 0), ReminderPolicy.REPEAT_MONTHLY, at(zu, 2026, 3, 1, 0, 0), zu)
+            == at(zu, 2026, 3, 31, 9, 0),
+        "monthly from the original day returns to the 31st");
+    check(
+        ReminderPolicy.nextOccurrence(
+                at(zu, 2028, 2, 29, 9, 0), ReminderPolicy.REPEAT_YEARLY, at(zu, 2028, 3, 1, 0, 0), zu)
+            == at(zu, 2029, 2, 28, 9, 0),
+        "yearly leap day falls back to the 28th");
+    ZoneId berlin = ZoneId.of("Europe/Berlin");
+    long beforeDst = at(berlin, 2026, 3, 28, 9, 0);
+    check(
+        ReminderPolicy.nextOccurrence(beforeDst, ReminderPolicy.REPEAT_DAILY, beforeDst + hour, berlin)
+            == at(berlin, 2026, 3, 29, 9, 0),
+        "daily keeps local time across the DST change");
+    check(
+        ReminderPolicy.nextOccurrence(0, ReminderPolicy.REPEAT_DAILY, now, zu) == 0,
+        "no reminder stays zero");
+    check(ReminderPolicy.nextOccurrence(first, 99, now, zu) == first, "unknown mode is ignored");
+    check(ReminderPolicy.repeatLabel(ReminderPolicy.REPEAT_WEEKLY).equals("Каждую неделю"), "weekly label");
+    check(ReminderPolicy.repeatLabel(0).equals("Не повторять"), "no repeat label");
+
+    // Утренняя сводка
+    long morning = at(zu, 2026, 11, 13, 6, 30);
+    check(
+        ReminderPolicy.nextDigestAt(morning, 8 * 60, zu) == at(zu, 2026, 11, 13, 8, 0),
+        "digest later today");
+    check(
+        ReminderPolicy.nextDigestAt(at(zu, 2026, 11, 13, 8, 0), 8 * 60, zu)
+            == at(zu, 2026, 11, 14, 8, 0),
+        "digest at the exact time goes to tomorrow");
+    check(
+        ReminderPolicy.nextDigestAt(at(zu, 2026, 11, 13, 21, 0), 8 * 60, zu)
+            == at(zu, 2026, 11, 14, 8, 0),
+        "digest after the time goes to tomorrow");
+    check(
+        ReminderPolicy.nextDigestAt(morning, 99_999, zu) == at(zu, 2026, 11, 13, 23, 59),
+        "digest time is clamped");
+    check(ReminderPolicy.upcomingToday(at(zu, 2026, 11, 13, 15, 0), morning, zu), "event later today");
+    check(!ReminderPolicy.upcomingToday(at(zu, 2026, 11, 13, 6, 0), morning, zu), "past event today");
+    check(!ReminderPolicy.upcomingToday(at(zu, 2026, 11, 14, 0, 0), morning, zu), "midnight is tomorrow");
+    check(ReminderPolicy.upcomingToday(at(zu, 2026, 11, 13, 23, 59), morning, zu), "last minute of today");
+    check(!ReminderPolicy.upcomingToday(0, morning, zu), "no reminder is not today");
+    check(ReminderPolicy.eventCount(1).equals("1 событие"), "count 1");
+    check(ReminderPolicy.eventCount(2).equals("2 события"), "count 2");
+    check(ReminderPolicy.eventCount(5).equals("5 событий"), "count 5");
+    check(ReminderPolicy.eventCount(11).equals("11 событий"), "count 11");
+    check(ReminderPolicy.eventCount(21).equals("21 событие"), "count 21");
+    check(ReminderPolicy.eventCount(112).equals("112 событий"), "count 112");
+
     System.out.println("ReminderPolicyTest: " + count + " checks passed");
   }
 }

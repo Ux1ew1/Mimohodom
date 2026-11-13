@@ -13,7 +13,9 @@ import java.util.TimeZone;
 
 public final class Reminders {
   public static final String CHANNEL = "reminders";
+  public static final String DIGEST_CHANNEL = "digest";
   public static final String ACTION_SNOOZE = "app.fastnotes.SNOOZE";
+  public static final String ACTION_DIGEST = "app.fastnotes.DIGEST";
   public static final int[] LEAD_MINUTES = {0, 5, 10, 15, 30, 60, 120, 1440};
   private static final String SNOOZED = "snoozedReminders";
 
@@ -23,8 +25,14 @@ public final class Reminders {
     return 0;
   }
 
+  /** Интервал «за N минут» для заметки: свой, если задан, иначе общий. */
+  public static int leadFor(Context c, Note n) {
+    for (int allowed : LEAD_MINUTES) if (allowed == n.lead) return allowed;
+    return leadMinutes(c);
+  }
+
   public static long trigger(Context c, Note n) {
-    return n.reminder - leadMinutes(c) * 60000L;
+    return n.reminder - leadFor(c, n) * 60000L;
   }
 
   public static boolean delivered(Context c, Note n) {
@@ -100,8 +108,28 @@ public final class Reminders {
   public static void schedule(Context c, Note n) {
     if (n.reminder > 0 && delivered(c, n)) return;
     cancel(c, n.id);
+    arm(c, n);
+  }
+
+  /** Ставит будильник, не трогая показанное уведомление и отложенное оповещение. */
+  private static void arm(Context c, Note n) {
     if (n.reminder <= System.currentTimeMillis() || delivered(c, n)) return;
     arm(c, Math.max(System.currentTimeMillis() + 1000, trigger(c, n)), intent(c, n.id));
+  }
+
+  /** Передвигает повторяющееся напоминание на ближайшее будущее время и ставит будильник. */
+  private static void advance(Context c, Note n) {
+    long next =
+        ReminderPolicy.nextOccurrence(
+            n.reminder, n.repeat, System.currentTimeMillis(), ZoneId.systemDefault());
+    if (next <= n.reminder) return;
+    try (Store store = new Store(c)) {
+      if (!store.advanceReminder(n.id, n.reminder, next)) return;
+      Note updated = store.note(n.id);
+      if (updated == null) return;
+      c.getSystemService(AlarmManager.class).cancel(intent(c, n.id));
+      arm(c, updated);
+    }
   }
 
   // ---- Откладывание ----
@@ -157,11 +185,13 @@ public final class Reminders {
     channel(c);
     c.getSystemService(NotificationManager.class)
         .notify("note-" + n.id, 1, build(c, n, snoozed).build());
-    if (!snoozed)
+    if (!snoozed) {
       c.getSharedPreferences("deliveredReminders", 0)
           .edit()
           .putLong("note." + n.id, n.reminder)
           .apply();
+      if (n.repeat != 0) advance(c, n);
+    }
     return true;
   }
 
@@ -169,9 +199,17 @@ public final class Reminders {
   public static int deliverMissed(Context c, List<Note> notes) {
     long now = System.currentTimeMillis();
     int shown = 0;
-    for (Note n : notes)
-      if (ReminderPolicy.missed(n.reminder, trigger(c, n), now, delivered(c, n))
-          && fire(c, n, false)) shown++;
+    for (Note n : notes) {
+      boolean delivered = delivered(c, n);
+      if (ReminderPolicy.missed(n.reminder, trigger(c, n), now, delivered)) {
+        if (fire(c, n, false)) shown++;
+      } else if (n.repeat != 0
+          && n.reminder > 0
+          && n.reminder + ReminderPolicy.MISSED_GRACE_MS <= now) {
+        // Серия давно прошла или уже доставлена: тихо переносим на следующее время.
+        advance(c, n);
+      }
+    }
     return shown;
   }
 
@@ -189,6 +227,81 @@ public final class Reminders {
                 .setContentText("Так будут приходить напоминания.")
                 .setAutoCancel(true)
                 .build());
+    return true;
+  }
+
+  // ---- Утренняя сводка ----
+
+  public static boolean digestEnabled(Context c) {
+    return c.getSharedPreferences("settings", 0).getBoolean("digestOn", false);
+  }
+
+  public static int digestMinutes(Context c) {
+    int value =
+        c.getSharedPreferences("settings", 0)
+            .getInt("digestMinutes", ReminderPolicy.DIGEST_DEFAULT_MINUTES);
+    return Math.max(0, Math.min(value, 24 * 60 - 1));
+  }
+
+  private static PendingIntent digestIntent(Context c) {
+    return PendingIntent.getBroadcast(
+        c,
+        0,
+        new Intent(c, ReminderReceiver.class)
+            .setAction(ACTION_DIGEST)
+            .setData(Uri.parse("fastnotes://digest")),
+        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+  }
+
+  /** Ставит или снимает ежедневную сводку в соответствии с настройками. */
+  public static void scheduleDigest(Context c) {
+    PendingIntent pending = digestIntent(c);
+    if (!digestEnabled(c)) {
+      c.getSystemService(AlarmManager.class).cancel(pending);
+      return;
+    }
+    arm(
+        c,
+        ReminderPolicy.nextDigestAt(
+            System.currentTimeMillis(), digestMinutes(c), ZoneId.systemDefault()),
+        pending);
+  }
+
+  /** Одно тихое уведомление со списком событий на сегодня. Без событий ничего не показывает. */
+  public static boolean sendDigest(Context c, List<Note> notes) {
+    long now = System.currentTimeMillis();
+    ZoneId zone = ZoneId.systemDefault();
+    java.util.ArrayList<Note> today = new java.util.ArrayList<>();
+    for (Note n : notes) if (ReminderPolicy.upcomingToday(n.reminder, now, zone)) today.add(n);
+    if (today.isEmpty() || !notificationsAllowed(c)) return false;
+    today.sort((a, b) -> Long.compare(a.reminder, b.reminder));
+    NotificationManager manager = c.getSystemService(NotificationManager.class);
+    manager.createNotificationChannel(
+        new NotificationChannel(
+            DIGEST_CHANNEL, "Утренняя сводка", NotificationManager.IMPORTANCE_LOW));
+    java.text.SimpleDateFormat time = new java.text.SimpleDateFormat("HH:mm");
+    Notification.InboxStyle style = new Notification.InboxStyle();
+    int shown = Math.min(today.size(), 6);
+    for (int i = 0; i < shown; i++)
+      style.addLine(time.format(new java.util.Date(today.get(i).reminder)) + "  " + today.get(i).title);
+    if (today.size() > shown) style.setSummaryText("и ещё " + (today.size() - shown));
+    Note first = today.get(0);
+    manager.notify(
+        "digest",
+        1,
+        new Notification.Builder(c, DIGEST_CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Сегодня: " + ReminderPolicy.eventCount(today.size()))
+            .setContentText(time.format(new java.util.Date(first.reminder)) + "  " + first.title)
+            .setStyle(style)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    c,
+                    0,
+                    new Intent(c, MainActivity.class).setData(Uri.parse("fastnotes://digest")),
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE))
+            .setAutoCancel(true)
+            .build());
     return true;
   }
 

@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 6);
+    super(context, name, null, 7);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -74,6 +74,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     db.execSQL("ALTER TABLE messages ADD COLUMN draft TEXT NOT NULL DEFAULT ''");
     addMetadata(db);
     ManagerStore.create(db);
+    addReminderOptions(db);
   }
 
   @Override
@@ -85,6 +86,22 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
     if (oldV < 5) addMetadata(db);
     if (oldV < 6) ManagerStore.create(db);
+    if (oldV < 7) addReminderOptions(db);
+  }
+
+  /** Повтор и свой интервал напоминания. Безопасно вызывается повторно, если столбцы уже есть. */
+  private void addReminderOptions(SQLiteDatabase db) {
+    if (!hasColumn(db, "repeat_mode"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN repeat_mode INTEGER NOT NULL DEFAULT 0");
+    if (!hasColumn(db, "lead_minutes"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN lead_minutes INTEGER NOT NULL DEFAULT -1");
+  }
+
+  private boolean hasColumn(SQLiteDatabase db, String column) {
+    try (Cursor c = db.rawQuery("PRAGMA table_info(notes)", null)) {
+      while (c.moveToNext()) if (column.equals(c.getString(1))) return true;
+    }
+    return false;
   }
 
   private void addMetadata(SQLiteDatabase db) {
@@ -141,6 +158,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     n.image = c.getString(11);
     n.metadata = c.getString(12);
     n.searchText = c.getString(13);
+    n.repeat = c.getInt(14);
+    n.lead = c.getInt(15);
     return n;
   }
 
@@ -224,7 +243,41 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  /** Сохраняет текст и время напоминания; повтор и свой интервал уже существующей заметки не трогает. */
   public long save(long id, String title, String body, long reminder) {
+    Note existing = id == 0 ? null : note(id);
+    return save(
+        id,
+        title,
+        body,
+        reminder,
+        existing == null ? 0 : existing.repeat,
+        existing == null ? -1 : existing.lead);
+  }
+
+  /** Передвигает время повторяющегося напоминания, если оно ещё не менялось. Текст не трогает. */
+  public boolean advanceReminder(long id, long expected, long next) {
+    ContentValues v = new ContentValues();
+    v.put("reminder", next);
+    return getWritableDatabase()
+            .update("notes", v, "id=? AND reminder=?", new String[] {"" + id, "" + expected})
+        == 1;
+  }
+
+  /** Количество заметок с непринятым предложением напоминания, время которого ещё впереди. */
+  public int pendingSuggestions() {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT count(*) FROM notes WHERE suggestion>?",
+                new String[] {"" + System.currentTimeMillis()})) {
+      c.moveToFirst();
+      return c.getInt(0);
+    }
+  }
+
+  public long save(
+      long id, String title, String body, long reminder, int repeat, int lead) {
     ContentValues v = new ContentValues();
     long now = System.currentTimeMillis();
     Note old = id == 0 ? null : note(id);
@@ -241,6 +294,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("body", body.trim());
     v.put("updated", now);
     v.put("reminder", reminder);
+    v.put("repeat_mode", reminder == 0 ? 0 : repeat);
+    v.put("lead_minutes", reminder == 0 ? -1 : lead);
     JSONObject metadata =
         Metadata.base(
             Note.autoTitle(title, body), body.trim(), old == null ? now : old.created, now);
