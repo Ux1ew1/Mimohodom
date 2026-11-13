@@ -104,6 +104,55 @@ public final class ImageFiles {
     }
   }
 
+  /**
+   * Поворачивает изображение на {@code quarterTurns} четвертей оборота по часовой стрелке и
+   * обрезает по долям {левый, верхний, правый, нижний} уже повёрнутого кадра. Сохраняет новый
+   * файл и возвращает его имя; прежний файл не трогает.
+   */
+  public static String edit(Context c, String name, int quarterTurns, float[] crop)
+      throws Exception {
+    Bitmap source = BitmapFactory.decodeFile(file(c, name).getPath());
+    if (source == null) throw new IOException("Не удалось прочитать изображение");
+    Bitmap turned = source, cropped = null;
+    try {
+      int turns = CropMath.turns(quarterTurns);
+      if (turns != 0) {
+        Matrix matrix = new Matrix();
+        matrix.postRotate(90f * turns);
+        turned =
+            Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
+      }
+      Bitmap result = turned;
+      if (!CropMath.isFull(crop)) {
+        int[] box = CropMath.pixels(turned.getWidth(), turned.getHeight(), crop);
+        cropped = Bitmap.createBitmap(turned, box[0], box[1], box[2], box[3]);
+        result = cropped;
+      }
+      String edited = UUID.randomUUID() + ".jpg";
+      File destination = file(c, edited);
+      boolean saved = false;
+      for (int quality : new int[] {90, 80, 65}) {
+        try (OutputStream out = new FileOutputStream(destination)) {
+          if (!result.compress(Bitmap.CompressFormat.JPEG, quality, out))
+            throw new IOException("Не удалось сохранить изображение");
+        }
+        if (destination.length() <= 2_000_000) {
+          saved = true;
+          break;
+        }
+      }
+      if (!saved) {
+        destination.delete();
+        throw new IOException("Изображение слишком большое после сжатия");
+      }
+      return edited;
+    } finally {
+      if (cropped != null) cropped.recycle();
+      if (turned != source) turned.recycle();
+      source.recycle();
+    }
+  }
+
   /** Файлы, нужные заметкам, черновикам редактора и чата. */
   public static synchronized Set<String> referenced(Context c) {
     Set<String> out = new HashSet<>();

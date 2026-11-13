@@ -191,7 +191,14 @@ public final class MainActivity extends Activity
     BackgroundAnalysis.configure(this);
     render();
     // Файлы изображений, на которые больше никто не ссылается (удалённые заметки, замены).
-    io.execute(() -> ImageFiles.cleanup(getApplicationContext(), 10 * 60_000L));
+    io.execute(
+        () -> {
+          ImageFiles.cleanup(getApplicationContext(), 10 * 60_000L);
+          java.io.File[] shots = new java.io.File(getCacheDir(), "camera").listFiles();
+          if (shots != null)
+            for (java.io.File shot : shots)
+              if (System.currentTimeMillis() - shot.lastModified() > 3_600_000L) shot.delete();
+        });
     if (Build.VERSION.SDK_INT >= 33)
       getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::goBack);
   }
@@ -214,6 +221,7 @@ public final class MainActivity extends Activity
     String action = intent.getAction();
     if (action == null) return;
     switch (action) {
+      case Intent.ACTION_SEND -> handleShare(intent);
       case "app.fastnotes.action.NEW_NOTE" -> {
         tab = 1;
         page = "home";
@@ -1354,6 +1362,33 @@ public final class MainActivity extends Activity
               ImageRunner.running ? "Изображение анализируется…" : "Создать заметку по изображению",
               false,
               this::analyzeNoteImage));
+      gap(imageBox, 6);
+      imageBox.addView(
+          button(
+              "Повернуть и обрезать",
+              false,
+              () -> {
+                if (ImageRunner.running) {
+                  toast("Дождитесь завершения анализа");
+                  return;
+                }
+                stash();
+                String current = noteImage;
+                long noteId = editing;
+                showImageEditor(
+                    current,
+                    edited -> {
+                      // Пока шло сохранение, заметку могли закрыть или картинку заменить.
+                      if (!editorActive || editing != noteId || !noteImage.equals(current)) {
+                        releaseImage(edited, "");
+                        return;
+                      }
+                      noteImage = edited;
+                      stash();
+                      releaseImage(current, edited);
+                      render();
+                    });
+              }));
       gap(imageBox, 6);
       imageBox.addView(
           button(
@@ -2564,6 +2599,33 @@ public final class MainActivity extends Activity
       content.addView(imagePreview(attached, 120));
       content.addView(
           button(
+              "Повернуть и обрезать",
+              false,
+              () -> {
+                if (ChatRunner.running != 0) {
+                  toast("Дождитесь завершения анализа");
+                  return;
+                }
+                long chatId = chat;
+                showImageEditor(
+                    attached,
+                    edited -> {
+                      String key = "chatImage." + chatId;
+                      if (!attached.equals(prefs.getString(key, ""))) {
+                        releaseImage(edited, "");
+                        return;
+                      }
+                      prefs.edit().putString(key, edited).apply();
+                      releaseImage(attached, edited);
+                      if (page.equals("chat") && chat == chatId) {
+                        stash();
+                        render();
+                      }
+                    });
+              }));
+      gap(content, 6);
+      content.addView(
+          button(
               "Убрать изображение",
               false,
               () -> {
@@ -2860,11 +2922,224 @@ public final class MainActivity extends Activity
     stash();
     pickerPage = forChat ? "chat" : "note";
     pickerTarget = forChat ? chat : editing;
-    startActivityForResult(
-        new Intent(Intent.ACTION_OPEN_DOCUMENT)
-            .addCategory(Intent.CATEGORY_OPENABLE)
-            .setType("image/*"),
-        88);
+    new AlertDialog.Builder(this)
+        .setTitle("Добавить изображение")
+        .setItems(
+            new String[] {"Выбрать из файлов", "Сделать снимок"},
+            (d, which) -> {
+              if (which == 0)
+                startActivityForResult(
+                    new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                        .addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("image/*"),
+                    88);
+              else takePhoto();
+            })
+        .show();
+  }
+
+  /** Снимок во временный файл приложения; разрешение на камеру не нужно, снимает системное окно. */
+  private void takePhoto() {
+    try {
+      java.io.File dir = new java.io.File(getCacheDir(), "camera");
+      if (!dir.exists() && !dir.mkdirs()) throw new java.io.IOException();
+      java.io.File shot = new java.io.File(dir, "shot-" + System.currentTimeMillis() + ".jpg");
+      prefs.edit().putString("cameraShot", shot.getName()).apply();
+      Uri output =
+          androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".files", shot);
+      Intent camera =
+          new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
+              .putExtra(android.provider.MediaStore.EXTRA_OUTPUT, output)
+              .addFlags(
+                  Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      camera.setClipData(ClipData.newRawUri("", output));
+      startActivityForResult(camera, 90);
+    } catch (ActivityNotFoundException e) {
+      toast("На телефоне нет приложения камеры");
+    } catch (Exception e) {
+      toast("Не удалось открыть камеру");
+    }
+  }
+
+  /** Файл последнего снимка; имя проверяется, чтобы нельзя было выйти за папку снимков. */
+  private java.io.File takeShot() {
+    String name = prefs.getString("cameraShot", "");
+    prefs.edit().remove("cameraShot").apply();
+    if (!name.matches("shot-\\d+\\.jpg")) return null;
+    java.io.File file = new java.io.File(new java.io.File(getCacheDir(), "camera"), name);
+    return file.exists() ? file : null;
+  }
+
+  private TextView darkButton(String label, boolean primary, String description, Runnable click) {
+    TextView b = text(label, 16, WHITE);
+    b.setTypeface(null, Typeface.BOLD);
+    b.setGravity(Gravity.CENTER);
+    b.setMinHeight(dp(48));
+    b.setPadding(dp(12), dp(8), dp(12), dp(8));
+    b.setBackground(ripple(primary ? GREEN : 0x33FFFFFF, 10));
+    b.setFocusable(true);
+    if (description != null) b.setContentDescription(description);
+    b.setOnClickListener(
+        v -> {
+          buzz(0);
+          click.run();
+        });
+    return b;
+  }
+
+  /**
+   * Экран поворота и обрезки. Результат — имя нового файла; исходный файл не меняется. Если
+   * ничего не менялось, {@code done} не вызывается.
+   */
+  private void showImageEditor(String name, java.util.function.Consumer<String> done) {
+    Dialog editor = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+    LinearLayout box = column();
+    box.setBackgroundColor(Color.BLACK);
+    box.setPadding(0, dp(28), 0, dp(12));
+    CropView crop = new CropView(this);
+    crop.setContentDescription("Область обрезки. Перетащите углы или саму рамку");
+    box.addView(crop, new LinearLayout.LayoutParams(-1, 0, 1));
+    Bitmap[] base = {null};
+    int[] turns = {0};
+    Runnable show =
+        () -> {
+          Bitmap source = base[0];
+          if (source == null) return;
+          if (turns[0] == 0) {
+            crop.setBitmap(source);
+            return;
+          }
+          Matrix matrix = new Matrix();
+          matrix.postRotate(90f * turns[0]);
+          crop.setBitmap(
+              Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true));
+        };
+    LinearLayout tools = row();
+    tools.setPadding(dp(12), dp(10), dp(12), 0);
+    LinearLayout.LayoutParams weight = new LinearLayout.LayoutParams(0, -2, 1);
+    weight.rightMargin = dp(8);
+    tools.addView(
+        darkButton(
+            "⟲",
+            false,
+            "Повернуть влево",
+            () -> {
+              turns[0] = CropMath.turns(turns[0] - 1);
+              show.run();
+            }),
+        weight);
+    tools.addView(
+        darkButton(
+            "⟳",
+            false,
+            "Повернуть вправо",
+            () -> {
+              turns[0] = CropMath.turns(turns[0] + 1);
+              show.run();
+            }),
+        weight);
+    tools.addView(
+        darkButton(
+            "Сбросить",
+            false,
+            null,
+            () -> {
+              turns[0] = 0;
+              show.run();
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    box.addView(tools);
+    LinearLayout actions = row();
+    actions.setPadding(dp(12), dp(10), dp(12), 0);
+    actions.addView(darkButton("Отмена", false, null, editor::dismiss), weight);
+    actions.addView(
+        darkButton(
+            "Готово",
+            true,
+            null,
+            () -> {
+              if (base[0] == null) return;
+              float[] fractions = crop.fractions();
+              int quarterTurns = CropMath.turns(turns[0]);
+              editor.dismiss();
+              if (quarterTurns == 0 && CropMath.isFull(fractions)) return;
+              toast("Сохраняю…");
+              io.execute(
+                  () -> {
+                    try {
+                      String edited =
+                          ImageFiles.edit(getApplicationContext(), name, quarterTurns, fractions);
+                      runOnUiThread(
+                          () -> {
+                            if (!isDestroyed()) done.accept(edited);
+                          });
+                    } catch (Exception | OutOfMemoryError e) {
+                      runOnUiThread(
+                          () -> {
+                            if (!isDestroyed()) toast("Не удалось изменить изображение");
+                          });
+                    }
+                  });
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    box.addView(actions);
+    editor.setContentView(box);
+    ImageThumbs.request(
+        this,
+        name,
+        1600,
+        bitmap -> {
+          if (!editor.isShowing()) return;
+          base[0] = bitmap;
+          show.run();
+        });
+    editor.show();
+  }
+
+  /** «Поделиться» из другого приложения: сохраняем заметку сразу и открываем её для правки. */
+  private void handleShare(Intent intent) {
+    CharSequence text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
+    Uri stream =
+        Build.VERSION.SDK_INT >= 33
+            ? intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class)
+            : intent.getParcelableExtra(Intent.EXTRA_STREAM);
+    boolean image = ShareParser.isImage(intent.getType()) && stream != null;
+    String[] parts =
+        ShareParser.note(
+            intent.getStringExtra(Intent.EXTRA_SUBJECT),
+            text == null ? null : text.toString(),
+            image);
+    // Повторный разбор того же intent при пересоздании экрана не нужен.
+    setIntent(new Intent(this, MainActivity.class));
+    if (parts == null) {
+      toast("В этом содержимом нет текста или картинки для заметки");
+      return;
+    }
+    toast("Сохраняю заметку…");
+    io.execute(
+        () -> {
+          try {
+            String file = image ? ImageFiles.importImage(getApplicationContext(), stream) : "";
+            long id;
+            try (Store saver = new Store(getApplicationContext())) {
+              id = saver.save(0, parts[0], parts[1], 0);
+              if (!file.isEmpty()) saver.image(id, file);
+            }
+            BackgroundAnalysis.enqueue(getApplicationContext());
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  tab = 0;
+                  openNote(id);
+                  toast("Заметка сохранена");
+                });
+          } catch (Exception | OutOfMemoryError e) {
+            runOnUiThread(
+                () -> {
+                  if (!isDestroyed()) toast("Не удалось сохранить. Картинка должна быть до 25 МБ.");
+                });
+          }
+        });
   }
 
   private void analyzeNoteImage() {
@@ -3874,9 +4149,24 @@ public final class MainActivity extends Activity
       return;
     }
     if (request == 88 && result == RESULT_OK && data != null && data.getData() != null) {
-      android.net.Uri uri = data.getData();
-      String targetPage = pickerPage;
-      long target = pickerTarget;
+      attachImage(data.getData(), pickerPage, pickerTarget, null);
+      return;
+    }
+    if (request == 90) {
+      java.io.File shot = takeShot();
+      if (result == RESULT_OK && shot != null && shot.length() > 0)
+        attachImage(Uri.fromFile(shot), pickerPage, pickerTarget, shot);
+      else if (shot != null) shot.delete();
+      return;
+    }
+    if (request == 77 && result == RESULT_OK && data != null && data.getData() != null) {
+      exportNotes(data.getData());
+    }
+  }
+
+  /** Сжимает выбранную или снятую картинку и прикрепляет её к заметке или чату. */
+  private void attachImage(Uri uri, String targetPage, long target, java.io.File temporary) {
+    {
       toast("Подготавливаю изображение…");
       io.execute(
           () -> {
@@ -3919,12 +4209,15 @@ public final class MainActivity extends Activity
                     if (!isDestroyed())
                       toast("Не удалось прикрепить изображение. Выберите картинку до 25 МБ.");
                   });
+            } finally {
+              if (temporary != null) temporary.delete();
             }
           });
-      return;
     }
-    if (request == 77 && result == RESULT_OK && data != null && data.getData() != null) {
-      android.net.Uri uri = data.getData();
+  }
+
+  private void exportNotes(Uri uri) {
+    {
       io.execute(
           () -> {
             try (Store exportStore = new Store(getApplicationContext())) {
