@@ -254,7 +254,8 @@ public final class MainActivity extends Activity
     ImageRunner.listen(this);
     imageFinished();
     restoreReminders();
-    if (reliabilityBox != null && "settings".equals(page)) fillReliability(reliabilityBox);
+    if (reliabilityBox != null && "settings.reminders".equals(page))
+      fillReliability(reliabilityBox);
     if ("chat".equals(page) || "notes".equals(page)) {
       stash();
       render();
@@ -264,6 +265,7 @@ public final class MainActivity extends Activity
 
   @Override
   protected void onPause() {
+    flushCredentials();
     stash();
     persistEditedNote();
     super.onPause();
@@ -310,6 +312,11 @@ public final class MainActivity extends Activity
       if (!persistEditedNote()) return;
       page = returnPage;
       tab = page.equals("chat") ? 2 : page.equals("home") ? 1 : 0;
+      render();
+    } else if (page.startsWith("settings.")) {
+      flushCredentials();
+      hideKeyboard();
+      page = "settings";
       render();
     } else if ("manager".equals(page)) {
       page = "notes";
@@ -635,6 +642,7 @@ public final class MainActivity extends Activity
   }
 
   private void render() {
+    flushCredentials();
     rendering = true;
     analysisStatusView = null;
     editorActive = false;
@@ -690,6 +698,10 @@ public final class MainActivity extends Activity
       case "chats" -> chats();
       case "chat" -> chatPage();
       case "settings" -> settings();
+      case "settings.ai" -> settingsAi();
+      case "settings.reminders" -> settingsReminders();
+      case "settings.assistant" -> settingsAssistant();
+      case "settings.app" -> settingsApp();
     }
     bottomNav();
     rendering = false;
@@ -2848,122 +2860,348 @@ public final class MainActivity extends Activity
                 new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)));
   }
 
+  // ===== Настройки: хаб и четыре подэкрана. Изменения применяются сразу, кнопки «Сохранить» нет. =====
+
+  private static final String[] LEAD_LABELS = {
+    "В момент события",
+    "За 5 минут",
+    "За 10 минут",
+    "За 15 минут",
+    "За 30 минут",
+    "За 1 час",
+    "За 2 часа",
+    "За 1 день"
+  };
+  private static final int MODE_POLZA = 0, MODE_NANO = 1, MODE_GGUF = 2;
+  private EditText keyField, modelField;
+  private boolean credentialsDirty, advancedOpen;
+  private final Handler saveHandler = new Handler(Looper.getMainLooper());
+  private final Runnable saveCredentials = this::flushCredentials;
+
+  private boolean isSettings() {
+    return page.startsWith("settings");
+  }
+
+  private void openSettings(String target) {
+    flushCredentials();
+    hideKeyboard();
+    page = target;
+    render();
+  }
+
+  /** Ключ и модель сохраняются через паузу после ввода, при уходе с экрана и при сворачивании. */
+  private void scheduleCredentials() {
+    credentialsDirty = true;
+    saveHandler.removeCallbacks(saveCredentials);
+    saveHandler.postDelayed(saveCredentials, 700);
+  }
+
+  private void flushCredentials() {
+    saveHandler.removeCallbacks(saveCredentials);
+    if (!credentialsDirty || keyField == null || modelField == null) return;
+    credentialsDirty = false;
+    try {
+      Secrets.save(this, keyField.getText().toString().trim());
+      prefs.edit().putString("model", modelField.getText().toString().trim()).apply();
+    } catch (Exception e) {
+      toast("Не удалось безопасно сохранить ключ");
+    }
+  }
+
+  private boolean credentialsReady() {
+    try {
+      return !Secrets.read(this).isEmpty() && !prefs.getString("model", "").trim().isEmpty();
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  private int aiMode() {
+    return !LocalLlm.enabled(this) ? MODE_POLZA : LocalLlm.aicore(this) ? MODE_NANO : MODE_GGUF;
+  }
+
+  private void applyBackground() {
+    BackgroundAnalysis.configure(this);
+    if (prefs.getBoolean("backgroundAi", false) || prefs.getBoolean("managerAi", false))
+      BackgroundAnalysis.enqueue(this);
+  }
+
+  private void askNotificationPermission() {
+    if (Build.VERSION.SDK_INT >= 33
+        && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED)
+      requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
+  }
+
+  private void setAiMode(int mode) {
+    if (mode == aiMode()) return;
+    flushCredentials();
+    if (mode == MODE_GGUF && !LocalLlm.hasModel(this)) {
+      toast("Выберите файл GGUF-модели");
+      importGguf();
+      return;
+    }
+    SharedPreferences.Editor edit = prefs.edit().putBoolean("localLlm", mode != MODE_POLZA);
+    if (mode != MODE_POLZA) edit.putString("localEngine", mode == MODE_NANO ? "aicore" : "gguf");
+    edit.apply();
+    applyBackground();
+    render();
+  }
+
+  private void importGguf() {
+    if (LocalLlm.busy()) {
+      toast("Дождитесь завершения локального ответа");
+      return;
+    }
+    startActivityForResult(
+        new Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*"),
+        89);
+  }
+
+  private void deleteGguf() {
+    if (LocalLlm.busy()) {
+      toast("Сначала остановите локальный ответ");
+      return;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Удалить GGUF с устройства?")
+        .setMessage(
+            "Будет удалена только копия модели в приложении. Исходный файл и заметки сохранятся.")
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton(
+            "Удалить",
+            (d, w) -> {
+              if (LocalLlm.busy()) {
+                toast("Локальный движок занят");
+                return;
+              }
+              if (LocalLlm.model(this).delete()) {
+                prefs.edit().remove("localModelName").putBoolean("localLlm", false).apply();
+                applyBackground();
+                toast("Модель удалена. Включён режим Polza.AI.");
+                render();
+              } else toast("Нет модели для удаления");
+            })
+        .show();
+  }
+
+  private void onPick(Spinner spinner, java.util.function.IntConsumer pick) {
+    int[] shown = {spinner.getSelectedItemPosition()};
+    spinner.setOnItemSelectedListener(
+        new AdapterView.OnItemSelectedListener() {
+          @Override
+          public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+            if (position == shown[0]) return;
+            shown[0] = position;
+            buzz(0);
+            pick.accept(position);
+          }
+
+          @Override
+          public void onNothingSelected(AdapterView<?> parent) {}
+        });
+  }
+
+  private Switch toggle(String label, boolean value) {
+    Switch s = new Switch(this);
+    s.setText(label);
+    s.setTextColor(INK);
+    s.setMinHeight(dp(52));
+    s.setChecked(value);
+    return s;
+  }
+
+  /** Длинное пояснение прячется за ссылкой «Подробнее», чтобы экран оставался коротким. */
+  private TextView infoLink(String title, String message) {
+    TextView link = text("Подробнее", 13, GREEN);
+    link.setTypeface(null, Typeface.BOLD);
+    link.setPadding(0, dp(10), dp(16), dp(10));
+    link.setOnClickListener(
+        v ->
+            new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("Понятно", null)
+                .show());
+    return link;
+  }
+
+  private void subHeader(String title) {
+    content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
+    gap(content, 10);
+    heading(title, "");
+  }
+
+  private void settingsRow(String title, String summary, String target) {
+    LinearLayout row = row();
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    pad(row, 16);
+    row.setBackground(ripple(LIME, 12));
+    row.setClickable(true);
+    row.setFocusable(true);
+    LinearLayout labels = column();
+    TextView head = text(title, 17, INK);
+    head.setTypeface(null, Typeface.BOLD);
+    labels.addView(head);
+    TextView detail = text(summary, 13, MUTED);
+    detail.setLineSpacing(dp(2), 1);
+    labels.addView(detail);
+    row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+    row.addView(text("›", 26, MUTED));
+    row.setContentDescription(title + ". " + summary);
+    row.setOnClickListener(
+        v -> {
+          buzz(0);
+          openSettings(target);
+        });
+    content.addView(row, new LinearLayout.LayoutParams(-1, -2));
+    gap(content, 10);
+  }
+
+  private String aiSummary() {
+    int mode = aiMode();
+    if (mode == MODE_NANO) return "Gemini Nano на телефоне";
+    if (mode == MODE_GGUF)
+      return "GGUF · " + prefs.getString("localModelName", "model.gguf");
+    String model = prefs.getString("model", "").trim();
+    return "Polza.AI · "
+        + (model.isEmpty() ? "модель не выбрана" : model)
+        + (credentialsReady() || model.isEmpty() ? "" : " · нет ключа");
+  }
+
+  private String reminderSummary() {
+    if (!Reminders.notificationsAllowed(this)) return "Уведомления выключены — напоминания не придут";
+    if (Build.VERSION.SDK_INT >= 31 && !Reminders.exactAllowed(this))
+      return "Время может быть неточным";
+    int lead = Reminders.leadMinutes(this);
+    for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
+      if (Reminders.LEAD_MINUTES[i] == lead)
+        return "Всё работает · " + LEAD_LABELS[i].toLowerCase(new Locale("ru"));
+    return "Всё работает";
+  }
+
+  private String assistantSummary() {
+    boolean background = prefs.getBoolean("backgroundAi", false),
+        manager = prefs.getBoolean("managerAi", false);
+    if (!background && !manager) return "Выключен";
+    String on =
+        background && manager ? "Фоновый помощник и менеджер" : background ? "Фоновый помощник" : "Менеджер";
+    return LocalLlm.cloudBackground(this)
+        ? on + " включены"
+        : on + " · на паузе, пока выбран GGUF";
+  }
+
+  // ---- Хаб ----
+
   private void settings() {
     content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 10);
     heading("Настройки", "");
-    section("ИИ на телефоне", false);
-    Switch local = new Switch(this);
-    local.setText(R.string.local_gguf);
-    local.setTextColor(INK);
-    local.setMinHeight(dp(52));
-    local.setChecked(LocalLlm.enabled(this));
-    local.setOnCheckedChangeListener((v, checked) -> buzz(0));
-    content.addView(local);
-    gap(content, 8);
-    secondary(
-        content,
-        "Текстовый ИИ на телефоне, без Polza.AI. ARM64, CPU, контекст 4096 токенов, ответ до 256"
-            + " токенов. Начните с небольшой instruct-модели 0.5–1.5B в Q4 до 2 ГБ. Понадобятся"
-            + " свободная память и место для копии файла. Картинки и фоновые проверки в этом режиме"
-            + " пока недоступны.");
-    gap(content, 10);
-    secondary(
-        content,
-        LocalLlm.hasModel(this)
-            ? "Модель: "
-                + prefs.getString("localModelName", "model.gguf")
-                + " ("
-                + (LocalLlm.model(this).length() / 1024 / 1024)
-                + " МБ)"
-            : "GGUF-модель не выбрана");
-    gap(content, 10);
-    content.addView(
-        button(
-            "Импортировать GGUF",
-            false,
-            () -> {
-              if (LocalLlm.busy()) {
-                toast("Дождитесь завершения локального ответа");
-                return;
-              }
-              startActivityForResult(
-                  new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                      .addCategory(Intent.CATEGORY_OPENABLE)
-                      .setType("*/*"),
-                  89);
-            }));
-    gap(content, 8);
-    content.addView(
-        button(
-            "Удалить локальную модель",
-            false,
-            () -> {
-              if (LocalLlm.busy()) {
-                toast("Сначала остановите локальный ответ");
-                return;
-              }
-              new AlertDialog.Builder(this)
-                  .setTitle("Удалить GGUF с устройства?")
-                  .setMessage(
-                      "Будет удалена только копия модели в приложении. Исходный файл и заметки"
-                          + " сохранятся.")
-                  .setNegativeButton("Отмена", null)
-                  .setPositiveButton(
-                      "Удалить",
-                      (d, w) -> {
-                        if (LocalLlm.busy()) {
-                          toast("Локальный движок занят");
-                          return;
-                        }
-                        if (LocalLlm.model(this).delete()) {
-                          prefs.edit().remove("localModelName").apply();
-                          toast("Модель удалена");
-                          render();
-                        } else toast("Нет модели для удаления");
-                      })
-                  .show();
-            }));
-    gap(content, 16);
-    Switch aicore = new Switch(this);
-    aicore.setText(R.string.local_aicore);
-    aicore.setTextColor(INK);
-    aicore.setMinHeight(dp(52));
-    aicore.setChecked(LocalLlm.enabled(this) && LocalLlm.aicore(this));
-    // Gemini Nano — это и есть локальный режим: отдельно включать второй переключатель не нужно.
-    aicore.setOnCheckedChangeListener(
-        (button, checked) -> {
-          if (checked) local.setChecked(true);
+    gap(content, 6);
+    settingsRow("ИИ", aiSummary(), "settings.ai");
+    settingsRow("Напоминания и уведомления", reminderSummary(), "settings.reminders");
+    settingsRow("Помощник заметок", assistantSummary(), "settings.assistant");
+    settingsRow(
+        "Приложение",
+        "Внешний вид, данные · версия " + appVersion(),
+        "settings.app");
+  }
+
+  // ---- ИИ ----
+
+  private void modeChoice(int mode, String title, String hint, int selected) {
+    boolean on = mode == selected;
+    LinearLayout row = row();
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    pad(row, 14);
+    row.setBackground(ripple(on ? LIME : WHITE, 12));
+    row.setClickable(true);
+    row.setFocusable(true);
+    TextView mark = text(on ? "●" : "○", 20, on ? GREEN : MUTED);
+    mark.setPadding(0, 0, dp(12), 0);
+    row.addView(mark);
+    LinearLayout labels = column();
+    TextView head = text(title, 16, INK);
+    head.setTypeface(null, Typeface.BOLD);
+    labels.addView(head);
+    labels.addView(text(hint, 13, MUTED));
+    row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+    row.setContentDescription(title + ". " + hint + (on ? ". Выбрано" : ""));
+    row.setOnClickListener(
+        v -> {
+          buzz(0);
+          setAiMode(mode);
         });
-    local.setOnCheckedChangeListener(
-        (button, checked) -> {
-          if (!checked) aicore.setChecked(false);
-        });
-    content.addView(aicore);
+    content.addView(row, new LinearLayout.LayoutParams(-1, -2));
     gap(content, 8);
-    secondary(
-        content,
-        "Gemini Nano работает на самом телефоне через системный Google AICore: файл модели"
-            + " импортировать не нужно, ключ и сеть не требуются. Нужен поддерживаемый телефон"
-            + " (например, Samsung Galaxy S25), актуальные Google AICore и система, разблокированный"
-            + " экран. Модель отвечает, только пока приложение открыто. Ответ до 256 токенов,"
-            + " запрос ограничен лимитом AICore. Достаточно включить этот переключатель и"
-            + " сохранить настройки: ключ Polza.AI для чата не нужен. GGUF при этом не"
-            + " используется. Фоновые проверки, менеджер и выжимки Gemini Nano не обслуживает:"
-            + " они идут через Polza.AI (для них нужны ключ и модель ниже), чат и поиск остаются"
-            + " на телефоне.");
+  }
+
+  private void settingsAi() {
+    subHeader("ИИ");
+    int mode = aiMode();
+    secondary(content, "Кто отвечает в чате и ищет по заметкам.");
     gap(content, 10);
-    TextView aicoreStatus = secondary(content, "Состояние Gemini Nano не проверено");
-    gap(content, 10);
-    content.addView(
-        button(
-            "Проверить и скачать Gemini Nano",
-            false,
-            () -> checkAiCore(aicoreStatus, true)));
-    // Статус читается из системного AICore без скачивания: уже скачанная модель подхватывается сама.
-    checkAiCore(aicoreStatus, false);
-    section("Polza.AI", true);
+    modeChoice(MODE_POLZA, "Polza.AI", "В облаке. Нужны ключ и модель.", mode);
+    modeChoice(MODE_NANO, "Gemini Nano", "На телефоне через Google AICore. Без ключа.", mode);
+    modeChoice(MODE_GGUF, "Своя модель GGUF", "На телефоне, из файла. Только текст.", mode);
+    gap(content, 8);
+    if (mode == MODE_NANO) {
+      secondary(
+          content,
+          "Нужен поддерживаемый телефон, например Samsung Galaxy S25. Отвечает, пока приложение"
+              + " открыто.");
+      content.addView(
+          infoLink(
+              "Gemini Nano",
+              "Gemini Nano работает на самом телефоне через системный Google AICore: файл модели"
+                  + " импортировать не нужно, ключ и сеть для чата не требуются. Нужны"
+                  + " актуальные Google AICore и система, разблокированный экран. Модель"
+                  + " отвечает, только пока приложение открыто. Ответ до 256 токенов, запрос"
+                  + " ограничен лимитом AICore. Фоновые проверки, менеджер и выжимки Gemini Nano"
+                  + " не обслуживает: они идут через Polza.AI, ключ и модель задаются ниже."));
+      TextView status = secondary(content, "Состояние Gemini Nano не проверено");
+      gap(content, 10);
+      content.addView(
+          button("Проверить и скачать Gemini Nano", false, () -> checkAiCore(status, true)));
+      // Статус читается из системного AICore без скачивания: скачанная модель подхватывается сама.
+      checkAiCore(status, false);
+    }
+    if (mode == MODE_GGUF) {
+      secondary(
+          content,
+          LocalLlm.hasModel(this)
+              ? "Модель: "
+                  + prefs.getString("localModelName", "model.gguf")
+                  + " ("
+                  + (LocalLlm.model(this).length() / 1024 / 1024)
+                  + " МБ)"
+              : "GGUF-модель не выбрана");
+      content.addView(
+          infoLink(
+              "Своя модель GGUF",
+              "Текстовый ИИ на телефоне, без Polza.AI. ARM64, CPU, контекст 4096 токенов, ответ"
+                  + " до 256 токенов. Начните с небольшой instruct-модели 0.5–1.5B в Q4 до 2 ГБ."
+                  + " Понадобятся свободная память и место для копии файла. Картинки и фоновые"
+                  + " проверки в этом режиме недоступны: для них выберите Polza.AI или Gemini"
+                  + " Nano."));
+      content.addView(button("Заменить модель", false, this::importGguf));
+      gap(content, 8);
+      content.addView(button("Удалить модель", false, this::deleteGguf));
+      gap(content, 8);
+      secondary(
+          content,
+          "Фоновые проверки и менеджер при GGUF на паузе. Чтобы они работали, выберите Polza.AI"
+              + " или Gemini Nano.");
+    }
+    if (mode != MODE_GGUF) polzaBlock(mode);
+  }
+
+  private void polzaBlock(int mode) {
+    section(mode == MODE_POLZA ? "Polza.AI" : "Polza.AI для фоновых проверок", true);
     EditText key = input("API-ключ Polza.AI", false);
+    keyField = key;
     key.setInputType(
         android.text.InputType.TYPE_CLASS_TEXT
             | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -3053,11 +3291,14 @@ public final class MainActivity extends Activity
         () -> {
           balance.setText(R.string.polza_balance);
           balanceStatus.setText("Обновите баланс для введённого ключа");
+          scheduleCredentials();
         });
     if (LocalLlm.cloudBackground(this) && !key.getText().toString().trim().isEmpty())
       refresh.post(updateBalance);
     EditText model = input("ID модели, например openai/gpt-4o-mini", false);
     model.setText(prefs.getString("model", ""));
+    modelField = model;
+    watch(model, this::scheduleCredentials);
     content.addView(model);
     gap(content, 10);
     TextView load =
@@ -3067,51 +3308,78 @@ public final class MainActivity extends Activity
             () -> loadModels(key.getText().toString().trim(), model));
     content.addView(load);
     gap(content, 16);
-    secondary(content, "Максимальная длина ответа");
-    Spinner tokens = new Spinner(this);
-    String[] choices = {
-      "Коротко — до 300 токенов", "Обычно — до 600 токенов", "Подробно — до 1200 токенов"
-    };
-    tokens.setAdapter(
-        new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, choices));
-    int current = prefs.getInt("maxTokens", 600);
-    tokens.setSelection(current == 300 ? 0 : current == 1200 ? 2 : 1);
-    tokens.setMinimumHeight(dp(50));
-    content.addView(tokens);
-    gap(content, 12);
-    section("Напоминания и уведомления", true);
+    if (mode == MODE_POLZA) {
+      TextView more = text((advancedOpen ? "▾  " : "▸  ") + "Дополнительно", 15, GREEN);
+      more.setTypeface(null, Typeface.BOLD);
+      more.setPadding(0, dp(10), 0, dp(10));
+      more.setOnClickListener(
+          v -> {
+            advancedOpen = !advancedOpen;
+            flushCredentials();
+            render();
+          });
+      content.addView(more);
+      if (advancedOpen) {
+        secondary(content, "Максимальная длина ответа");
+        Spinner tokens = new Spinner(this);
+        String[] choices = {
+          "Коротко — до 300 токенов", "Обычно — до 600 токенов", "Подробно — до 1200 токенов"
+        };
+        tokens.setAdapter(
+            new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, choices));
+        int current = prefs.getInt("maxTokens", 600);
+        tokens.setSelection(current == 300 ? 0 : current == 1200 ? 2 : 1);
+        tokens.setMinimumHeight(dp(50));
+        content.addView(tokens);
+        onPick(
+            tokens,
+            position ->
+                prefs.edit().putInt("maxTokens", new int[] {300, 600, 1200}[position]).apply());
+        gap(content, 12);
+        secondary(
+            content,
+            "Экономия без подписки приложения\n\n"
+                + "Локальный поиск по всем заметкам. До 8 фрагментов и 6 последних сообщений на"
+                + " запрос. Повторные одинаковые запросы — из кеша в течение суток. Точная цена"
+                + " зависит от выбранной модели.");
+      }
+    }
+  }
+
+  // ---- Напоминания и уведомления ----
+
+  private void settingsReminders() {
+    subHeader("Напоминания и уведомления");
     reliabilityBox = column();
     content.addView(reliabilityBox);
     fillReliability(reliabilityBox);
-    Switch large = new Switch(this);
     secondary(content, "Напоминать до события");
     Spinner lead = new Spinner(this);
-    String[] leadLabels = {
-      "В момент события",
-      "За 5 минут",
-      "За 10 минут",
-      "За 15 минут",
-      "За 30 минут",
-      "За 1 час",
-      "За 2 часа",
-      "За 1 день"
-    };
     lead.setAdapter(
-        new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, leadLabels));
+        new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, LEAD_LABELS));
     int leadSelection = 0;
     for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
       if (Reminders.LEAD_MINUTES[i] == Reminders.leadMinutes(this)) leadSelection = i;
     lead.setSelection(leadSelection);
     lead.setMinimumHeight(dp(50));
     content.addView(lead);
-    secondary(
-        content,
-        "Применяется ко всем будущим событиям. Если выбранное время уже прошло, напоминание придёт"
-            + " в ближайшее время. Уже доставленные напоминания не повторяются. В уведомлении можно"
-            + " отложить напоминание: на 10 минут, на час или на завтра, 9:00. Если телефон был"
-            + " выключен в нужное время, напоминание придёт как пропущенное при включении или"
-            + " открытии приложения (за последние 7 дней).");
-    gap(content, 12);
+    onPick(
+        lead,
+        position -> {
+          prefs.edit().putInt("reminderLead", Reminders.LEAD_MINUTES[position]).apply();
+          // Новый интервал сразу применяется ко всем будущим событиям.
+          restoreReminders();
+        });
+    content.addView(
+        infoLink(
+            "Как работают напоминания",
+            "Интервал применяется ко всем будущим событиям. Если выбранное время уже прошло,"
+                + " напоминание придёт в ближайшее время. Уже доставленные напоминания не"
+                + " повторяются. В уведомлении можно отложить напоминание: на 10 минут, на час"
+                + " или на завтра, 9:00. Если телефон был выключен в нужное время, напоминание"
+                + " придёт как пропущенное при включении или открытии приложения (за последние 7"
+                + " дней). После принудительной остановки приложения откройте его снова."));
+    gap(content, 4);
     content.addView(
         button(
             "Проверочное уведомление",
@@ -3121,149 +3389,116 @@ public final class MainActivity extends Activity
               else toast("Уведомления выключены. Включите их выше.");
             }));
     gap(content, 8);
-    section("Внешний вид", true);
-    large.setText("Крупный текст заметок");
-    large.setTextColor(INK);
-    large.setMinHeight(dp(52));
-    large.setChecked(prefs.getBoolean("large", false));
-    large.setOnCheckedChangeListener((v, checked) -> buzz(0));
-    content.addView(large);
-    Switch haptics = new Switch(this);
-    haptics.setText("Вибрация в приложении");
-    haptics.setTextColor(INK);
-    haptics.setMinHeight(dp(52));
-    haptics.setChecked(prefs.getBoolean("haptics", true));
-    // Включение сразу показывает отклик, даже пока настройка не сохранена.
-    haptics.setOnCheckedChangeListener((v, checked) -> vibrate(0, checked));
-    content.addView(haptics);
-    secondary(
-        content,
-        "Короткий отклик при нажатиях, переходах между вкладками и сохранении заметки.");
-    section("Помощник заметок", true);
-    Switch background = new Switch(this);
-    background.setText("Фоновый помощник ИИ");
-    background.setTextColor(INK);
-    background.setMinHeight(dp(52));
-    background.setChecked(prefs.getBoolean("backgroundAi", false));
-    background.setOnCheckedChangeListener((v, checked) -> buzz(0));
+    content.addView(
+        iconButton(
+            "Каналы и звук в Android",
+            "clock",
+            () ->
+                startActivity(
+                    new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(
+                            android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()))));
+  }
+
+  // ---- Помощник заметок ----
+
+  private void settingsAssistant() {
+    subHeader("Помощник заметок");
+    Switch background = toggle("Фоновый помощник ИИ", prefs.getBoolean("backgroundAi", false));
+    background.setOnCheckedChangeListener(
+        (v, checked) -> {
+          buzz(0);
+          if (checked && LocalLlm.cloudBackground(this) && !credentialsReady()) {
+            toast("Сначала укажите ключ и модель Polza.AI в разделе «ИИ».");
+            background.setChecked(false);
+            return;
+          }
+          prefs.edit().putBoolean("backgroundAi", checked).apply();
+          applyBackground();
+          if (checked) askNotificationPermission();
+        });
     content.addView(background);
-    Switch manager = new Switch(this);
-    manager.setText(R.string.note_manager);
-    manager.setTextColor(INK);
-    manager.setMinHeight(dp(52));
-    manager.setChecked(prefs.getBoolean("managerAi", false));
+    Switch manager = toggle(getString(R.string.note_manager), prefs.getBoolean("managerAi", false));
     manager.setOnCheckedChangeListener(
         (v, checked) -> {
           buzz(0);
-          if (checked && !prefs.getBoolean("managerAi", false))
-            new AlertDialog.Builder(this)
-                .setTitle("Включить менеджера заметок?")
-                .setMessage(
-                    "Выбранные тексты из всей коллекции будут передаваться в Polza.AI примерно"
-                        + " каждые 6 часов, даже при закрытом приложении. По умолчанию — 4 платных"
-                        + " запроса в сутки; дневной лимит можно снять. До 8 заметок и 12 000"
-                        + " символов на запрос. Изменения — только после подтверждения. Сохраните"
-                        + " настройки для включения.")
-                .setPositiveButton("Согласен", (d, w) -> {})
-                .setNegativeButton("Отмена", (d, w) -> manager.setChecked(false))
-                .setOnCancelListener(d -> manager.setChecked(false))
-                .show();
+          if (!checked) {
+            prefs.edit().putBoolean("managerAi", false).apply();
+            applyBackground();
+            return;
+          }
+          if (prefs.getBoolean("managerAi", false)) return;
+          if (LocalLlm.cloudBackground(this) && !credentialsReady()) {
+            toast("Сначала укажите ключ и модель Polza.AI в разделе «ИИ».");
+            manager.setChecked(false);
+            return;
+          }
+          new AlertDialog.Builder(this)
+              .setTitle("Включить менеджера заметок?")
+              .setMessage(
+                  "Выбранные тексты из всей коллекции будут передаваться в Polza.AI примерно"
+                      + " каждые 6 часов, даже при закрытом приложении. По умолчанию — 4 платных"
+                      + " запроса в сутки; дневной лимит можно снять. До 8 заметок и 12 000"
+                      + " символов на запрос. Изменения — только после подтверждения.")
+              .setPositiveButton(
+                  "Согласен",
+                  (d, w) -> {
+                    prefs.edit().putBoolean("managerAi", true).apply();
+                    applyBackground();
+                    askNotificationPermission();
+                  })
+              .setNegativeButton("Отмена", (d, w) -> manager.setChecked(false))
+              .setOnCancelListener(d -> manager.setChecked(false))
+              .show();
         });
     content.addView(manager);
     secondary(
         content,
-        "Менеджер предлагает объединения, связи, дела и вопросы. Сводка доступна в заметках."
-            + " Уведомления — не чаще раза в сутки.");
-    gap(content, 8);
-    secondary(
-        content,
-        "При включении новые и изменённые заметки передаются в Polza.AI даже при закрытом"
-            + " приложении. По умолчанию до 4 платных пакетов в сутки; дневной лимит можно снять."
-            + " Проверка примерно раз в 6 часов; Android может отложить её. ИИ улучшает"
-            + " автоматические заголовки и предлагает напоминания. События назначаются только после"
-            + " подтверждения.");
-    gap(content, 10);
+        "Предлагает названия, напоминания, связи и объединения. Запросы идут через Polza.AI, по"
+            + " умолчанию до 4 платных в сутки.");
+    content.addView(
+        infoLink(
+            "Как работает помощник",
+            "Менеджер предлагает объединения, связи, дела и вопросы. Сводка доступна в заметках."
+                + " Уведомления — не чаще раза в сутки.\n\n"
+                + "При включении новые и изменённые заметки передаются в Polza.AI даже при"
+                + " закрытом приложении. По умолчанию до 4 платных пакетов в сутки; дневной лимит"
+                + " можно снять. Проверка примерно раз в 6 часов; Android может отложить её. ИИ"
+                + " улучшает автоматические заголовки и предлагает напоминания. События"
+                + " назначаются только после подтверждения.\n\n"
+                + "Ручная проверка запускает названия, напоминания и объединения независимо от"
+                + " переключателей и повторяет записи после ошибок."));
+    gap(content, 6);
     showAnalysisStatus();
     content.addView(quietAction("История проверок", this::showAnalysisLog));
     content.addView(limitButton());
     gap(content, 10);
     content.addView(button("Проверить сейчас", false, this::manualAnalysis));
+  }
+
+  // ---- Приложение ----
+
+  private void settingsApp() {
+    subHeader("Приложение");
+    section("Внешний вид", false);
+    Switch large = toggle("Крупный текст заметок", prefs.getBoolean("large", false));
+    large.setOnCheckedChangeListener(
+        (v, checked) -> {
+          prefs.edit().putBoolean("large", checked).apply();
+          buzz(0);
+        });
+    content.addView(large);
+    Switch haptics = toggle("Вибрация в приложении", prefs.getBoolean("haptics", true));
+    // Включение сразу показывает отклик.
+    haptics.setOnCheckedChangeListener(
+        (v, checked) -> {
+          prefs.edit().putBoolean("haptics", checked).apply();
+          vibrate(0, checked);
+        });
+    content.addView(haptics);
     secondary(
         content,
-        "Ручная проверка запускает названия, напоминания и объединения независимо от фоновых"
-            + " переключателей. Включает повтор записей после ошибок.");
-    gap(content, 8);
-    content.addView(button("Повторить неудачные проверки", false, this::manualAnalysis));
-    gap(content, 12);
-    content.addView(
-        button(
-            "Сохранить настройки",
-            true,
-            () -> {
-              try {
-                if (local.isChecked() && !aicore.isChecked() && !LocalLlm.hasModel(this)) {
-                  toast("Сначала импортируйте GGUF-модель или включите Gemini Nano");
-                  return;
-                }
-                if ((!local.isChecked() || aicore.isChecked())
-                    && (background.isChecked() || manager.isChecked())
-                    && (key.getText().toString().trim().isEmpty()
-                        || model.getText().toString().trim().isEmpty())) {
-                  toast("Для фонового ИИ укажите ключ и модель");
-                  return;
-                }
-                Secrets.save(this, key.getText().toString().trim());
-                prefs
-                    .edit()
-                    .putString("model", model.getText().toString().trim())
-                    .putInt(
-                        "maxTokens", new int[] {300, 600, 1200}[tokens.getSelectedItemPosition()])
-                    .putBoolean("large", large.isChecked())
-                    .putInt("reminderLead", Reminders.LEAD_MINUTES[lead.getSelectedItemPosition()])
-                    .putBoolean("backgroundAi", background.isChecked())
-                    .putBoolean("managerAi", manager.isChecked())
-                    .putBoolean("localLlm", local.isChecked())
-                    .putBoolean("haptics", haptics.isChecked())
-                    .putString("localEngine", aicore.isChecked() ? "aicore" : "gguf")
-                    .apply();
-                BackgroundAnalysis.configure(this);
-                io.execute(
-                    () -> {
-                      try (Store reminders = new Store(getApplicationContext())) {
-                        for (Note n : reminders.notes())
-                          if (n.reminder > System.currentTimeMillis()
-                              && !Reminders.delivered(getApplicationContext(), n))
-                            Reminders.schedule(getApplicationContext(), n);
-                      }
-                    });
-                if (background.isChecked() || manager.isChecked()) {
-                  BackgroundAnalysis.enqueue(this);
-                  if (Build.VERSION.SDK_INT >= 33
-                      && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                          != PackageManager.PERMISSION_GRANTED)
-                    requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
-                }
-                hideKeyboard();
-                toast("Настройки сохранены");
-              } catch (Exception e) {
-                toast("Не удалось безопасно сохранить ключ");
-              }
-            }));
-    content.addView(
-        iconButton(
-            "Каналы и звук в Android",
-            "clock",
-            () -> {
-              Intent intent =
-                  new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                      .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName());
-              startActivity(intent);
-            }));
-    gap(content, 10);
-    secondary(
-        content,
-        "После принудительной остановки приложения откройте его снова, чтобы вернуть"
-            + " напоминания.");
+        "Короткий отклик при нажатиях, переходах между вкладками и сохранении заметки.");
     section("Данные", true);
     content.addView(
         button(
@@ -3276,13 +3511,6 @@ public final class MainActivity extends Activity
                         .setType("application/json")
                         .putExtra(Intent.EXTRA_TITLE, "mimohodom-notes.json"),
                     77)));
-    gap(content, 12);
-    secondary(
-        content,
-        "Экономия без подписки приложения\n\n"
-            + "Локальный поиск по всем заметкам. До 8 фрагментов и 6 последних сообщений на запрос."
-            + " Повторные одинаковые запросы — из кеша в течение суток. Точная цена зависит от"
-            + " выбранной модели.");
     section("О приложении", true);
     secondary(
         content,
@@ -3330,7 +3558,7 @@ public final class MainActivity extends Activity
             List<String> ids = Polza.models(key);
             runOnUiThread(
                 () -> {
-                  if (isDestroyed() || !page.equals("settings")) return;
+                  if (isDestroyed() || !isSettings()) return;
                   LinearLayout dialog = column();
                   pad(dialog, 16);
                   EditText filter = input("Поиск модели", false);
@@ -3397,7 +3625,7 @@ public final class MainActivity extends Activity
                   () -> {
                     if (!isDestroyed()) {
                       toast("GGUF скопирован. Локальный режим включён.");
-                      if (page.equals("settings")) render();
+                      if (isSettings()) render();
                     }
                   });
             } catch (Exception e) {
@@ -3524,7 +3752,7 @@ public final class MainActivity extends Activity
               String shown = result;
               runOnUiThread(
                   () -> {
-                    if (!isDestroyed() && page.equals("settings")) status.setText(shown);
+                    if (!isDestroyed() && status.isAttachedToWindow()) status.setText(shown);
                   });
             },
             "aicore-check")

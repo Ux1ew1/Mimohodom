@@ -1,6 +1,4 @@
 <resources>
-    <string name="local_gguf">Локальный ИИ на телефоне · экспериментально</string>
-    <string name="local_aicore">Использовать Gemini Nano (Google AICore) вместо GGUF</string>
     <string name="create_dialog_note">Создай заметку на базе нашего диалога: собери важную информацию в краткий самостоятельный текст.</string>
     <string name="polza_balance">Баланс Polza.AI</string>
     <string name="balance_key_required">Сначала введите API-ключ</string>
