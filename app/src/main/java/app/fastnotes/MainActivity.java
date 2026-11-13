@@ -222,6 +222,7 @@ public final class MainActivity extends Activity
         tab = 2;
         page = "chat";
         chat = 0;
+        prefs.edit().remove("chatImage.0").apply();
       }
       case "app.fastnotes.action.OPEN_NOTES" -> {
         tab = 0;
@@ -2240,6 +2241,8 @@ public final class MainActivity extends Activity
             "Новый чат",
             true,
             () -> {
+              // Не переносим в новый чат неотправленную картинку из прошлого черновика.
+              prefs.edit().remove("chatImage.0").apply();
               chat = 0;
               page = "chat";
               render();
@@ -2339,7 +2342,7 @@ public final class MainActivity extends Activity
                         "Удалить",
                         (d, w) -> {
                           store.deleteChat(id);
-                          prefs.edit().remove("chatDraft." + id).apply();
+                          prefs.edit().remove("chatDraft." + id).remove("chatImage." + id).apply();
                           if (chat == id) {
                             chatInput = null;
                             chat = 0;
@@ -2531,7 +2534,9 @@ public final class MainActivity extends Activity
               "Убрать изображение",
               false,
               () -> {
-                if (ChatRunner.running == chat) {
+                // У нового чата chat == 0, как и у ChatRunner.running в покое: без проверки на ноль
+                // кнопка никогда не срабатывала.
+                if (ChatRunner.running != 0 && ChatRunner.running == chat) {
                   toast("Дождитесь завершения анализа");
                   return;
                 }
