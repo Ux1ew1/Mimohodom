@@ -190,6 +190,8 @@ public final class MainActivity extends Activity
     ImageRunner.listen(this);
     BackgroundAnalysis.configure(this);
     render();
+    // Файлы изображений, на которые больше никто не ссылается (удалённые заметки, замены).
+    io.execute(() -> ImageFiles.cleanup(getApplicationContext(), 10 * 60_000L));
     if (Build.VERSION.SDK_INT >= 33)
       getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::goBack);
   }
@@ -1359,8 +1361,10 @@ public final class MainActivity extends Activity
               false,
               () -> {
                 stash();
+                String removed = noteImage;
                 noteImage = "";
                 prefs.edit().putString(draftPrefix() + "image", "").apply();
+                releaseImage(removed, "");
                 render();
               }));
       sheet.addView(imageBox);
@@ -1483,6 +1487,12 @@ public final class MainActivity extends Activity
     }
   }
 
+  /** Удаляет файл прежней картинки, если ни заметка, ни черновик на неё больше не ссылаются. */
+  private void releaseImage(String previous, String current) {
+    if (previous == null || previous.isEmpty() || previous.equals(current)) return;
+    io.execute(() -> ImageFiles.release(getApplicationContext(), previous));
+  }
+
   private void deleteNote(long id) {
     new AlertDialog.Builder(this)
         .setTitle("Удалить заметку?")
@@ -1491,9 +1501,11 @@ public final class MainActivity extends Activity
         .setPositiveButton(
             "Удалить",
             (d, w) -> {
+              Note gone = store.note(id);
               Reminders.cancel(this, id);
               store.delete(id);
               clearDraft(id);
+              if (gone != null) releaseImage(gone.image, "");
               editorActive = false;
               page = returnPage;
               render();
@@ -1522,6 +1534,7 @@ public final class MainActivity extends Activity
       store.save(editing, title, body, reminder, repeatMode, leadChoice);
       store.image(editing, noteImage);
       clearDraft(editing);
+      releaseImage(old.image, noteImage);
       Reminders.schedule(this, store.note(editing));
       BackgroundAnalysis.enqueue(this);
       return true;
@@ -1693,6 +1706,7 @@ public final class MainActivity extends Activity
     try {
       long id = store.save(editing, title, body, reminder, repeatMode, leadChoice);
       store.image(id, noteImage);
+      if (old != null) releaseImage(old.image, noteImage);
       BackgroundAnalysis.enqueue(this);
       Reminders.schedule(this, store.note(id));
       boolean denied =
@@ -1900,7 +1914,26 @@ public final class MainActivity extends Activity
             n.reminder > 0 ? "Напомнить\n" + date(n.reminder) : shortDate(n.created),
             11,
             n.reminder > 0 ? GREEN : MUTED);
-    card.addView(stamp);
+    if (n.image.isEmpty()) card.addView(stamp);
+    else {
+      LinearLayout bottom = row();
+      bottom.addView(stamp, new LinearLayout.LayoutParams(0, -2, 1));
+      ImageView thumb = new ImageView(this);
+      thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+      thumb.setBackground(shape(LIME, 8));
+      thumb.setClipToOutline(true);
+      thumb.setOutlineProvider(
+          new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+              outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(8));
+            }
+          });
+      thumb.setContentDescription("Изображение в заметке");
+      ImageThumbs.load(this, thumb, n.image, 160);
+      bottom.addView(thumb, new LinearLayout.LayoutParams(dp(40), dp(40)));
+      card.addView(bottom);
+    }
     int columns = getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2;
     int tileSize =
         (getResources().getConfiguration().screenWidthDp - 44 - (columns - 1) * 10) / columns;
@@ -2542,6 +2575,7 @@ public final class MainActivity extends Activity
                 }
                 stash();
                 prefs.edit().remove("chatImage." + chat).apply();
+                releaseImage(attached, "");
                 render();
               }));
       secondary(
@@ -2772,21 +2806,50 @@ public final class MainActivity extends Activity
     render();
   }
 
+  /** Предпросмотр грузится в фоне; нажатие открывает изображение на весь экран. */
   private View imagePreview(String name, int height) {
     ImageView preview = new ImageView(this);
     preview.setAdjustViewBounds(true);
     preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-    preview.setContentDescription("Прикреплённое изображение");
-    try {
-      BitmapFactory.Options options = new BitmapFactory.Options();
-      options.inSampleSize = 2;
-      preview.setImageBitmap(
-          BitmapFactory.decodeFile(ImageFiles.file(this, name).getPath(), options));
-    } catch (Exception e) {
-      preview.setContentDescription("Изображение недоступно");
-    }
+    preview.setContentDescription("Прикреплённое изображение. Нажмите, чтобы открыть на весь экран");
+    preview.setBackground(shape(LIME, 10));
     preview.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(height)));
+    preview.setOnClickListener(
+        v -> {
+          buzz(0);
+          showImageViewer(name);
+        });
+    ImageThumbs.load(this, preview, name, 900);
     return preview;
+  }
+
+  /** Полноэкранный просмотр: щипок и двойное касание увеличивают, «Назад» закрывает. */
+  private void showImageViewer(String name) {
+    Dialog viewer = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+    FrameLayout frame = new FrameLayout(this);
+    frame.setBackgroundColor(Color.BLACK);
+    ZoomImageView zoom = new ZoomImageView(this);
+    zoom.setContentDescription("Изображение. Щипком можно увеличить, двойное касание — приблизить");
+    frame.addView(zoom, new FrameLayout.LayoutParams(-1, -1));
+    TextView close = text("✕", 22, WHITE);
+    close.setGravity(Gravity.CENTER);
+    close.setBackground(shape(0x66000000, 24));
+    close.setContentDescription("Закрыть");
+    close.setOnClickListener(v -> viewer.dismiss());
+    FrameLayout.LayoutParams closeParams =
+        new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.END);
+    closeParams.topMargin = dp(36);
+    closeParams.rightMargin = dp(16);
+    frame.addView(close, closeParams);
+    viewer.setContentView(frame);
+    ImageThumbs.request(
+        this,
+        name,
+        2000,
+        bitmap -> {
+          if (viewer.isShowing()) zoom.setImageBitmap(bitmap);
+        });
+    viewer.show();
   }
 
   private void pickImage(boolean forChat) {
@@ -3647,6 +3710,39 @@ public final class MainActivity extends Activity
                         .setType("application/json")
                         .putExtra(Intent.EXTRA_TITLE, "mimohodom-notes.json"),
                     77)));
+    gap(content, 12);
+    TextView imagesUsage = secondary(content, "");
+    Runnable showUsage =
+        () -> {
+          long[] usage = ImageFiles.usage(this);
+          imagesUsage.setText(
+              usage[0] == 0
+                  ? "Изображения: нет сохранённых файлов"
+                  : "Изображения: "
+                      + ImageCleanup.files((int) usage[0])
+                      + " · "
+                      + ImageCleanup.size(usage[1]));
+        };
+    showUsage.run();
+    gap(content, 8);
+    content.addView(
+        button(
+            "Очистить неиспользуемые изображения",
+            false,
+            () ->
+                io.execute(
+                    () -> {
+                      int removed = ImageFiles.cleanup(getApplicationContext(), 0);
+                      runOnUiThread(
+                          () -> {
+                            if (isDestroyed()) return;
+                            showUsage.run();
+                            toast(
+                                removed == 0
+                                    ? "Лишних файлов нет"
+                                    : "Удалено: " + ImageCleanup.files(removed));
+                          });
+                    })));
     section("О приложении", true);
     secondary(
         content,
@@ -3786,15 +3882,25 @@ public final class MainActivity extends Activity
           () -> {
             try {
               String imported = ImageFiles.importImage(getApplicationContext(), uri);
-              if (targetPage.equals("chat"))
+              String previous, previousSaved = "";
+              if (targetPage.equals("chat")) {
+                previous = prefs.getString("chatImage." + target, "");
                 prefs.edit().putString("chatImage." + target, imported).apply();
-              else {
+              } else {
+                previous = prefs.getString("draft." + target + ".image", "");
                 if (target > 0)
                   try (Store images = new Store(getApplicationContext())) {
-                    if (images.note(target) != null) images.image(target, imported);
+                    Note existing = images.note(target);
+                    if (existing != null) {
+                      previousSaved = existing.image;
+                      images.image(target, imported);
+                    }
                   }
                 prefs.edit().putString("draft." + target + ".image", imported).apply();
               }
+              // Прежняя картинка больше не нужна, если на неё ничего не ссылается.
+              ImageFiles.release(getApplicationContext(), previous);
+              ImageFiles.release(getApplicationContext(), previousSaved);
               runOnUiThread(
                   () -> {
                     if (isDestroyed()) return;

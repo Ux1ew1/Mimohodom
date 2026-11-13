@@ -6,6 +6,10 @@ import android.net.Uri;
 import android.util.Base64;
 import androidx.exifinterface.media.ExifInterface;
 import java.io.*;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public final class ImageFiles {
@@ -98,6 +102,63 @@ public final class ImageFiles {
       if (bitmap != null) bitmap.recycle();
       raw.delete();
     }
+  }
+
+  /** Файлы, нужные заметкам, черновикам редактора и чата. */
+  public static synchronized Set<String> referenced(Context c) {
+    Set<String> out = new HashSet<>();
+    try (Store store = new Store(c)) {
+      out.addAll(store.imageNames());
+    }
+    for (Map.Entry<String, ?> e : c.getSharedPreferences("settings", 0).getAll().entrySet()) {
+      String key = e.getKey();
+      boolean draft = key.startsWith("draft.") && key.endsWith(".image");
+      if ((draft || key.startsWith("chatImage.")) && e.getValue() instanceof String value)
+        if (!value.isEmpty()) out.add(value);
+    }
+    return out;
+  }
+
+  private static boolean busy() {
+    return ImageRunner.running || ChatRunner.running != 0;
+  }
+
+  /** Удаляет файлы, на которые никто не ссылается и которым больше {@code graceMs}. */
+  public static synchronized int cleanup(Context c, long graceMs) {
+    if (busy()) return 0;
+    File dir = new File(c.getFilesDir(), "images");
+    File[] listed = dir.listFiles();
+    if (listed == null) return 0;
+    Map<String, Long> modified = new HashMap<>();
+    for (File f : listed) modified.put(f.getName(), f.lastModified());
+    int removed = 0;
+    for (String name :
+        ImageCleanup.orphans(modified, referenced(c), System.currentTimeMillis(), graceMs))
+      if (new File(dir, name).delete()) removed++;
+    if (removed > 0) ImageThumbs.clear();
+    return removed;
+  }
+
+  /** Удаляет файл, если он больше нигде не нужен: после удаления заметки или замены картинки. */
+  public static synchronized void release(Context c, String name) {
+    if (!ImageCleanup.managed(name) || busy()) return;
+    try {
+      if (!referenced(c).contains(name) && file(c, name).delete()) ImageThumbs.clear();
+    } catch (IOException ignored) {
+    }
+  }
+
+  /** Число файлов и их размер в байтах. */
+  public static long[] usage(Context c) {
+    File[] listed = new File(c.getFilesDir(), "images").listFiles();
+    long count = 0, bytes = 0;
+    if (listed != null)
+      for (File f : listed)
+        if (ImageCleanup.managed(f.getName())) {
+          count++;
+          bytes += f.length();
+        }
+    return new long[] {count, bytes};
   }
 
   public static String base64(Context c, String name) throws IOException {

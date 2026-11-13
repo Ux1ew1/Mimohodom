@@ -315,6 +315,15 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     new ManagerStore(this).cleanup();
   }
 
+  /** Имена всех файлов изображений, на которые ссылаются заметки. */
+  public Set<String> imageNames() {
+    Set<String> out = new HashSet<>();
+    try (Cursor c = getReadableDatabase().rawQuery("SELECT DISTINCT image FROM notes WHERE image<>''", null)) {
+      while (c.moveToNext()) out.add(c.getString(0));
+    }
+    return out;
+  }
+
   public void image(long id, String image) {
     ContentValues v = new ContentValues();
     v.put("image", image);
