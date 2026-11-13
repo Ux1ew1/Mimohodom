@@ -49,6 +49,9 @@ public final class MainActivity extends Activity
   private long editing = 0, reminder = 0, chat = 0;
   /** Повтор и свой интервал напоминания в открытом редакторе (-1 — общая настройка). */
   private int repeatMode = 0, leadChoice = -1;
+  /** Какая из картинок открытой заметки выбрана в ленте; {@code selectedImageFor} — её заметка. */
+  private int selectedImage = 0;
+  private long selectedImageFor = -1;
   private boolean editorActive = false, rendering = false;
   private String returnPage = "notes";
   private TextView reminderButton, analysisStatusView;
@@ -1324,6 +1327,10 @@ public final class MainActivity extends Activity
     if (id > 0) heading("Ваша заметка", "");
     String p = draftPrefix();
     noteImage = prefs.getString(p + "image", note == null ? "" : note.image);
+    if (selectedImageFor != id) {
+      selectedImage = 0;
+      selectedImageFor = id;
+    }
     // Название, текст и значки действий лежат на одном листе с тенью.
     LinearLayout sheet = column();
     GradientDrawable sheetBackground = shape(WHITE, 14);
@@ -1353,10 +1360,25 @@ public final class MainActivity extends Activity
     bodyField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(100000)});
     sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, -2));
     if (!noteImage.isEmpty()) {
+      List<String> images = ImageList.parse(noteImage);
+      selectedImage = Math.max(0, Math.min(selectedImage, images.size() - 1));
       LinearLayout imageBox = column();
       imageBox.setPadding(dp(12), 0, dp(12), dp(12));
-      imageBox.addView(imagePreview(noteImage, 220));
+      imageBox.addView(imagePreview(images.get(selectedImage), 220, images));
+      if (images.size() > 1) {
+        gap(imageBox, 8);
+        imageBox.addView(imageStrip(images));
+        secondary(
+            imageBox,
+            "Изображение "
+                + (selectedImage + 1)
+                + " из "
+                + images.size()
+                + ". Первое показывается в списке заметок.");
+      }
       gap(imageBox, 8);
+      imageBox.addView(button("Описать и добавить в заметку", false, this::describeNoteImage));
+      gap(imageBox, 6);
       imageBox.addView(
           button(
               ImageRunner.running ? "Изображение анализируется…" : "Создать заметку по изображению",
@@ -1364,44 +1386,16 @@ public final class MainActivity extends Activity
               this::analyzeNoteImage));
       gap(imageBox, 6);
       imageBox.addView(
-          button(
-              "Повернуть и обрезать",
-              false,
-              () -> {
-                if (ImageRunner.running) {
-                  toast("Дождитесь завершения анализа");
-                  return;
-                }
-                stash();
-                String current = noteImage;
-                long noteId = editing;
-                showImageEditor(
-                    current,
-                    edited -> {
-                      // Пока шло сохранение, заметку могли закрыть или картинку заменить.
-                      if (!editorActive || editing != noteId || !noteImage.equals(current)) {
-                        releaseImage(edited, "");
-                        return;
-                      }
-                      noteImage = edited;
-                      stash();
-                      releaseImage(current, edited);
-                      render();
-                    });
-              }));
-      gap(imageBox, 6);
-      imageBox.addView(
-          button(
-              "Убрать изображение",
-              false,
-              () -> {
-                stash();
-                String removed = noteImage;
-                noteImage = "";
-                prefs.edit().putString(draftPrefix() + "image", "").apply();
-                releaseImage(removed, "");
-                render();
-              }));
+          pair(
+              button("Повернуть и обрезать", false, this::editSelectedImage),
+              button("Убрать", false, this::removeSelectedImage)));
+      if (images.size() > 1) {
+        gap(imageBox, 6);
+        imageBox.addView(
+            pair(
+                button("‹ Раньше", false, () -> moveSelectedImage(-1)),
+                button("Позже ›", false, () -> moveSelectedImage(1))));
+      }
       sheet.addView(imageBox);
     }
     View footerRule = new View(this);
@@ -1417,7 +1411,7 @@ public final class MainActivity extends Activity
     imageTool.setImageDrawable(new Glyph("image", GREEN, 20));
     imageTool.setBackground(ripple(LIME, 10));
     imageTool.setContentDescription(
-        noteImage.isEmpty() ? "Прикрепить изображение" : "Заменить изображение");
+        noteImage.isEmpty() ? "Прикрепить изображение" : "Добавить ещё изображение");
     imageTool.setFocusable(true);
     imageTool.setOnClickListener(
         v -> {
@@ -1524,8 +1518,8 @@ public final class MainActivity extends Activity
 
   /** Удаляет файл прежней картинки, если ни заметка, ни черновик на неё больше не ссылаются. */
   private void releaseImage(String previous, String current) {
-    if (previous == null || previous.isEmpty() || previous.equals(current)) return;
-    io.execute(() -> ImageFiles.release(getApplicationContext(), previous));
+    for (String name : ImageList.removed(previous, current))
+      io.execute(() -> ImageFiles.release(getApplicationContext(), name));
   }
 
   private void deleteNote(long id) {
@@ -1951,22 +1945,27 @@ public final class MainActivity extends Activity
             n.reminder > 0 ? GREEN : MUTED);
     if (n.image.isEmpty()) card.addView(stamp);
     else {
+      int imageCount = ImageList.count(n.image);
       LinearLayout bottom = row();
       bottom.addView(stamp, new LinearLayout.LayoutParams(0, -2, 1));
+      FrameLayout cell = new FrameLayout(this);
       ImageView thumb = new ImageView(this);
       thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
       thumb.setBackground(shape(LIME, 8));
       thumb.setClipToOutline(true);
-      thumb.setOutlineProvider(
-          new ViewOutlineProvider() {
-            @Override
-            public void getOutline(View view, Outline outline) {
-              outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(8));
-            }
-          });
-      thumb.setContentDescription("Изображение в заметке");
-      ImageThumbs.load(this, thumb, n.image, 160);
-      bottom.addView(thumb, new LinearLayout.LayoutParams(dp(40), dp(40)));
+      thumb.setOutlineProvider(rounded(8));
+      thumb.setContentDescription(
+          imageCount > 1 ? "Изображений в заметке: " + imageCount : "Изображение в заметке");
+      ImageThumbs.load(this, thumb, ImageList.cover(n.image), 160);
+      cell.addView(thumb, new FrameLayout.LayoutParams(-1, -1));
+      if (imageCount > 1) {
+        TextView badge = text("+" + (imageCount - 1), 10, WHITE);
+        badge.setTypeface(null, Typeface.BOLD);
+        badge.setBackground(shape(0xAA000000, 6));
+        badge.setPadding(dp(4), dp(1), dp(4), dp(1));
+        cell.addView(badge, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END));
+      }
+      bottom.addView(cell, new LinearLayout.LayoutParams(dp(40), dp(40)));
       card.addView(bottom);
     }
     int columns = getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2;
@@ -2868,8 +2867,12 @@ public final class MainActivity extends Activity
     render();
   }
 
-  /** Предпросмотр грузится в фоне; нажатие открывает изображение на весь экран. */
   private View imagePreview(String name, int height) {
+    return imagePreview(name, height, List.of(name));
+  }
+
+  /** Предпросмотр грузится в фоне; нажатие открывает просмотр на весь экран со всеми картинками. */
+  private View imagePreview(String name, int height, List<String> all) {
     ImageView preview = new ImageView(this);
     preview.setAdjustViewBounds(true);
     preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -2879,14 +2882,114 @@ public final class MainActivity extends Activity
     preview.setOnClickListener(
         v -> {
           buzz(0);
-          showImageViewer(name);
+          showImageViewer(all, Math.max(0, all.indexOf(name)));
         });
     ImageThumbs.load(this, preview, name, 900);
     return preview;
   }
 
-  /** Полноэкранный просмотр: щипок и двойное касание увеличивают, «Назад» закрывает. */
-  private void showImageViewer(String name) {
+  private ViewOutlineProvider rounded(int radius) {
+    return new ViewOutlineProvider() {
+      @Override
+      public void getOutline(View view, Outline outline) {
+        outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(radius));
+      }
+    };
+  }
+
+  private LinearLayout pair(View first, View second) {
+    LinearLayout row = row();
+    LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, -2, 1);
+    left.rightMargin = dp(8);
+    row.addView(first, left);
+    row.addView(second, new LinearLayout.LayoutParams(0, -2, 1));
+    return row;
+  }
+
+  /** Лента миниатюр заметки: нажатие выбирает картинку, к которой относятся кнопки ниже. */
+  private View imageStrip(List<String> images) {
+    HorizontalScrollView scroll = new HorizontalScrollView(this);
+    scroll.setHorizontalScrollBarEnabled(false);
+    LinearLayout strip = row();
+    for (int i = 0; i < images.size(); i++) {
+      int index = i;
+      FrameLayout cell = new FrameLayout(this);
+      cell.setPadding(dp(2), dp(2), dp(2), dp(2));
+      cell.setBackground(shape(i == selectedImage ? GREEN : 0x00000000, 10));
+      ImageView thumb = new ImageView(this);
+      thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+      thumb.setBackground(shape(LIME, 8));
+      thumb.setClipToOutline(true);
+      thumb.setOutlineProvider(rounded(8));
+      ImageThumbs.load(this, thumb, images.get(i), 160);
+      cell.addView(thumb, new FrameLayout.LayoutParams(dp(60), dp(60)));
+      cell.setContentDescription(
+          "Изображение " + (i + 1) + " из " + images.size() + (i == selectedImage ? ", выбрано" : ""));
+      cell.setOnClickListener(
+          v -> {
+            buzz(0);
+            stash();
+            selectedImage = index;
+            render();
+          });
+      LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
+      params.rightMargin = dp(6);
+      strip.addView(cell, params);
+    }
+    scroll.addView(strip);
+    return scroll;
+  }
+
+  private String selectedImageName() {
+    List<String> images = ImageList.parse(noteImage);
+    return images.isEmpty() ? "" : images.get(Math.max(0, Math.min(selectedImage, images.size() - 1)));
+  }
+
+  private void removeSelectedImage() {
+    String before = noteImage;
+    noteImage = ImageList.remove(noteImage, selectedImageName());
+    selectedImage = Math.min(selectedImage, Math.max(0, ImageList.count(noteImage) - 1));
+    stash();
+    releaseImage(before, noteImage);
+    render();
+  }
+
+  private void moveSelectedImage(int delta) {
+    String name = selectedImageName();
+    String moved = ImageList.move(noteImage, name, delta);
+    if (moved.equals(noteImage)) return;
+    noteImage = moved;
+    selectedImage = ImageList.parse(moved).indexOf(name);
+    stash();
+    render();
+  }
+
+  private void editSelectedImage() {
+    if (ImageRunner.running) {
+      toast("Дождитесь завершения анализа");
+      return;
+    }
+    stash();
+    String current = selectedImageName();
+    long noteId = editing;
+    showImageEditor(
+        current,
+        edited -> {
+          // Пока шло сохранение, заметку могли закрыть или картинку убрать.
+          if (!editorActive || editing != noteId || !ImageList.parse(noteImage).contains(current)) {
+            releaseImage(edited, "");
+            return;
+          }
+          String before = noteImage;
+          noteImage = ImageList.replace(noteImage, current, edited);
+          stash();
+          releaseImage(before, noteImage);
+          render();
+        });
+  }
+
+  /** Полноэкранный просмотр: листание кнопками, щипок и двойное касание увеличивают. */
+  private void showImageViewer(List<String> names, int start) {
     Dialog viewer = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
     FrameLayout frame = new FrameLayout(this);
     frame.setBackgroundColor(Color.BLACK);
@@ -2903,20 +3006,61 @@ public final class MainActivity extends Activity
     closeParams.topMargin = dp(36);
     closeParams.rightMargin = dp(16);
     frame.addView(close, closeParams);
+    int[] at = {Math.max(0, Math.min(start, names.size() - 1))};
+    TextView counter = text("", 15, WHITE);
+    counter.setGravity(Gravity.CENTER);
+    counter.setBackground(shape(0x66000000, 16));
+    counter.setPadding(dp(12), dp(6), dp(12), dp(6));
+    FrameLayout.LayoutParams counterParams =
+        new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+    counterParams.topMargin = dp(44);
+    counterParams.leftMargin = dp(16);
+    counter.setVisibility(names.size() > 1 ? View.VISIBLE : View.GONE);
+    frame.addView(counter, counterParams);
+    Runnable show =
+        () -> {
+          String name = names.get(at[0]);
+          counter.setText((at[0] + 1) + " / " + names.size());
+          ImageThumbs.request(
+              this,
+              name,
+              2000,
+              bitmap -> {
+                if (viewer.isShowing() && names.get(at[0]).equals(name)) zoom.setImageBitmap(bitmap);
+              });
+        };
+    if (names.size() > 1) {
+      for (int direction : new int[] {-1, 1}) {
+        TextView arrow = text(direction < 0 ? "‹" : "›", 30, WHITE);
+        arrow.setGravity(Gravity.CENTER);
+        arrow.setBackground(shape(0x66000000, 24));
+        arrow.setContentDescription(direction < 0 ? "Предыдущее изображение" : "Следующее изображение");
+        arrow.setOnClickListener(
+            v -> {
+              buzz(0);
+              at[0] = (at[0] + direction + names.size()) % names.size();
+              show.run();
+            });
+        frame.addView(
+            arrow,
+            new FrameLayout.LayoutParams(
+                dp(48),
+                dp(48),
+                Gravity.CENTER_VERTICAL | (direction < 0 ? Gravity.START : Gravity.END)));
+      }
+    }
     viewer.setContentView(frame);
-    ImageThumbs.request(
-        this,
-        name,
-        2000,
-        bitmap -> {
-          if (viewer.isShowing()) zoom.setImageBitmap(bitmap);
-        });
+    show.run();
     viewer.show();
   }
 
   private void pickImage(boolean forChat) {
     if ((forChat && ChatRunner.running != 0) || ImageRunner.running) {
       toast("Дождитесь завершения анализа");
+      return;
+    }
+    if (!forChat && ImageList.full(noteImage)) {
+      toast("В заметке не больше " + ImageList.MAX + " изображений. Уберите лишнее.");
       return;
     }
     stash();
@@ -3153,6 +3297,7 @@ public final class MainActivity extends Activity
     }
     if (!persistEditedNote()) return;
     stash();
+    String image = selectedImageName();
     try {
       String key = Secrets.read(this), model = prefs.getString("model", "");
       if (key.isEmpty() || model.isEmpty()) {
@@ -3169,7 +3314,7 @@ public final class MainActivity extends Activity
           .setPositiveButton(
               "Проанализировать",
               (d, w) -> {
-                if (ImageRunner.start(this, editing, key, model, noteImage))
+                if (ImageRunner.start(this, editing, key, model, image))
                   toast("Изображение отправлено на анализ");
               })
           .show();
@@ -3178,9 +3323,83 @@ public final class MainActivity extends Activity
     }
   }
 
+  /** Описывает выбранную картинку и дописывает текст в конец этой заметки, ничего не сохраняя. */
+  private void describeNoteImage() {
+    if (LocalLlm.enabled(this)) {
+      toast("Картинки пока доступны только через Polza.AI. Переключите режим в настройках.");
+      return;
+    }
+    if (ImageRunner.running) {
+      toast("Изображение уже анализируется");
+      return;
+    }
+    stash();
+    String image = selectedImageName();
+    long noteId = editing;
+    try {
+      String key = Secrets.read(this), model = prefs.getString("model", "");
+      if (key.isEmpty() || model.isEmpty()) {
+        toast("Сначала сохраните API-ключ и модель с поддержкой изображений в настройках");
+        return;
+      }
+      new AlertDialog.Builder(this)
+          .setTitle("Описать изображение?")
+          .setMessage(
+              "Картинка будет отправлена в Polza.AI и выбранную модель. С вашего баланса спишется"
+                  + " стоимость анализа. Описание добавится в конец этой заметки; проверьте его"
+                  + " и сохраните заметку.")
+          .setNegativeButton("Отмена", null)
+          .setPositiveButton(
+              "Описать",
+              (d, w) -> {
+                if (ImageRunner.describe(this, noteId, key, model, image))
+                  toast("Изображение отправлено на описание");
+              })
+          .show();
+    } catch (Exception e) {
+      toast("Не удалось прочитать API-ключ");
+    }
+  }
+
+  /**
+   * Дописывает описание в конец заметки. Модель получила только картинку, а не текст заметки,
+   * поэтому описание не зависит от версии текста. Если заметку уже закрыли, текст ждёт в черновике.
+   */
+  private void applyDescription(long origin, String title, String description) {
+    if (editorActive && editing == origin && titleField != null && bodyField != null) {
+      String body = bodyField.getText().toString().trim();
+      boolean blank = body.isEmpty() && titleField.getText().toString().trim().isEmpty();
+      bodyField.setText(body.isEmpty() ? description : body + "\n\n" + description);
+      if (blank) titleField.setText(title);
+      stash();
+      toast("Описание добавлено в заметку. Проверьте и сохраните её.");
+      return;
+    }
+    String draft = "draft." + origin + ".";
+    Note saved = origin > 0 ? store.note(origin) : null;
+    String body = prefs.getString(draft + "body", saved == null ? "" : saved.body).trim();
+    String heading = prefs.getString(draft + "title", saved == null ? "" : saved.title).trim();
+    prefs
+        .edit()
+        .putString(draft + "body", body.isEmpty() ? description : body + "\n\n" + description)
+        .putString(draft + "title", body.isEmpty() && heading.isEmpty() ? title : heading)
+        .apply();
+    toast("Описание готово. Откройте заметку, чтобы проверить и сохранить.");
+  }
+
   @Override
   public void imageFinished() {
     if (isDestroyed() || isFinishing()) return;
+    String described = ImageRunner.describeText;
+    if (!described.isEmpty()) {
+      String heading = ImageRunner.describeTitle;
+      long origin = ImageRunner.source;
+      ImageRunner.describeText = "";
+      ImageRunner.describeTitle = "";
+      ImageRunner.describeImage = "";
+      applyDescription(origin, heading, described);
+      return;
+    }
     long result = ImageRunner.note;
     String error = ImageRunner.error;
     if (result > 0) {
@@ -4172,25 +4391,35 @@ public final class MainActivity extends Activity
           () -> {
             try {
               String imported = ImageFiles.importImage(getApplicationContext(), uri);
-              String previous, previousSaved = "";
+              String combined = imported;
               if (targetPage.equals("chat")) {
-                previous = prefs.getString("chatImage." + target, "");
+                // В чате картинка одна: новая заменяет прежнюю.
+                String previous = prefs.getString("chatImage." + target, "");
                 prefs.edit().putString("chatImage." + target, imported).apply();
+                ImageFiles.release(getApplicationContext(), previous);
               } else {
-                previous = prefs.getString("draft." + target + ".image", "");
-                if (target > 0)
+                // В заметке картинки добавляются в конец списка. Источник правды — черновик, его
+                // редактор ведёт при каждом изменении; без него берём сохранённую заметку.
+                String base = prefs.getString("draft." + target + ".image", null);
+                if (base == null && target > 0)
                   try (Store images = new Store(getApplicationContext())) {
                     Note existing = images.note(target);
-                    if (existing != null) {
-                      previousSaved = existing.image;
-                      images.image(target, imported);
-                    }
+                    base = existing == null ? "" : existing.image;
                   }
-                prefs.edit().putString("draft." + target + ".image", imported).apply();
+                if (base == null) base = "";
+                combined = ImageList.add(base, imported);
+                if (ImageList.count(combined) == ImageList.count(base)) {
+                  ImageFiles.release(getApplicationContext(), imported);
+                  runOnUiThread(
+                      () -> {
+                        if (!isDestroyed())
+                          toast("В заметке не больше " + ImageList.MAX + " изображений.");
+                      });
+                  return;
+                }
+                prefs.edit().putString("draft." + target + ".image", combined).apply();
               }
-              // Прежняя картинка больше не нужна, если на неё ничего не ссылается.
-              ImageFiles.release(getApplicationContext(), previous);
-              ImageFiles.release(getApplicationContext(), previousSaved);
+              String result = combined;
               runOnUiThread(
                   () -> {
                     if (isDestroyed()) return;
@@ -4198,7 +4427,8 @@ public final class MainActivity extends Activity
                       stash();
                       render();
                     } else if (targetPage.equals("note") && editorActive && editing == target) {
-                      noteImage = imported;
+                      noteImage = result;
+                      selectedImage = ImageList.count(result) - 1;
                       stash();
                       render();
                     }

@@ -163,7 +163,7 @@ public final class ImageFiles {
       String key = e.getKey();
       boolean draft = key.startsWith("draft.") && key.endsWith(".image");
       if ((draft || key.startsWith("chatImage.")) && e.getValue() instanceof String value)
-        if (!value.isEmpty()) out.add(value);
+        out.addAll(ImageList.parse(value));
     }
     return out;
   }
