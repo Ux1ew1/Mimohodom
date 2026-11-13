@@ -6,6 +6,7 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.graphics.drawable.*;
+import android.net.Uri;
 import android.os.*;
 import android.text.*;
 import android.text.method.*;
@@ -187,14 +188,6 @@ public final class MainActivity extends Activity
     ImageRunner.listen(this);
     BackgroundAnalysis.configure(this);
     render();
-    io.execute(
-        () -> {
-          try (Store reminders = new Store(getApplicationContext())) {
-            for (Note n : reminders.notes())
-              if (n.reminder > System.currentTimeMillis())
-                Reminders.schedule(getApplicationContext(), n);
-          }
-        });
     if (Build.VERSION.SDK_INT >= 33)
       getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::goBack);
   }
@@ -260,6 +253,8 @@ public final class MainActivity extends Activity
     ChatRunner.listen(this);
     ImageRunner.listen(this);
     imageFinished();
+    restoreReminders();
+    if (reliabilityBox != null && "settings".equals(page)) fillReliability(reliabilityBox);
     if ("chat".equals(page) || "notes".equals(page)) {
       stash();
       render();
@@ -2771,6 +2766,88 @@ public final class MainActivity extends Activity
     }
   }
 
+  private LinearLayout reliabilityBox;
+
+  /** Ставит будильники будущих напоминаний и показывает пропущенные за время простоя. */
+  private void restoreReminders() {
+    io.execute(
+        () -> {
+          try (Store reminders = new Store(getApplicationContext())) {
+            List<Note> notes = reminders.notes();
+            for (Note n : notes)
+              if (n.reminder > System.currentTimeMillis())
+                Reminders.schedule(getApplicationContext(), n);
+            Reminders.restoreSnoozed(getApplicationContext());
+            Reminders.deliverMissed(getApplicationContext(), notes);
+          }
+        });
+  }
+
+  private void statusRow(LinearLayout box, boolean ok, String message, String action, Runnable fix) {
+    TextView row = text((ok ? "✓  " : "!  ") + message, 14, ok ? GREEN : RED);
+    row.setLineSpacing(dp(3), 1);
+    box.addView(row);
+    if (!ok && fix != null) {
+      gap(box, 6);
+      box.addView(button(action, false, fix));
+    }
+    gap(box, 12);
+  }
+
+  /** Блок «всё ли настроено для напоминаний»; пересобирается при возврате из системных настроек. */
+  private void fillReliability(LinearLayout box) {
+    box.removeAllViews();
+    boolean notifications = Reminders.notificationsAllowed(this);
+    statusRow(
+        box,
+        notifications,
+        notifications
+            ? "Уведомления разрешены"
+            : "Уведомления выключены — напоминания не придут",
+        "Включить уведомления",
+        () -> {
+          boolean asked = prefs.getBoolean("notificationsAsked", false);
+          if (Build.VERSION.SDK_INT >= 33
+              && !asked
+              && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                  != PackageManager.PERMISSION_GRANTED) {
+            prefs.edit().putBoolean("notificationsAsked", true).apply();
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
+            return;
+          }
+          startActivity(
+              new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                  .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()));
+        });
+    if (Build.VERSION.SDK_INT >= 31) {
+      boolean exact = Reminders.exactAllowed(this);
+      statusRow(
+          box,
+          exact,
+          exact
+              ? "Точное время напоминаний включено"
+              : "Точные будильники выключены — напоминания могут опаздывать на несколько минут",
+          "Разрешить точные будильники",
+          () ->
+              startActivity(
+                  new Intent(
+                          android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                          Uri.parse("package:" + getPackageName()))));
+    }
+    boolean battery = Reminders.batteryUnrestricted(this);
+    statusRow(
+        box,
+        battery,
+        battery
+            ? "Экономия батареи не ограничивает приложение"
+            : "Экономия батареи может задерживать напоминания. Если они опаздывают, снимите"
+                + " ограничение",
+        "Настроить батарею",
+        () ->
+            startActivity(
+                new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)));
+  }
+
   private void settings() {
     content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 10);
@@ -3002,7 +3079,10 @@ public final class MainActivity extends Activity
     tokens.setMinimumHeight(dp(50));
     content.addView(tokens);
     gap(content, 12);
-    section("Напоминания", true);
+    section("Напоминания и уведомления", true);
+    reliabilityBox = column();
+    content.addView(reliabilityBox);
+    fillReliability(reliabilityBox);
     Switch large = new Switch(this);
     secondary(content, "Напоминать до события");
     Spinner lead = new Spinner(this);
@@ -3027,7 +3107,20 @@ public final class MainActivity extends Activity
     secondary(
         content,
         "Применяется ко всем будущим событиям. Если выбранное время уже прошло, напоминание придёт"
-            + " в ближайшее время. Уже доставленные напоминания не повторяются.");
+            + " в ближайшее время. Уже доставленные напоминания не повторяются. В уведомлении можно"
+            + " отложить напоминание: на 10 минут, на час или на завтра, 9:00. Если телефон был"
+            + " выключен в нужное время, напоминание придёт как пропущенное при включении или"
+            + " открытии приложения (за последние 7 дней).");
+    gap(content, 12);
+    content.addView(
+        button(
+            "Проверочное уведомление",
+            false,
+            () -> {
+              if (Reminders.test(this)) toast("Проверочное уведомление отправлено");
+              else toast("Уведомления выключены. Включите их выше.");
+            }));
+    gap(content, 8);
     section("Внешний вид", true);
     large.setText("Крупный текст заметок");
     large.setTextColor(INK);
@@ -3156,10 +3249,9 @@ public final class MainActivity extends Activity
                 toast("Не удалось безопасно сохранить ключ");
               }
             }));
-    section("Уведомления", true);
     content.addView(
         iconButton(
-            "Уведомления Android",
+            "Каналы и звук в Android",
             "clock",
             () -> {
               Intent intent =
@@ -3170,8 +3262,8 @@ public final class MainActivity extends Activity
     gap(content, 10);
     secondary(
         content,
-        "Напоминания могут приходить с задержкой из-за энергосбережения Android. После"
-            + " принудительной остановки откройте приложение снова.");
+        "После принудительной остановки приложения откройте его снова, чтобы вернуть"
+            + " напоминания.");
     section("Данные", true);
     content.addView(
         button(
