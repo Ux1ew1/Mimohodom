@@ -715,9 +715,9 @@ public final class MainActivity extends Activity
   }
 
   private void manualAnalysis() {
-    if (LocalLlm.enabled(this)) {
+    if (!LocalLlm.cloudBackground(this)) {
       toast(
-          "Общий обзор пока доступен только через Polza.AI. Выберите облачный режим в настройках.");
+          "Общий обзор идёт через Polza.AI. С GGUF выберите облачный режим или Gemini Nano.");
       return;
     }
     if (!persistEditedNote()) return;
@@ -2020,8 +2020,8 @@ public final class MainActivity extends Activity
       }
     } catch (Exception ignored) {
     }
-    if (LocalLlm.enabled(this)) {
-      toast("Для выжимки выберите Polza.AI в настройках.");
+    if (!LocalLlm.cloudBackground(this)) {
+      toast("Для выжимки выберите Polza.AI или Gemini Nano в настройках.");
       return;
     }
     try {
@@ -2872,7 +2872,9 @@ public final class MainActivity extends Activity
             + " экран. Модель отвечает, только пока приложение открыто. Ответ до 256 токенов,"
             + " запрос ограничен лимитом AICore. Достаточно включить этот переключатель и"
             + " сохранить настройки: ключ Polza.AI для чата не нужен. GGUF при этом не"
-            + " используется.");
+            + " используется. Фоновые проверки, менеджер и выжимки Gemini Nano не обслуживает:"
+            + " они идут через Polza.AI (для них нужны ключ и модель ниже), чат и поиск остаются"
+            + " на телефоне.");
     gap(content, 10);
     TextView aicoreStatus = secondary(content, "Состояние Gemini Nano не проверено");
     gap(content, 10);
@@ -2975,7 +2977,7 @@ public final class MainActivity extends Activity
           balance.setText(R.string.polza_balance);
           balanceStatus.setText("Обновите баланс для введённого ключа");
         });
-    if (!LocalLlm.enabled(this) && !key.getText().toString().trim().isEmpty())
+    if (LocalLlm.cloudBackground(this) && !key.getText().toString().trim().isEmpty())
       refresh.post(updateBalance);
     EditText model = input("ID модели, например openai/gpt-4o-mini", false);
     model.setText(prefs.getString("model", ""));
@@ -3110,7 +3112,7 @@ public final class MainActivity extends Activity
                   toast("Сначала импортируйте GGUF-модель или включите Gemini Nano");
                   return;
                 }
-                if (!local.isChecked()
+                if ((!local.isChecked() || aicore.isChecked())
                     && (background.isChecked() || manager.isChecked())
                     && (key.getText().toString().trim().isEmpty()
                         || model.getText().toString().trim().isEmpty())) {

@@ -36,6 +36,10 @@
 
 Локально проверены синтаксис PowerShell, разбор YAML и базовые параметры workflow; загрузка org.json и его SHA-256; упаковка, сверка версии и сертификата на ранее собранном APK. Новая локальная сборка не выполнялась. actionlint не удалось скачать из-за ошибки TLS соединения с GitHub; полноценная проверка workflow ожидает облачного запуска. Результат запуска будет записан отдельно.
 
+## Версия 0.6.1: фоновые функции через Polza.AI при Gemini Nano — 13 ноября 2026
+
+`LocalLlm.cloudBackground` разрешает `BackgroundAnalysis`, менеджер, ручной обзор и `SummaryRunner` при выбранном Gemini Nano (облачный Polza.AI), при GGUF они остаются выключенными. Сохранение настроек требует ключ и модель для фоновых переключателей и при Nano. `versionCode = 26`. `assembleDebug` и `lintDebug` прошли; на устройстве и с реальным Polza.AI не проверено.
+
 ## Версия 0.6.0 (Gemini Nano) — 13 ноября 2026
 
 Добавлен движок Gemini Nano через Google AICore (ML Kit GenAI Prompt API 1.0.0-beta5) как альтернатива GGUF в локальном режиме. Ветка `claude/google-aicore-samsung-integration-r1y7ou` слита в main (6 коммитов, конфликты в `MainActivity` и манифесте решены с сохранением нового интерфейса, вибрации и ярлыков). Версия 0.6.0, `versionCode = 25`, `applicationId = app.fastnotes`.

@@ -28,13 +28,13 @@ public final class BackgroundAnalysis extends JobService {
 
   public static void configure(Context context) {
     var scheduler = context.getSystemService(JobScheduler.class);
-    if (LocalLlm.enabled(context)
+    if (!LocalLlm.cloudBackground(context)
         || !(context.getSharedPreferences("settings", 0).getBoolean("backgroundAi", false)
             || context.getSharedPreferences("settings", 0).getBoolean("managerAi", false))) {
       synchronized (COMMIT_LOCK) {
         scheduler.cancel(PERIODIC);
         scheduler.cancel(ONCE);
-        if (LocalLlm.enabled(context)) scheduler.cancel(MANUAL);
+        if (!LocalLlm.cloudBackground(context)) scheduler.cancel(MANUAL);
       }
       return;
     }
@@ -50,7 +50,7 @@ public final class BackgroundAnalysis extends JobService {
 
   public static boolean enqueue(Context context) {
     configure(context);
-    if (LocalLlm.enabled(context)
+    if (!LocalLlm.cloudBackground(context)
         || !(context.getSharedPreferences("settings", 0).getBoolean("backgroundAi", false)
             || context.getSharedPreferences("settings", 0).getBoolean("managerAi", false)))
       return false;
@@ -66,7 +66,7 @@ public final class BackgroundAnalysis extends JobService {
   }
 
   public static boolean enqueueManual(Context context) {
-    if (LocalLlm.enabled(context)) return false;
+    if (!LocalLlm.cloudBackground(context)) return false;
     JobScheduler scheduler = context.getSystemService(JobScheduler.class);
     if (isRunning() || scheduler.getPendingJob(MANUAL) != null) return false;
     scheduler.cancel(ONCE);
@@ -117,7 +117,7 @@ public final class BackgroundAnalysis extends JobService {
 
   private boolean enabled(Run run) {
     return !run.stopped
-        && !LocalLlm.enabled(this)
+        && LocalLlm.cloudBackground(this)
         && (run.manual
             || getSharedPreferences("settings", 0).getBoolean("backgroundAi", false)
             || getSharedPreferences("settings", 0).getBoolean("managerAi", false));
@@ -125,8 +125,8 @@ public final class BackgroundAnalysis extends JobService {
 
   private void work(Run run) {
     var prefs = getSharedPreferences("settings", 0);
-    if (LocalLlm.enabled(this)) {
-      status("Локальный режим: фоновая проверка пока приостановлена. Используйте текстовый чат.");
+    if (!LocalLlm.cloudBackground(this)) {
+      status("Локальный режим GGUF: фоновая проверка приостановлена. Используйте текстовый чат.");
       return;
     }
     List<Note> claimed = new ArrayList<>();

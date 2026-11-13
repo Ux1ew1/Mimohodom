@@ -37,6 +37,15 @@ public final class LocalLlm {
     return c.getSharedPreferences("settings", 0).getBoolean("localLlm", false);
   }
 
+  /**
+   * Фоновые проверки, менеджер и выжимки идут через Polza.AI, когда локальный режим выключен
+   * или выбран Gemini Nano: AICore не отвечает фоновым запросам. GGUF по-прежнему запрещает
+   * облачные запросы.
+   */
+  public static boolean cloudBackground(Context c) {
+    return !enabled(c) || aicore(c);
+  }
+
   /** Выбран Google AICore (Gemini Nano) вместо импортированной GGUF-модели. */
   public static boolean aicore(Context c) {
     return "aicore".equals(c.getSharedPreferences("settings", 0).getString("localEngine", "gguf"));

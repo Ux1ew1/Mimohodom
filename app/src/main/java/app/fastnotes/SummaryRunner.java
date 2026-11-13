@@ -47,9 +47,9 @@ final class SummaryRunner {
                 List<String> fragments = SummaryAnalysis.fragments(sources);
                 int cursor = progress.optInt("cursor");
                 while (cursor < fragments.size()) {
-                  if (LocalLlm.enabled(app))
+                  if (!LocalLlm.cloudBackground(app))
                     throw new IllegalStateException(
-                        "Выбран локальный режим. Облачная выжимка остановлена.");
+                        "Выбран локальный режим GGUF. Облачная выжимка остановлена.");
                   if (!manager.current(proposal))
                     throw new IllegalStateException(
                         "Исходники изменились. Запустите новую проверку.");
