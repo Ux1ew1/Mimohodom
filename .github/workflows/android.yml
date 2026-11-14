@@ -66,6 +66,7 @@ jobs:
           ./scripts/test-image-input.ps1
           ./scripts/test-image-list.ps1
           ./scripts/test-folders.ps1
+          ./scripts/test-video.ps1
           node tests/metadata-sql.cjs
           if ($LASTEXITCODE -ne 0) { throw 'Metadata SQL tests failed' }
           node tests/manager-sql.cjs

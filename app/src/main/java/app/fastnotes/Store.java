@@ -363,6 +363,26 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     return id;
   }
 
+  /** Сохраняет сводку видео как заметку с темами для поиска; без платного фонового разбора. */
+  public long saveVideo(VideoAnalysis.Result result) {
+    long id = save(0, result.title, result.body, 0);
+    applyMetadata(id, note(id).updated, result.metadata);
+    getWritableDatabase()
+        .execSQL("UPDATE notes SET ai_checked=updated WHERE id=?", new Object[] {id});
+    return id;
+  }
+
+  /** Номер самой ранней заметки, в тексте которой есть эта строка, или 0. */
+  public long noteIdContaining(String text) {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT id FROM notes WHERE instr(body,?)>0 ORDER BY id LIMIT 1",
+                new String[] {text})) {
+      return c.moveToFirst() ? c.getLong(0) : 0;
+    }
+  }
+
   public List<Note> pendingAnalysis() {
     List<Note> out = new ArrayList<>();
     try (Cursor c =

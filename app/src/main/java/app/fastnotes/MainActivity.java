@@ -21,7 +21,7 @@ import java.util.regex.*;
 import org.json.*;
 
 public final class MainActivity extends Activity
-    implements ChatRunner.Listener, ImageRunner.Listener {
+    implements ChatRunner.Listener, ImageRunner.Listener, VideoRunner.Listener {
   private static final int PAPER = 0xFFF7F8F2,
       INK = 0xFF1E3028,
       MUTED = 0xFF6C786F,
@@ -191,6 +191,7 @@ public final class MainActivity extends Activity
     if (state == null) routeIntent(getIntent());
     ChatRunner.listen(this);
     ImageRunner.listen(this);
+    VideoRunner.listen(this);
     BackgroundAnalysis.configure(this);
     render();
     // Файлы изображений, на которые больше никто не ссылается (удалённые заметки, замены).
@@ -268,7 +269,9 @@ public final class MainActivity extends Activity
     super.onResume();
     ChatRunner.listen(this);
     ImageRunner.listen(this);
+    VideoRunner.listen(this);
     imageFinished();
+    videoFinished();
     restoreReminders();
     if (reliabilityBox != null && "settings.reminders".equals(page))
       fillReliability(reliabilityBox);
@@ -1717,11 +1720,31 @@ public final class MainActivity extends Activity
   }
 
   private void saveNote() {
+    saveNote(true);
+  }
+
+  private void saveNote(boolean offerVideo) {
     String title = titleField.getText().toString(), body = bodyField.getText().toString();
     if (title.trim().isEmpty() && body.trim().isEmpty() && noteImage.isEmpty()) {
       buzz(2);
       bodyField.setError("Напишите текст или название");
       bodyField.requestFocus();
+      return;
+    }
+    // В новую заметку вставили только ссылки на видео: предложим сводку вместо заметки-ссылки.
+    if (offerVideo
+        && editing == 0
+        && noteImage.isEmpty()
+        && title.trim().isEmpty()
+        && !LocalLlm.enabled(this)
+        && YoutubeLink.onlyLinks(body)) {
+      offerVideoSummary(
+          YoutubeLink.all(body),
+          () -> saveNote(false),
+          () -> {
+            bodyField.setText("");
+            clearDraft(0);
+          });
       return;
     }
     Note old = editing == 0 ? null : store.note(editing);
@@ -3259,6 +3282,17 @@ public final class MainActivity extends Activity
       toast("В этом содержимом нет текста или картинки для заметки");
       return;
     }
+    if (!image && !LocalLlm.enabled(this)) {
+      List<String> links = YoutubeLink.all(text == null ? "" : text.toString());
+      if (!links.isEmpty()) {
+        offerVideoSummary(links, () -> saveSharedNote(parts, false, null), null);
+        return;
+      }
+    }
+    saveSharedNote(parts, image, stream);
+  }
+
+  private void saveSharedNote(String[] parts, boolean image, Uri stream) {
     toast("Сохраняю заметку…");
     io.execute(
         () -> {
@@ -3284,6 +3318,94 @@ public final class MainActivity extends Activity
                 });
           }
         });
+  }
+
+  private String videoModel() {
+    String model = prefs.getString("videoModel", "").trim();
+    return model.isEmpty() ? VideoAnalysis.DEFAULT_MODEL : model;
+  }
+
+  /**
+   * Предлагает сделать сводку по ссылкам на видео. {@code keep} сохраняет их как обычную заметку,
+   * {@code started} вызывается после запуска (например, очистить поле ввода).
+   */
+  private void offerVideoSummary(List<String> links, Runnable keep, Runnable started) {
+    if (VideoRunner.running) {
+      toast("Сводка видео уже готовится. Подождите её завершения.");
+      return;
+    }
+    String key;
+    try {
+      key = Secrets.read(this);
+    } catch (Exception e) {
+      key = "";
+    }
+    if (key.isEmpty()) {
+      new AlertDialog.Builder(this)
+          .setTitle("Подключите Polza.AI")
+          .setMessage(
+              "Сводку видео делает модель Polza.AI. Укажите API-ключ в настройках или сохраните"
+                  + " ссылку как обычную заметку.")
+          .setNeutralButton("Отмена", null)
+          .setNegativeButton("Сохранить как есть", (d, w) -> keep.run())
+          .setPositiveButton("Настройки", (d, w) -> navigate(3))
+          .show();
+      return;
+    }
+    final String apiKey = key, model = videoModel();
+    new AlertDialog.Builder(this)
+        .setTitle(links.size() == 1 ? "Сделать сводку видео?" : "Сделать сводки видео?")
+        .setMessage(
+            (links.size() == 1
+                    ? "Ссылка на видео будет отправлена в Polza.AI, и модель "
+                    : "Ссылок на видео: " + links.size() + ", каждая — отдельный запрос. Модель ")
+                + model
+                + " посмотрит ролик. Запрос оплачивается с вашего баланса Polza.AI, цена растёт с"
+                + " длиной видео. Ориентир: ролик на 10 минут обошёлся примерно в 2 ₽ на "
+                + VideoAnalysis.DEFAULT_MODEL
+                + ". Результат появится отдельной заметкой; повтор после ошибки — только вручную.")
+        .setNeutralButton("Отмена", null)
+        .setNegativeButton("Сохранить как есть", (d, w) -> keep.run())
+        .setPositiveButton(
+            "Сделать сводку",
+            (d, w) -> {
+              if (VideoRunner.start(this, links, apiKey, model)) {
+                if (started != null) started.run();
+                toast("Видео отправлено на анализ. Это может занять до минуты.");
+              }
+            })
+        .show();
+  }
+
+  @Override
+  public void videoFinished() {
+    if (isDestroyed() || isFinishing() || VideoRunner.running) return;
+    VideoRunner.Outcome outcome = VideoRunner.take();
+    if (outcome.empty()) return;
+    int made = outcome.created.size();
+    if (!outcome.error.isEmpty()) {
+      new AlertDialog.Builder(this)
+          .setTitle("Сводка видео не готова")
+          .setMessage(
+              (made > 0 ? "Готово заметок: " + made + ".\n\n" : "") + outcome.error)
+          .setPositiveButton("Понятно", null)
+          .show();
+    }
+    boolean idle = ("home".equals(page) || "notes".equals(page)) && !editorActive;
+    long open = made == 1 ? outcome.created.get(0) : 0;
+    if (made == 0 && outcome.existing.size() == 1 && outcome.error.isEmpty())
+      open = outcome.existing.get(0);
+    if (outcome.error.isEmpty()) {
+      if (made > 1) toast("Готово сводок: " + made);
+      else if (made == 1) toast("Сводка видео готова");
+      else toast("Это видео уже есть в заметках");
+    }
+    if (open > 0 && idle && outcome.error.isEmpty()) {
+      tab = 0;
+      openNote(open);
+    } else if ("notes".equals(page)) {
+      render();
+    }
   }
 
   private void analyzeNoteImage() {
@@ -3961,6 +4083,24 @@ public final class MainActivity extends Activity
     content.addView(load);
     gap(content, 16);
     if (mode == MODE_POLZA) {
+      secondary(content, "Модель для видео YouTube");
+      EditText videoField = input(VideoAnalysis.DEFAULT_MODEL, false);
+      videoField.setText(prefs.getString("videoModel", ""));
+      watch(
+          videoField,
+          () ->
+              prefs
+                  .edit()
+                  .putString("videoModel", videoField.getText().toString().trim())
+                  .apply());
+      content.addView(videoField);
+      gap(content, 6);
+      secondary(
+          content,
+          "Модель, которая смотрит видео по ссылке, например Gemini. Если пусто, используется "
+              + VideoAnalysis.DEFAULT_MODEL
+              + ". Самые новые модели Polza.AI может потребовать с большим запасом на балансе.");
+      gap(content, 16);
       TextView more = text((advancedOpen ? "▾  " : "▸  ") + "Дополнительно", 15, GREEN);
       more.setTypeface(null, Typeface.BOLD);
       more.setPadding(0, dp(10), 0, dp(10));
