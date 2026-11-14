@@ -1992,8 +1992,177 @@ public final class MainActivity extends Activity
     LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-2, -2);
     addParams.leftMargin = dp(8);
     chips.addView(add, addParams);
+    TextView suggest = text("Подобрать папки", 14, GREEN);
+    suggest.setTypeface(null, Typeface.BOLD);
+    suggest.setGravity(Gravity.CENTER);
+    suggest.setPadding(dp(12), dp(8), dp(14), dp(8));
+    suggest.setCompoundDrawablesWithIntrinsicBounds(new Glyph("spark", GREEN, 18), null, null, null);
+    suggest.setCompoundDrawablePadding(dp(6));
+    suggest.setBackground(ripple(LIME, 18));
+    suggest.setFocusable(true);
+    suggest.setContentDescription("Подобрать папки по темам заметок");
+    suggest.setOnClickListener(
+        v -> {
+          buzz(0);
+          showFolderSuggestions();
+        });
+    LinearLayout.LayoutParams suggestParams = new LinearLayout.LayoutParams(-2, -2);
+    suggestParams.leftMargin = dp(8);
+    chips.addView(suggest, suggestParams);
     scroller.addView(chips);
     return scroller;
+  }
+
+  private Map<String, Long> folderKeys() {
+    Map<String, Long> keys = new HashMap<>();
+    for (FolderStore.Folder f : new FolderStore(store).list()) keys.put(FolderPolicy.key(f.name), f.id);
+    return keys;
+  }
+
+  private Set<String> dismissedTopics() {
+    return new HashSet<>(prefs.getStringSet("folderDismissed", new HashSet<>()));
+  }
+
+  private static String plural(int n, String one, String few, String many) {
+    int hundreds = n % 100, ones = n % 10;
+    if (hundreds >= 11 && hundreds <= 14) return many;
+    if (ones == 1) return one;
+    return ones >= 2 && ones <= 4 ? few : many;
+  }
+
+  /** Создаёт папку (или берёт существующую) и переносит в неё заметки без папки. Возвращает число перенесённых. */
+  private int applyFolderSuggestion(FolderSuggestion.Suggestion s) {
+    FolderStore folders = new FolderStore(store);
+    long id = s.existing > 0 && folders.exists(s.existing) ? s.existing : folders.create(s.name, true);
+    if (id == 0) return 0;
+    int moved = 0;
+    for (long noteId : s.notes) {
+      Note current = store.note(noteId);
+      if (current != null && current.folder == FolderPolicy.ALL) {
+        folders.move(noteId, id);
+        moved++;
+      }
+    }
+    return moved;
+  }
+
+  /** Предлагает папки по общим темам заметок; создаёт и переносит только выбранное в окне. */
+  private void showFolderSuggestions() {
+    ManagerStore manager = new ManagerStore(store);
+    List<Note> pool = new ArrayList<>();
+    for (Note n : store.notes())
+      if (manager.top(n.id) == 0 || manager.top(n.id) == n.id) pool.add(n);
+    List<FolderSuggestion.Suggestion> list =
+        FolderSuggestion.suggest(pool, folderKeys(), dismissedTopics());
+    if (list.isEmpty()) {
+      toast("Пока нечего предложить. Нужны заметки с общей темой: темы ИИ появляются после проверки заметок.");
+      return;
+    }
+    String[] labels = new String[list.size()];
+    boolean[] chosen = new boolean[list.size()];
+    for (int i = 0; i < labels.length; i++) {
+      FolderSuggestion.Suggestion s = list.get(i);
+      int n = s.notes.size();
+      labels[i] =
+          s.name
+              + (s.existing > 0 ? " (папка уже есть)" : "")
+              + " · "
+              + n
+              + " "
+              + plural(n, "заметка", "заметки", "заметок");
+      chosen[i] = true;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Папки по темам")
+        .setMultiChoiceItems(labels, chosen, (d, which, checked) -> chosen[which] = checked)
+        .setNegativeButton("Отмена", null)
+        .setNeutralButton(
+            "Скрыть эти",
+            (d, w) -> {
+              Set<String> hidden = dismissedTopics();
+              for (FolderSuggestion.Suggestion s : list) hidden.add(FolderPolicy.key(s.name));
+              prefs.edit().putStringSet("folderDismissed", hidden).apply();
+              toast("Эти темы больше не предлагаются");
+            })
+        .setPositiveButton(
+            "Создать и перенести",
+            (d, w) -> {
+              int folders = 0, moved = 0;
+              for (int i = 0; i < list.size(); i++)
+                if (chosen[i]) {
+                  int count = applyFolderSuggestion(list.get(i));
+                  moved += count;
+                  if (count > 0 && list.get(i).existing == 0) folders++;
+                }
+              toast(
+                  moved == 0
+                      ? "Ничего не перенесено"
+                      : "Создано папок: " + folders + ", перенесено заметок: " + moved);
+              render();
+            })
+        .show();
+  }
+
+  private final ArrayDeque<Long> folderQueue = new ArrayDeque<>();
+
+  /**
+   * После сводки видео предлагает папку по первой теме новой заметки. true — окно показано; очередь
+   * продолжится после ответа. Не мешает окну объединения и работающему запросу.
+   */
+  private boolean askNextFolder() {
+    if (mergeAsking || VideoRunner.running || isDestroyed() || isFinishing()) return mergeAsking;
+    ManagerStore manager = new ManagerStore(store);
+    while (!folderQueue.isEmpty()) {
+      Note n = store.note(folderQueue.poll());
+      if (n == null || manager.top(n.id) != 0) continue;
+      FolderSuggestion.Suggestion s = FolderSuggestion.forNote(n, folderKeys(), dismissedTopics());
+      if (s == null) continue;
+      mergeAsking = true;
+      Runnable next =
+          () -> {
+            mergeAsking = false;
+            askNext();
+          };
+      new AlertDialog.Builder(this)
+          .setTitle(
+              s.existing > 0
+                  ? "Положить в папку «" + s.name + "»?"
+                  : "Создать папку «" + s.name + "»?")
+          .setMessage(
+              "Заметка «"
+                  + n.title
+                  + "» — про «"
+                  + s.name
+                  + "». "
+                  + (s.existing > 0
+                      ? "Такая папка уже есть: переместить заметку туда?"
+                      : "Создать такую папку и переместить заметку в неё?"))
+          .setNegativeButton("Нет", (d, w) -> next.run())
+          .setNeutralButton(
+              "Не предлагать",
+              (d, w) -> {
+                Set<String> hidden = dismissedTopics();
+                hidden.add(FolderPolicy.key(s.name));
+                prefs.edit().putStringSet("folderDismissed", hidden).apply();
+                next.run();
+              })
+          .setPositiveButton(
+              s.existing > 0 ? "Положить" : "Создать",
+              (d, w) -> {
+                applyFolderSuggestion(s);
+                toast("Заметка в папке «" + s.name + "»");
+                next.run();
+                if ("notes".equals(page)) render();
+              })
+          .setOnCancelListener(d -> next.run())
+          .show();
+      return true;
+    }
+    return false;
+  }
+
+  private boolean askNext() {
+    return askNextMerge() || askNextFolder();
   }
 
   private View folderChip(String label, boolean selected, long id, FolderStore.Folder f) {
@@ -3631,7 +3800,8 @@ public final class MainActivity extends Activity
       } else {
         toast("Видео добавлено в общую заметку");
       }
-      boolean asking = askNextMerge();
+      if (outcome.merged > 0) folderQueue.add(outcome.merged);
+      boolean asking = askNext();
       if (outcome.merged > 0 && !asking && idle) {
         tab = 0;
         openNote(outcome.merged);
@@ -3650,6 +3820,7 @@ public final class MainActivity extends Activity
           .show();
     } else {
       mergeQueue.addAll(outcome.created);
+      folderQueue.addAll(outcome.created);
     }
     long open = made == 1 ? outcome.created.get(0) : 0;
     if (made == 0 && outcome.existing.size() == 1 && outcome.error.isEmpty())
@@ -3659,7 +3830,7 @@ public final class MainActivity extends Activity
       else if (made == 1) toast("Сводка видео готова");
       else toast("Это видео уже есть в заметках");
     }
-    boolean asking = outcome.error.isEmpty() && askNextMerge();
+    boolean asking = outcome.error.isEmpty() && askNext();
     if (open > 0 && idle && !asking && outcome.error.isEmpty()) {
       tab = 0;
       openNote(open);
@@ -3686,7 +3857,7 @@ public final class MainActivity extends Activity
       Runnable decline =
           () -> {
             mergeAsking = false;
-            askNextMerge();
+            askNext();
           };
       new AlertDialog.Builder(this)
           .setTitle("Добавить в общую заметку?")
