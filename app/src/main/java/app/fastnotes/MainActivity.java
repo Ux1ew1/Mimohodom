@@ -74,6 +74,8 @@ public final class MainActivity extends Activity
               });
       };
   private String search = "", chatSearch = "";
+  /** Открытая папка в списке заметок (0 — «Все заметки») и папка заметки в редакторе. */
+  private long folder = 0, editFolder = 0;
   private final List<Note> visibleNotes = new ArrayList<>();
   private float swipeX, swipeY;
   private boolean swipeAllowed, swipeConsumed;
@@ -185,6 +187,8 @@ public final class MainActivity extends Activity
       chat = state.getLong("chat");
       returnPage = state.getString("return", "notes");
       search = state.getString("search", "");
+      folder = state.getLong("folder");
+      Store.newNoteFolder = folder;
       pickerPage = state.getString("pickerPage", "");
       pickerTarget = state.getLong("pickerTarget");
     }
@@ -309,6 +313,7 @@ public final class MainActivity extends Activity
     out.putLong("chat", chat);
     out.putString("return", returnPage);
     out.putString("search", search);
+    out.putLong("folder", folder);
     super.onSaveInstanceState(out);
   }
 
@@ -1261,6 +1266,7 @@ public final class MainActivity extends Activity
           .putString(p + "title", titleField.getText().toString())
           .putString(p + "body", bodyField.getText().toString())
           .putLong(p + "reminder", reminder)
+          .putLong(p + "folder", editFolder)
           .putInt(p + "repeat", repeatMode)
           .putInt(p + "lead", leadChoice)
           .putString(p + "image", noteImage)
@@ -1277,6 +1283,7 @@ public final class MainActivity extends Activity
         .remove(p + "title")
         .remove(p + "body")
         .remove(p + "reminder")
+        .remove(p + "folder")
         .remove(p + "repeat")
         .remove(p + "lead")
         .remove(p + "image")
@@ -1407,6 +1414,9 @@ public final class MainActivity extends Activity
     reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
     repeatMode = prefs.getInt(p + "repeat", note == null ? 0 : note.repeat);
     leadChoice = prefs.getInt(p + "lead", note == null ? -1 : note.lead);
+    editFolder = prefs.getLong(p + "folder", note == null ? folder : note.folder);
+    if (editFolder != FolderPolicy.ALL && !new FolderStore(store).exists(editFolder))
+      editFolder = FolderPolicy.ALL;
     LinearLayout footer = row();
     footer.setPadding(dp(12), dp(10), dp(12), dp(10));
     ImageView imageTool = new ImageView(this);
@@ -1442,6 +1452,40 @@ public final class MainActivity extends Activity
     LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(-2, dp(40));
     reminderParams.leftMargin = dp(8);
     footer.addView(reminderButton, reminderParams);
+    TextView folderButton = text("", 13, GREEN);
+    folderButton.setTypeface(null, Typeface.BOLD);
+    folderButton.setGravity(Gravity.CENTER);
+    folderButton.setMinWidth(dp(40));
+    folderButton.setPadding(dp(10), 0, dp(10), 0);
+    folderButton.setSingleLine(true);
+    folderButton.setEllipsize(TextUtils.TruncateAt.END);
+    folderButton.setMaxWidth(dp(130));
+    folderButton.setBackground(ripple(LIME, 10));
+    folderButton.setCompoundDrawablesWithIntrinsicBounds(
+        new Glyph("folder", GREEN, 20), null, null, null);
+    folderButton.setFocusable(true);
+    Runnable showFolder =
+        () -> {
+          FolderStore.Folder current = new FolderStore(store).folder(editFolder);
+          folderButton.setText(current == null ? "" : "  " + current.name);
+          folderButton.setContentDescription(
+              current == null ? "Папка: без папки" : "Папка: " + current.name);
+        };
+    showFolder.run();
+    folderButton.setOnClickListener(
+        v -> {
+          buzz(0);
+          chooseFolder(
+              editFolder,
+              picked -> {
+                editFolder = picked;
+                stash();
+                showFolder.run();
+              });
+        });
+    LinearLayout.LayoutParams folderParams = new LinearLayout.LayoutParams(-2, dp(40));
+    folderParams.leftMargin = dp(8);
+    footer.addView(folderButton, folderParams);
     if (id == 0) {
       // Компактная кнопка сохранения в правом краю нижней полосы листа.
       footer.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
@@ -1560,10 +1604,12 @@ public final class MainActivity extends Activity
           && old.repeat == (reminder == 0 ? 0 : repeatMode)
           && old.lead == (reminder == 0 ? -1 : leadChoice)
           && old.image.equals(noteImage)) {
+        if (old.folder != editFolder) new FolderStore(store).move(editing, editFolder);
         clearDraft(editing);
         return true;
       }
       store.save(editing, title, body, reminder, repeatMode, leadChoice);
+      if (old.folder != editFolder) new FolderStore(store).move(editing, editFolder);
       store.image(editing, noteImage);
       clearDraft(editing);
       releaseImage(old.image, noteImage);
@@ -1757,6 +1803,8 @@ public final class MainActivity extends Activity
     }
     try {
       long id = store.save(editing, title, body, reminder, repeatMode, leadChoice);
+      Note placed = store.note(id);
+      if (placed != null && placed.folder != editFolder) new FolderStore(store).move(id, editFolder);
       store.image(id, noteImage);
       if (old != null) releaseImage(old.image, noteImage);
       BackgroundAnalysis.enqueue(this);
@@ -1814,6 +1862,8 @@ public final class MainActivity extends Activity
             });
     controls.addView(switcher);
     content.addView(controls);
+    gap(content, 10);
+    content.addView(folderChips());
     gap(content, 12);
     LinearLayout listing = column();
     // Список прокручивается под плавающей панелью, поэтому внизу оставлен запас.
@@ -1825,14 +1875,20 @@ public final class MainActivity extends Activity
           ManagerStore manager = new ManagerStore(store);
           List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search);
           visibleNotes.clear();
-          for (Note n : found)
+          for (Note n : found) {
+            if (folder != FolderPolicy.ALL && n.folder != folder) continue;
             if (!search.trim().isEmpty() || manager.top(n.id) == 0 || manager.top(n.id) == n.id)
               visibleNotes.add(n);
+          }
           count.setText(getString(R.string.notes_count, visibleNotes.size()));
           if (visibleNotes.isEmpty())
             listing.addView(
                 text(
-                    search.isEmpty() ? "Пока здесь чистый лист." : "Ничего не найдено.",
+                    !search.isEmpty()
+                        ? "Ничего не найдено."
+                        : folder == FolderPolicy.ALL
+                            ? "Пока здесь чистый лист."
+                            : "В этой папке пока пусто.",
                     17,
                     MUTED));
           int columns = grid ? (getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2) : 1;
@@ -1895,6 +1951,170 @@ public final class MainActivity extends Activity
         });
   }
 
+  /** Строка папок над списком: «Все заметки», свои папки и «＋ Папка». Долгое нажатие — меню папки. */
+  private View folderChips() {
+    FolderStore folders = new FolderStore(store);
+    if (folder != FolderPolicy.ALL && !folders.exists(folder)) {
+      folder = FolderPolicy.ALL;
+      Store.newNoteFolder = FolderPolicy.ALL;
+    }
+    HorizontalScrollView scroller = new HorizontalScrollView(this);
+    scroller.setHorizontalScrollBarEnabled(false);
+    LinearLayout chips = row();
+    chips.addView(folderChip("Все заметки", folder == FolderPolicy.ALL, FolderPolicy.ALL, null));
+    for (FolderStore.Folder f : folders.list())
+      chips.addView(folderChip(f.name + " · " + f.notes, folder == f.id, f.id, f));
+    TextView add = text("＋ Папка", 14, GREEN);
+    add.setTypeface(null, Typeface.BOLD);
+    add.setGravity(Gravity.CENTER);
+    add.setPadding(dp(14), dp(8), dp(14), dp(8));
+    add.setBackground(ripple(LIME, 18));
+    add.setFocusable(true);
+    add.setContentDescription("Создать папку");
+    add.setOnClickListener(
+        v -> {
+          buzz(0);
+          askFolderName(
+              "Новая папка",
+              "",
+              "Создать",
+              name -> {
+                long id = folders.create(name, false);
+                if (id == 0) {
+                  toast("Название не подходит. «Все заметки» занято системой.");
+                  return;
+                }
+                folder = id;
+                Store.newNoteFolder = id;
+                render();
+              });
+        });
+    LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-2, -2);
+    addParams.leftMargin = dp(8);
+    chips.addView(add, addParams);
+    scroller.addView(chips);
+    return scroller;
+  }
+
+  private View folderChip(String label, boolean selected, long id, FolderStore.Folder f) {
+    TextView chip = text(label, 14, selected ? WHITE : INK);
+    chip.setTypeface(null, selected ? Typeface.BOLD : Typeface.NORMAL);
+    chip.setGravity(Gravity.CENTER);
+    chip.setSingleLine(true);
+    chip.setPadding(dp(14), dp(8), dp(14), dp(8));
+    chip.setBackground(ripple(selected ? GREEN : WHITE, 18));
+    chip.setFocusable(true);
+    chip.setSelected(selected);
+    chip.setContentDescription(f == null ? "Все заметки" : "Папка " + f.name);
+    chip.setOnClickListener(
+        v -> {
+          buzz(0);
+          if (folder == id) return;
+          folder = id;
+          Store.newNoteFolder = id;
+          render();
+        });
+    if (f != null)
+      chip.setOnLongClickListener(
+          v -> {
+            PopupMenu popup = new PopupMenu(this, chip);
+            popup
+                .getMenu()
+                .add("Переименовать")
+                .setOnMenuItemClickListener(
+                    item -> {
+                      askFolderName(
+                          "Переименовать папку",
+                          f.name,
+                          "Сохранить",
+                          name -> {
+                            if (new FolderStore(store).rename(f.id, name)) render();
+                            else toast("Такая папка уже есть или название не подходит.");
+                          });
+                      return true;
+                    });
+            popup
+                .getMenu()
+                .add("Удалить папку")
+                .setOnMenuItemClickListener(
+                    item -> {
+                      new AlertDialog.Builder(this)
+                          .setTitle("Удалить папку «" + f.name + "»?")
+                          .setMessage(
+                              "Заметки из неё не удаляются: они останутся в «Все заметки».")
+                          .setNegativeButton("Отмена", null)
+                          .setPositiveButton(
+                              "Удалить",
+                              (d, w) -> {
+                                new FolderStore(store).delete(f.id);
+                                if (folder == f.id) {
+                                  folder = FolderPolicy.ALL;
+                                  Store.newNoteFolder = FolderPolicy.ALL;
+                                }
+                                render();
+                              })
+                          .show();
+                      return true;
+                    });
+            popup.show();
+            return true;
+          });
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+    if (id != FolderPolicy.ALL) lp.leftMargin = dp(8);
+    chip.setLayoutParams(lp);
+    return chip;
+  }
+
+  private void askFolderName(
+      String title, String initial, String action, java.util.function.Consumer<String> done) {
+    EditText field = input("Название папки", false);
+    field.setText(initial);
+    field.setSelection(field.getText().length());
+    FrameLayout holder = new FrameLayout(this);
+    holder.setPadding(dp(20), dp(8), dp(20), 0);
+    holder.addView(field, new FrameLayout.LayoutParams(-1, -2));
+    new AlertDialog.Builder(this)
+        .setTitle(title)
+        .setView(holder)
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton(action, (d, w) -> done.accept(field.getText().toString()))
+        .show();
+  }
+
+  /**
+   * Выбор папки: «Без папки», существующие и «Новая папка…». Номер папки возвращается в {@code
+   * picked} (0 — без папки); решает вызывающий, применять ли его сразу.
+   */
+  private void chooseFolder(long current, java.util.function.LongConsumer picked) {
+    FolderStore folders = new FolderStore(store);
+    List<FolderStore.Folder> list = folders.list();
+    String[] items = new String[list.size() + 2];
+    items[0] = (current == FolderPolicy.ALL ? "✓ " : "") + "Без папки (Все заметки)";
+    for (int i = 0; i < list.size(); i++)
+      items[i + 1] = (list.get(i).id == current ? "✓ " : "") + list.get(i).name;
+    items[items.length - 1] = "＋ Новая папка…";
+    new AlertDialog.Builder(this)
+        .setTitle("Папка")
+        .setItems(
+            items,
+            (d, which) -> {
+              if (which == 0) picked.accept(FolderPolicy.ALL);
+              else if (which == items.length - 1)
+                askFolderName(
+                    "Новая папка",
+                    "",
+                    "Создать",
+                    name -> {
+                      long id = folders.create(name, false);
+                      if (id == 0) toast("Название не подходит. «Все заметки» занято системой.");
+                      else picked.accept(id);
+                    });
+              else picked.accept(list.get(which - 1).id);
+            })
+        .setNegativeButton("Отмена", null)
+        .show();
+  }
+
   private View noteCard(Note n, boolean grid) {
     LinearLayout card = column();
     pad(card, 16);
@@ -1930,6 +2150,23 @@ public final class MainActivity extends Activity
                   item -> {
                     returnPage = "notes";
                     deleteNote(n.id);
+                    return true;
+                  });
+          popup
+              .getMenu()
+              .add("Переместить в папку")
+              .setOnMenuItemClickListener(
+                  item -> {
+                    chooseFolder(
+                        n.folder,
+                        target -> {
+                          new FolderStore(store).move(n.id, target);
+                          toast(
+                              target == FolderPolicy.ALL
+                                  ? "Заметка без папки"
+                                  : "Заметка перенесена");
+                          render();
+                        });
                     return true;
                   });
           long top = manager.top(n.id);
@@ -4692,10 +4929,16 @@ public final class MainActivity extends Activity
                         .put("reminder", n.reminder)
                         .put("repeat", n.repeat)
                         .put("lead", n.lead)
+                        .put("folder", n.folder)
                         .put("metadata", Metadata.read(n.metadata)));
+              JSONArray folderList = new JSONArray();
+              for (FolderStore.Folder f : new FolderStore(exportStore).list())
+                folderList.put(
+                    new JSONObject().put("id", f.id).put("name", f.name).put("auto", f.auto));
               JSONObject export =
                   new JSONObject()
-                      .put("version", 3)
+                      .put("version", 4)
+                      .put("folders", folderList)
                       .put("notes", notes)
                       .put("groups", new ManagerStore(exportStore).export("note_groups"))
                       .put("members", new ManagerStore(exportStore).export("note_members"))
@@ -4900,6 +5143,21 @@ public final class MainActivity extends Activity
             c.drawCircle(4, y, .5f, paint);
             c.drawLine(9, y, 21, y, paint);
           }
+        }
+        case "folder" -> {
+          Path outline = new Path();
+          outline.moveTo(3, 6.5f);
+          outline.quadTo(3, 5, 4.5f, 5);
+          outline.lineTo(9, 5);
+          outline.lineTo(11, 7.5f);
+          outline.lineTo(19.5f, 7.5f);
+          outline.quadTo(21, 7.5f, 21, 9);
+          outline.lineTo(21, 18);
+          outline.quadTo(21, 19.5f, 19.5f, 19.5f);
+          outline.lineTo(4.5f, 19.5f);
+          outline.quadTo(3, 19.5f, 3, 18);
+          outline.close();
+          c.drawPath(outline, paint);
         }
         case "trash" -> {
           c.drawLine(4, 6, 20, 6, paint);
