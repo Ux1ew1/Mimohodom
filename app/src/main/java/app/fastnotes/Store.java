@@ -372,6 +372,49 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     return id;
   }
 
+  /** Заметки со ссылкой на видео, кроме входящих в стопки: кандидаты для общей заметки. */
+  public List<Note> videoNotes() {
+    List<Note> out = new ArrayList<>();
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT * FROM notes WHERE instr(body,?)>0"
+                    + " AND id NOT IN (SELECT top FROM note_groups)"
+                    + " AND id NOT IN (SELECT note FROM note_members)"
+                    + " ORDER BY updated DESC LIMIT 100",
+                new String[] {"Видео: https://www.youtube.com/watch?v="})) {
+      while (c.moveToNext()) out.add(read(c));
+    }
+    return out;
+  }
+
+  /**
+   * Переносит сводку видео {@code src} в заметку {@code dst} с готовым текстом и удаляет {@code
+   * src}. Всё или ничего: если любая из заметок изменилась после чтения, ничего не меняется.
+   */
+  public boolean mergeVideo(
+      long src, long srcRevision, long dst, long dstRevision, String title, String body) {
+    SQLiteDatabase db = getWritableDatabase();
+    db.beginTransaction();
+    try {
+      Note from = note(src), into = note(dst);
+      if (from == null
+          || into == null
+          || from.updated != srcRevision
+          || into.updated != dstRevision
+          || src == dst) return false;
+      save(dst, title, body, into.reminder, into.repeat, into.lead);
+      Note saved = note(dst);
+      applyMetadata(dst, saved.updated, Metadata.read(from.metadata).optJSONObject("ai"));
+      db.execSQL("UPDATE notes SET ai_checked=updated WHERE id=?", new Object[] {dst});
+      delete(src);
+      db.setTransactionSuccessful();
+      return true;
+    } finally {
+      db.endTransaction();
+    }
+  }
+
   /** Номер самой ранней заметки, в тексте которой есть эта строка, или 0. */
   public long noteIdContaining(String text) {
     try (Cursor c =

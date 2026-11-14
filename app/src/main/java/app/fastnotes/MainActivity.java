@@ -3382,6 +3382,27 @@ public final class MainActivity extends Activity
     if (isDestroyed() || isFinishing() || VideoRunner.running) return;
     VideoRunner.Outcome outcome = VideoRunner.take();
     if (outcome.empty()) return;
+    boolean idle = ("home".equals(page) || "notes".equals(page)) && !editorActive;
+    if (outcome.merged > 0 || !outcome.mergeError.isEmpty()) {
+      // Закончилось объединение с общей заметкой.
+      if (!outcome.mergeError.isEmpty()) {
+        new AlertDialog.Builder(this)
+            .setTitle("Объединить не удалось")
+            .setMessage(outcome.mergeError)
+            .setPositiveButton("Понятно", null)
+            .show();
+      } else {
+        toast("Видео добавлено в общую заметку");
+      }
+      boolean asking = askNextMerge();
+      if (outcome.merged > 0 && !asking && idle) {
+        tab = 0;
+        openNote(outcome.merged);
+      } else if ("notes".equals(page)) {
+        render();
+      }
+      return;
+    }
     int made = outcome.created.size();
     if (!outcome.error.isEmpty()) {
       new AlertDialog.Builder(this)
@@ -3390,8 +3411,9 @@ public final class MainActivity extends Activity
               (made > 0 ? "Готово заметок: " + made + ".\n\n" : "") + outcome.error)
           .setPositiveButton("Понятно", null)
           .show();
+    } else {
+      mergeQueue.addAll(outcome.created);
     }
-    boolean idle = ("home".equals(page) || "notes".equals(page)) && !editorActive;
     long open = made == 1 ? outcome.created.get(0) : 0;
     if (made == 0 && outcome.existing.size() == 1 && outcome.error.isEmpty())
       open = outcome.existing.get(0);
@@ -3400,12 +3422,79 @@ public final class MainActivity extends Activity
       else if (made == 1) toast("Сводка видео готова");
       else toast("Это видео уже есть в заметках");
     }
-    if (open > 0 && idle && outcome.error.isEmpty()) {
+    boolean asking = outcome.error.isEmpty() && askNextMerge();
+    if (open > 0 && idle && !asking && outcome.error.isEmpty()) {
       tab = 0;
       openNote(open);
     } else if ("notes".equals(page)) {
       render();
     }
+  }
+
+  private final ArrayDeque<Long> mergeQueue = new ArrayDeque<>();
+  private boolean mergeAsking;
+
+  /**
+   * Предлагает добавить свежую сводку в заметку по той же теме. Идёт по очереди только что
+   * созданных заметок; true — окно показано и очередь продолжится после ответа.
+   */
+  private boolean askNextMerge() {
+    if (mergeAsking || VideoRunner.running || isDestroyed() || isFinishing()) return mergeAsking;
+    while (!mergeQueue.isEmpty()) {
+      Note fresh = store.note(mergeQueue.poll());
+      if (fresh == null) continue;
+      Note target = VideoMerge.best(fresh, store.videoNotes());
+      if (target == null) continue;
+      mergeAsking = true;
+      Runnable decline =
+          () -> {
+            mergeAsking = false;
+            askNextMerge();
+          };
+      new AlertDialog.Builder(this)
+          .setTitle("Добавить в общую заметку?")
+          .setMessage(
+              "Видео «"
+                  + fresh.title
+                  + "» похоже на тему заметки «"
+                  + target.title
+                  + "». Добавить его отдельным разделом туда и обновить общую сводку? Нужен ещё"
+                  + " один небольшой платный запрос (только текст, без видео). Отдельная заметка"
+                  + " о видео после этого удаляется.")
+          .setNegativeButton("Оставить отдельно", (d, w) -> decline.run())
+          .setPositiveButton(
+              "Объединить",
+              (d, w) -> {
+                mergeAsking = false;
+                startMerge(fresh, target, decline);
+              })
+          .setOnCancelListener(d -> decline.run())
+          .show();
+      return true;
+    }
+    return false;
+  }
+
+  private void startMerge(Note fresh, Note target, Runnable fallback) {
+    if (editorActive && (editing == fresh.id || editing == target.id)) {
+      toast("Закройте открытую заметку и повторите объединение вручную.");
+      fallback.run();
+      return;
+    }
+    String key;
+    try {
+      key = Secrets.read(this);
+    } catch (Exception e) {
+      key = "";
+    }
+    if (key.isEmpty()) {
+      toast("Не удалось прочитать API-ключ");
+      fallback.run();
+      return;
+    }
+    if (VideoRunner.merge(this, fresh.id, target.id, key, videoModel()))
+      toast("Объединяю видео в одну заметку…");
+    else fallback.run();
   }
 
   private void analyzeNoteImage() {

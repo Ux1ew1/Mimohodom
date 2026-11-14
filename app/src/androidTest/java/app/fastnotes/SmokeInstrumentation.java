@@ -185,6 +185,28 @@ public final class SmokeInstrumentation extends Instrumentation {
           require(
               migrated.note(1) != null && migrated.note(1).folder == FolderPolicy.ALL,
               "Deleting a folder keeps its notes");
+          long first =
+              migrated.save(
+                  0, "Видео А", "Сводка А\n\nВидео: https://www.youtube.com/watch?v=aaaaaaaaaaa", 0);
+          long second =
+              migrated.save(
+                  0, "Видео Б", "Сводка Б\n\nВидео: https://www.youtube.com/watch?v=bbbbbbbbbbb", 0);
+          Note a = migrated.note(first), b = migrated.note(second);
+          require(migrated.videoNotes().size() == 2, "Video notes are found by their source line");
+          require(
+              !migrated.mergeVideo(second, b.updated + 1, first, a.updated, "Т", "тело")
+                  && migrated.note(second) != null
+                  && migrated.note(first).body.startsWith("Сводка А"),
+              "Merge with a stale revision changes nothing");
+          require(
+              migrated.mergeVideo(
+                  second, b.updated, first, a.updated, "Общая тема", "Общее по теме\nтекст"),
+              "Video merge succeeds");
+          require(
+              migrated.note(second) == null
+                  && migrated.note(first).title.equals("Общая тема")
+                  && migrated.note(first).body.startsWith("Общее по теме"),
+              "Merged note replaces the source note");
         }
       } finally {
         getTargetContext().deleteDatabase(migrationName);

@@ -108,13 +108,13 @@ public final class VideoAnalysis {
     return result;
   }
 
-  private static String bullet(String line) {
+  static String bullet(String line) {
     String t = line.stripTrailing();
     if (t.matches("^\\s*[-*•]\\s+.*")) return "• " + t.replaceFirst("^\\s*[-*•]\\s+", "");
     return t;
   }
 
-  private static String shorten(String s, int max) {
+  static String shorten(String s, int max) {
     if (s.codePointCount(0, s.length()) <= max) return s;
     return s.substring(0, s.offsetByCodePoints(0, max - 1)).trim() + "…";
   }
