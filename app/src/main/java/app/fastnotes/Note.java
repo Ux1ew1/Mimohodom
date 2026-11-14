@@ -12,6 +12,8 @@ public final class Note {
   /** Своё «напомнить за N минут» или -1, если действует общая настройка. */
   public int lead = -1;
   public String suggestionReason = "";
+  /** Номер папки или {@link FolderPolicy#ALL}, если заметка лежит только в «Все заметки». */
+  public long folder;
 
   public Note(long id, String title, String body, long created, long updated, long reminder) {
     this.id = id;

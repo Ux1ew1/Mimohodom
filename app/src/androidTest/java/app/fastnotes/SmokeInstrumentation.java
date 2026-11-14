@@ -173,6 +173,18 @@ public final class SmokeInstrumentation extends Instrumentation {
           require(
               migrated.pendingAnalysis().size() == 1,
               "Migrated notes eligible for reminder suggestions");
+          require(
+              retained.folder == FolderPolicy.ALL,
+              "Migrated notes start in All notes");
+          FolderStore folders = new FolderStore(migrated);
+          long folder = folders.create("Проверка", false);
+          require(folder > 0 && folders.create("  ПРОВЕРКА ", false) == folder, "Folder names are unique");
+          folders.move(1, folder);
+          require(migrated.note(1).folder == folder, "Note moves into a folder");
+          folders.delete(folder);
+          require(
+              migrated.note(1) != null && migrated.note(1).folder == FolderPolicy.ALL,
+              "Deleting a folder keeps its notes");
         }
       } finally {
         getTargetContext().deleteDatabase(migrationName);

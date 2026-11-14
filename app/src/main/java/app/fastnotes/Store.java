@@ -7,6 +7,9 @@ import java.util.*;
 import org.json.*;
 
 public final class Store extends SQLiteOpenHelper implements Polza.Memory {
+  /** Папка, открытая на экране: новая заметка создаётся в ней. 0 — «Все заметки». */
+  public static volatile long newNoteFolder = FolderPolicy.ALL;
+
   private final Context appContext;
   private final boolean local;
 
@@ -23,7 +26,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 7);
+    super(context, name, null, 8);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -75,6 +78,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addMetadata(db);
     ManagerStore.create(db);
     addReminderOptions(db);
+    addFolders(db);
   }
 
   @Override
@@ -87,6 +91,18 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 5) addMetadata(db);
     if (oldV < 6) ManagerStore.create(db);
     if (oldV < 7) addReminderOptions(db);
+    if (oldV < 8) addFolders(db);
+  }
+
+  /** Папки: таблица и номер папки у заметки (0 — «Все заметки»). Безопасно вызывается повторно. */
+  private void addFolders(SQLiteDatabase db) {
+    if (!hasColumn(db, "folder"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN folder INTEGER NOT NULL DEFAULT 0");
+    db.execSQL(
+        "CREATE TABLE IF NOT EXISTS folders(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT"
+            + " NULL,key TEXT NOT NULL UNIQUE,created INTEGER NOT NULL,auto INTEGER NOT NULL"
+            + " DEFAULT 0)");
+    db.execSQL("CREATE INDEX IF NOT EXISTS notes_folder ON notes(folder,updated DESC)");
   }
 
   /** Повтор и свой интервал напоминания. Безопасно вызывается повторно, если столбцы уже есть. */
@@ -160,6 +176,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     n.searchText = c.getString(13);
     n.repeat = c.getInt(14);
     n.lead = c.getInt(15);
+    n.folder = c.getLong(16);
     return n;
   }
 
@@ -303,6 +320,9 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("search_text", Metadata.searchText(metadata));
     if (id == 0) {
       v.put("created", now);
+      long folder = newNoteFolder;
+      if (folder != FolderPolicy.ALL && new FolderStore(this).exists(folder))
+        v.put("folder", folder);
       return getWritableDatabase().insertOrThrow("notes", null, v);
     }
     if (getWritableDatabase().update("notes", v, "id=?", new String[] {"" + id}) != 1)

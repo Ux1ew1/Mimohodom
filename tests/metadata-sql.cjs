@@ -66,7 +66,7 @@ check(reminderOptions.length === 2, 'Read actual reminder options migration SQL'
 for (const sql of reminderOptions) db.exec(sql);
 const upgraded = db.prepare('SELECT * FROM notes WHERE id=1').get();
 const columns = Object.keys(upgraded);
-check(columns.length === 16 && columns[14] === 'repeat_mode' && columns[15] === 'lead_minutes', 'Reminder options are the last two columns read by Store.read');
+check(columns.length === 16 && columns[14] === 'repeat_mode' && columns[15] === 'lead_minutes', 'Reminder options are columns 14 and 15 read by Store.read (folder follows at 16, see folders-sql.cjs)');
 check(upgraded.repeat_mode === 0 && upgraded.lead_minutes === -1, 'Existing notes keep no repeat and the global lead');
 check(upgraded.created === 1000 && upgraded.title === 'Семейный рецепт', 'Reminder options migration preserves notes');
 db.prepare('UPDATE notes SET repeat_mode=?,lead_minutes=?,reminder=? WHERE id=1').run(2, 30, 5000);
