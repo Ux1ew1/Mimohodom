@@ -13,9 +13,57 @@ public final class ImageRunner {
   public static volatile boolean running;
   public static volatile long source, note;
   public static volatile String error = "";
+  /** Результат «описать и дописать»: заголовок, описание и картинка, к которой оно относится. */
+  public static volatile String describeTitle = "", describeText = "", describeImage = "";
 
   public static void listen(Listener value) {
     listener = new WeakReference<>(value);
+  }
+
+  /** Описывает картинку, ничего не сохраняя: текст возвращается через {@code describeText}. */
+  public static synchronized boolean describe(
+      Context c, long origin, String key, String model, String image) {
+    if (running) return false;
+    running = true;
+    source = origin;
+    note = 0;
+    error = "";
+    describeTitle = "";
+    describeText = "";
+    describeImage = "";
+    Context app = c.getApplicationContext();
+    new Thread(
+            () -> {
+              try {
+                Vision.Result result =
+                    ImageFiles.analyze(
+                        app,
+                        key,
+                        model,
+                        image,
+                        "Кратко опиши изображение для заметки и перепиши видимый текст, если он"
+                            + " есть. Не придумывай дату и время.");
+                describeTitle = result.title;
+                describeImage = image;
+                describeText = result.summary;
+              } catch (Exception e) {
+                error =
+                    "Не удалось описать изображение. Проверьте интернет, баланс и поддержку"
+                        + " изображений выбранной моделью. Запрос мог быть оплачен; повтор —"
+                        + " вручную.";
+              } finally {
+                running = false;
+                new Handler(Looper.getMainLooper())
+                    .post(
+                        () -> {
+                          Listener l = listener.get();
+                          if (l != null) l.imageFinished();
+                        });
+              }
+            },
+            "image-describe")
+        .start();
+    return true;
   }
 
   public static synchronized boolean start(

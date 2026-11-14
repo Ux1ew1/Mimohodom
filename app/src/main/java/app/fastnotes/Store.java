@@ -7,6 +7,9 @@ import java.util.*;
 import org.json.*;
 
 public final class Store extends SQLiteOpenHelper implements Polza.Memory {
+  /** Папка, открытая на экране: новая заметка создаётся в ней. 0 — «Все заметки». */
+  public static volatile long newNoteFolder = FolderPolicy.ALL;
+
   private final Context appContext;
   private final boolean local;
 
@@ -23,7 +26,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 6);
+    super(context, name, null, 8);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -74,6 +77,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     db.execSQL("ALTER TABLE messages ADD COLUMN draft TEXT NOT NULL DEFAULT ''");
     addMetadata(db);
     ManagerStore.create(db);
+    addReminderOptions(db);
+    addFolders(db);
   }
 
   @Override
@@ -85,6 +90,34 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
     if (oldV < 5) addMetadata(db);
     if (oldV < 6) ManagerStore.create(db);
+    if (oldV < 7) addReminderOptions(db);
+    if (oldV < 8) addFolders(db);
+  }
+
+  /** Папки: таблица и номер папки у заметки (0 — «Все заметки»). Безопасно вызывается повторно. */
+  private void addFolders(SQLiteDatabase db) {
+    if (!hasColumn(db, "folder"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN folder INTEGER NOT NULL DEFAULT 0");
+    db.execSQL(
+        "CREATE TABLE IF NOT EXISTS folders(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT"
+            + " NULL,key TEXT NOT NULL UNIQUE,created INTEGER NOT NULL,auto INTEGER NOT NULL"
+            + " DEFAULT 0)");
+    db.execSQL("CREATE INDEX IF NOT EXISTS notes_folder ON notes(folder,updated DESC)");
+  }
+
+  /** Повтор и свой интервал напоминания. Безопасно вызывается повторно, если столбцы уже есть. */
+  private void addReminderOptions(SQLiteDatabase db) {
+    if (!hasColumn(db, "repeat_mode"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN repeat_mode INTEGER NOT NULL DEFAULT 0");
+    if (!hasColumn(db, "lead_minutes"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN lead_minutes INTEGER NOT NULL DEFAULT -1");
+  }
+
+  private boolean hasColumn(SQLiteDatabase db, String column) {
+    try (Cursor c = db.rawQuery("PRAGMA table_info(notes)", null)) {
+      while (c.moveToNext()) if (column.equals(c.getString(1))) return true;
+    }
+    return false;
   }
 
   private void addMetadata(SQLiteDatabase db) {
@@ -141,6 +174,9 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     n.image = c.getString(11);
     n.metadata = c.getString(12);
     n.searchText = c.getString(13);
+    n.repeat = c.getInt(14);
+    n.lead = c.getInt(15);
+    n.folder = c.getLong(16);
     return n;
   }
 
@@ -224,7 +260,41 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  /** Сохраняет текст и время напоминания; повтор и свой интервал уже существующей заметки не трогает. */
   public long save(long id, String title, String body, long reminder) {
+    Note existing = id == 0 ? null : note(id);
+    return save(
+        id,
+        title,
+        body,
+        reminder,
+        existing == null ? 0 : existing.repeat,
+        existing == null ? -1 : existing.lead);
+  }
+
+  /** Передвигает время повторяющегося напоминания, если оно ещё не менялось. Текст не трогает. */
+  public boolean advanceReminder(long id, long expected, long next) {
+    ContentValues v = new ContentValues();
+    v.put("reminder", next);
+    return getWritableDatabase()
+            .update("notes", v, "id=? AND reminder=?", new String[] {"" + id, "" + expected})
+        == 1;
+  }
+
+  /** Количество заметок с непринятым предложением напоминания, время которого ещё впереди. */
+  public int pendingSuggestions() {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT count(*) FROM notes WHERE suggestion>?",
+                new String[] {"" + System.currentTimeMillis()})) {
+      c.moveToFirst();
+      return c.getInt(0);
+    }
+  }
+
+  public long save(
+      long id, String title, String body, long reminder, int repeat, int lead) {
     ContentValues v = new ContentValues();
     long now = System.currentTimeMillis();
     Note old = id == 0 ? null : note(id);
@@ -241,6 +311,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("body", body.trim());
     v.put("updated", now);
     v.put("reminder", reminder);
+    v.put("repeat_mode", reminder == 0 ? 0 : repeat);
+    v.put("lead_minutes", reminder == 0 ? -1 : lead);
     JSONObject metadata =
         Metadata.base(
             Note.autoTitle(title, body), body.trim(), old == null ? now : old.created, now);
@@ -248,6 +320,9 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("search_text", Metadata.searchText(metadata));
     if (id == 0) {
       v.put("created", now);
+      long folder = newNoteFolder;
+      if (folder != FolderPolicy.ALL && new FolderStore(this).exists(folder))
+        v.put("folder", folder);
       return getWritableDatabase().insertOrThrow("notes", null, v);
     }
     if (getWritableDatabase().update("notes", v, "id=?", new String[] {"" + id}) != 1)
@@ -258,6 +333,15 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   public void delete(long id) {
     getWritableDatabase().delete("notes", "id=?", new String[] {"" + id});
     new ManagerStore(this).cleanup();
+  }
+
+  /** Имена всех файлов изображений, на которые ссылаются заметки (в поле может быть список). */
+  public Set<String> imageNames() {
+    Set<String> out = new HashSet<>();
+    try (Cursor c = getReadableDatabase().rawQuery("SELECT DISTINCT image FROM notes WHERE image<>''", null)) {
+      while (c.moveToNext()) out.addAll(ImageList.parse(c.getString(0)));
+    }
+    return out;
   }
 
   public void image(long id, String image) {
@@ -277,6 +361,69 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     getWritableDatabase()
         .execSQL("UPDATE notes SET ai_checked=updated WHERE id=?", new Object[] {id});
     return id;
+  }
+
+  /** Сохраняет сводку видео как заметку с темами для поиска; без платного фонового разбора. */
+  public long saveVideo(VideoAnalysis.Result result) {
+    long id = save(0, result.title, result.body, 0);
+    applyMetadata(id, note(id).updated, result.metadata);
+    getWritableDatabase()
+        .execSQL("UPDATE notes SET ai_checked=updated WHERE id=?", new Object[] {id});
+    return id;
+  }
+
+  /** Заметки со ссылкой на видео, кроме входящих в стопки: кандидаты для общей заметки. */
+  public List<Note> videoNotes() {
+    List<Note> out = new ArrayList<>();
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT * FROM notes WHERE instr(body,?)>0"
+                    + " AND id NOT IN (SELECT top FROM note_groups)"
+                    + " AND id NOT IN (SELECT note FROM note_members)"
+                    + " ORDER BY updated DESC LIMIT 100",
+                new String[] {"Видео: https://www.youtube.com/watch?v="})) {
+      while (c.moveToNext()) out.add(read(c));
+    }
+    return out;
+  }
+
+  /**
+   * Переносит сводку видео {@code src} в заметку {@code dst} с готовым текстом и удаляет {@code
+   * src}. Всё или ничего: если любая из заметок изменилась после чтения, ничего не меняется.
+   */
+  public boolean mergeVideo(
+      long src, long srcRevision, long dst, long dstRevision, String title, String body) {
+    SQLiteDatabase db = getWritableDatabase();
+    db.beginTransaction();
+    try {
+      Note from = note(src), into = note(dst);
+      if (from == null
+          || into == null
+          || from.updated != srcRevision
+          || into.updated != dstRevision
+          || src == dst) return false;
+      save(dst, title, body, into.reminder, into.repeat, into.lead);
+      Note saved = note(dst);
+      applyMetadata(dst, saved.updated, Metadata.read(from.metadata).optJSONObject("ai"));
+      db.execSQL("UPDATE notes SET ai_checked=updated WHERE id=?", new Object[] {dst});
+      delete(src);
+      db.setTransactionSuccessful();
+      return true;
+    } finally {
+      db.endTransaction();
+    }
+  }
+
+  /** Номер самой ранней заметки, в тексте которой есть эта строка, или 0. */
+  public long noteIdContaining(String text) {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT id FROM notes WHERE instr(body,?)>0 ORDER BY id LIMIT 1",
+                new String[] {text})) {
+      return c.moveToFirst() ? c.getLong(0) : 0;
+    }
   }
 
   public List<Note> pendingAnalysis() {

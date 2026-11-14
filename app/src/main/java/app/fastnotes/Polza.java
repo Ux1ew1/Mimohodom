@@ -97,16 +97,23 @@ public final class Polza {
   }
 
   static JSONObject request(String path, String key, JSONObject body) throws Exception {
-    return requestVersion("v1", path, key, body);
+    return requestVersion("v1", path, key, body, 60000);
   }
 
-  private static JSONObject requestVersion(String version, String path, String key, JSONObject body)
+  /** Запрос с увеличенным ожиданием ответа, например для анализа видео. */
+  static JSONObject request(String path, String key, JSONObject body, int readTimeoutMs)
+      throws Exception {
+    return requestVersion("v1", path, key, body, readTimeoutMs);
+  }
+
+  private static JSONObject requestVersion(
+      String version, String path, String key, JSONObject body, int readTimeoutMs)
       throws Exception {
     HttpURLConnection c =
         (HttpURLConnection)
             new URL("https://polza.ai/api/" + version + "/" + path).openConnection();
     c.setConnectTimeout(15000);
-    c.setReadTimeout(60000);
+    c.setReadTimeout(readTimeoutMs);
     c.setInstanceFollowRedirects(false);
     c.setRequestProperty("Authorization", "Bearer " + key);
     c.setRequestProperty("Accept", "application/json");
@@ -152,7 +159,7 @@ public final class Polza {
   }
 
   public static java.math.BigDecimal[] balance(String key) throws Exception {
-    JSONObject response = requestVersion("v2", "balance", key, null);
+    JSONObject response = requestVersion("v2", "balance", key, null, 60000);
     return new java.math.BigDecimal[] {
       new java.math.BigDecimal(response.getString("amount")),
       new java.math.BigDecimal(response.getString("available"))

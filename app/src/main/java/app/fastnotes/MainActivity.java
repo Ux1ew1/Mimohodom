@@ -6,6 +6,7 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.graphics.drawable.*;
+import android.net.Uri;
 import android.os.*;
 import android.text.*;
 import android.text.method.*;
@@ -20,7 +21,7 @@ import java.util.regex.*;
 import org.json.*;
 
 public final class MainActivity extends Activity
-    implements ChatRunner.Listener, ImageRunner.Listener {
+    implements ChatRunner.Listener, ImageRunner.Listener, VideoRunner.Listener {
   private static final int PAPER = 0xFFF7F8F2,
       INK = 0xFF1E3028,
       MUTED = 0xFF6C786F,
@@ -46,6 +47,11 @@ public final class MainActivity extends Activity
   private int tab = 1;
   private String page = "home";
   private long editing = 0, reminder = 0, chat = 0;
+  /** Повтор и свой интервал напоминания в открытом редакторе (-1 — общая настройка). */
+  private int repeatMode = 0, leadChoice = -1;
+  /** Какая из картинок открытой заметки выбрана в ленте; {@code selectedImageFor} — её заметка. */
+  private int selectedImage = 0;
+  private long selectedImageFor = -1;
   private boolean editorActive = false, rendering = false;
   private String returnPage = "notes";
   private TextView reminderButton, analysisStatusView;
@@ -68,6 +74,8 @@ public final class MainActivity extends Activity
               });
       };
   private String search = "", chatSearch = "";
+  /** Открытая папка в списке заметок (0 — «Все заметки») и папка заметки в редакторе. */
+  private long folder = 0, editFolder = 0;
   private final List<Note> visibleNotes = new ArrayList<>();
   private float swipeX, swipeY;
   private boolean swipeAllowed, swipeConsumed;
@@ -179,21 +187,25 @@ public final class MainActivity extends Activity
       chat = state.getLong("chat");
       returnPage = state.getString("return", "notes");
       search = state.getString("search", "");
+      folder = state.getLong("folder");
+      Store.newNoteFolder = folder;
       pickerPage = state.getString("pickerPage", "");
       pickerTarget = state.getLong("pickerTarget");
     }
     if (state == null) routeIntent(getIntent());
     ChatRunner.listen(this);
     ImageRunner.listen(this);
+    VideoRunner.listen(this);
     BackgroundAnalysis.configure(this);
     render();
+    // Файлы изображений, на которые больше никто не ссылается (удалённые заметки, замены).
     io.execute(
         () -> {
-          try (Store reminders = new Store(getApplicationContext())) {
-            for (Note n : reminders.notes())
-              if (n.reminder > System.currentTimeMillis())
-                Reminders.schedule(getApplicationContext(), n);
-          }
+          ImageFiles.cleanup(getApplicationContext(), 10 * 60_000L);
+          java.io.File[] shots = new java.io.File(getCacheDir(), "camera").listFiles();
+          if (shots != null)
+            for (java.io.File shot : shots)
+              if (System.currentTimeMillis() - shot.lastModified() > 3_600_000L) shot.delete();
         });
     if (Build.VERSION.SDK_INT >= 33)
       getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::goBack);
@@ -217,6 +229,7 @@ public final class MainActivity extends Activity
     String action = intent.getAction();
     if (action == null) return;
     switch (action) {
+      case Intent.ACTION_SEND -> handleShare(intent);
       case "app.fastnotes.action.NEW_NOTE" -> {
         tab = 1;
         page = "home";
@@ -227,6 +240,7 @@ public final class MainActivity extends Activity
         tab = 2;
         page = "chat";
         chat = 0;
+        prefs.edit().remove("chatImage.0").apply();
       }
       case "app.fastnotes.action.OPEN_NOTES" -> {
         tab = 0;
@@ -259,7 +273,12 @@ public final class MainActivity extends Activity
     super.onResume();
     ChatRunner.listen(this);
     ImageRunner.listen(this);
+    VideoRunner.listen(this);
     imageFinished();
+    videoFinished();
+    restoreReminders();
+    if (reliabilityBox != null && "settings.reminders".equals(page))
+      fillReliability(reliabilityBox);
     if ("chat".equals(page) || "notes".equals(page)) {
       stash();
       render();
@@ -269,6 +288,7 @@ public final class MainActivity extends Activity
 
   @Override
   protected void onPause() {
+    flushCredentials();
     stash();
     persistEditedNote();
     super.onPause();
@@ -293,6 +313,7 @@ public final class MainActivity extends Activity
     out.putLong("chat", chat);
     out.putString("return", returnPage);
     out.putString("search", search);
+    out.putLong("folder", folder);
     super.onSaveInstanceState(out);
   }
 
@@ -315,6 +336,11 @@ public final class MainActivity extends Activity
       if (!persistEditedNote()) return;
       page = returnPage;
       tab = page.equals("chat") ? 2 : page.equals("home") ? 1 : 0;
+      render();
+    } else if (page.startsWith("settings.")) {
+      flushCredentials();
+      hideKeyboard();
+      page = "settings";
       render();
     } else if ("manager".equals(page)) {
       page = "notes";
@@ -640,6 +666,7 @@ public final class MainActivity extends Activity
   }
 
   private void render() {
+    flushCredentials();
     rendering = true;
     analysisStatusView = null;
     editorActive = false;
@@ -695,6 +722,10 @@ public final class MainActivity extends Activity
       case "chats" -> chats();
       case "chat" -> chatPage();
       case "settings" -> settings();
+      case "settings.ai" -> settingsAi();
+      case "settings.reminders" -> settingsReminders();
+      case "settings.assistant" -> settingsAssistant();
+      case "settings.app" -> settingsApp();
     }
     bottomNav();
     rendering = false;
@@ -1235,6 +1266,9 @@ public final class MainActivity extends Activity
           .putString(p + "title", titleField.getText().toString())
           .putString(p + "body", bodyField.getText().toString())
           .putLong(p + "reminder", reminder)
+          .putLong(p + "folder", editFolder)
+          .putInt(p + "repeat", repeatMode)
+          .putInt(p + "lead", leadChoice)
           .putString(p + "image", noteImage)
           .apply();
     }
@@ -1249,6 +1283,9 @@ public final class MainActivity extends Activity
         .remove(p + "title")
         .remove(p + "body")
         .remove(p + "reminder")
+        .remove(p + "folder")
+        .remove(p + "repeat")
+        .remove(p + "lead")
         .remove(p + "image")
         .apply();
   }
@@ -1300,6 +1337,10 @@ public final class MainActivity extends Activity
     if (id > 0) heading("Ваша заметка", "");
     String p = draftPrefix();
     noteImage = prefs.getString(p + "image", note == null ? "" : note.image);
+    if (selectedImageFor != id) {
+      selectedImage = 0;
+      selectedImageFor = id;
+    }
     // Название, текст и значки действий лежат на одном листе с тенью.
     LinearLayout sheet = column();
     GradientDrawable sheetBackground = shape(WHITE, 14);
@@ -1329,10 +1370,25 @@ public final class MainActivity extends Activity
     bodyField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(100000)});
     sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, -2));
     if (!noteImage.isEmpty()) {
+      List<String> images = ImageList.parse(noteImage);
+      selectedImage = Math.max(0, Math.min(selectedImage, images.size() - 1));
       LinearLayout imageBox = column();
       imageBox.setPadding(dp(12), 0, dp(12), dp(12));
-      imageBox.addView(imagePreview(noteImage, 220));
+      imageBox.addView(imagePreview(images.get(selectedImage), 220, images));
+      if (images.size() > 1) {
+        gap(imageBox, 8);
+        imageBox.addView(imageStrip(images));
+        secondary(
+            imageBox,
+            "Изображение "
+                + (selectedImage + 1)
+                + " из "
+                + images.size()
+                + ". Первое показывается в списке заметок.");
+      }
       gap(imageBox, 8);
+      imageBox.addView(button("Описать и добавить в заметку", false, this::describeNoteImage));
+      gap(imageBox, 6);
       imageBox.addView(
           button(
               ImageRunner.running ? "Изображение анализируется…" : "Создать заметку по изображению",
@@ -1340,21 +1396,27 @@ public final class MainActivity extends Activity
               this::analyzeNoteImage));
       gap(imageBox, 6);
       imageBox.addView(
-          button(
-              "Убрать изображение",
-              false,
-              () -> {
-                stash();
-                noteImage = "";
-                prefs.edit().putString(draftPrefix() + "image", "").apply();
-                render();
-              }));
+          pair(
+              button("Повернуть и обрезать", false, this::editSelectedImage),
+              button("Убрать", false, this::removeSelectedImage)));
+      if (images.size() > 1) {
+        gap(imageBox, 6);
+        imageBox.addView(
+            pair(
+                button("‹ Раньше", false, () -> moveSelectedImage(-1)),
+                button("Позже ›", false, () -> moveSelectedImage(1))));
+      }
       sheet.addView(imageBox);
     }
     View footerRule = new View(this);
     footerRule.setBackgroundColor(LINE);
     sheet.addView(footerRule, new LinearLayout.LayoutParams(-1, dp(1)));
     reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
+    repeatMode = prefs.getInt(p + "repeat", note == null ? 0 : note.repeat);
+    leadChoice = prefs.getInt(p + "lead", note == null ? -1 : note.lead);
+    editFolder = prefs.getLong(p + "folder", note == null ? folder : note.folder);
+    if (editFolder != FolderPolicy.ALL && !new FolderStore(store).exists(editFolder))
+      editFolder = FolderPolicy.ALL;
     LinearLayout footer = row();
     footer.setPadding(dp(12), dp(10), dp(12), dp(10));
     ImageView imageTool = new ImageView(this);
@@ -1362,7 +1424,7 @@ public final class MainActivity extends Activity
     imageTool.setImageDrawable(new Glyph("image", GREEN, 20));
     imageTool.setBackground(ripple(LIME, 10));
     imageTool.setContentDescription(
-        noteImage.isEmpty() ? "Прикрепить изображение" : "Заменить изображение");
+        noteImage.isEmpty() ? "Прикрепить изображение" : "Добавить ещё изображение");
     imageTool.setFocusable(true);
     imageTool.setOnClickListener(
         v -> {
@@ -1390,6 +1452,40 @@ public final class MainActivity extends Activity
     LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(-2, dp(40));
     reminderParams.leftMargin = dp(8);
     footer.addView(reminderButton, reminderParams);
+    TextView folderButton = text("", 13, GREEN);
+    folderButton.setTypeface(null, Typeface.BOLD);
+    folderButton.setGravity(Gravity.CENTER);
+    folderButton.setMinWidth(dp(40));
+    folderButton.setPadding(dp(10), 0, dp(10), 0);
+    folderButton.setSingleLine(true);
+    folderButton.setEllipsize(TextUtils.TruncateAt.END);
+    folderButton.setMaxWidth(dp(130));
+    folderButton.setBackground(ripple(LIME, 10));
+    folderButton.setCompoundDrawablesWithIntrinsicBounds(
+        new Glyph("folder", GREEN, 20), null, null, null);
+    folderButton.setFocusable(true);
+    Runnable showFolder =
+        () -> {
+          FolderStore.Folder current = new FolderStore(store).folder(editFolder);
+          folderButton.setText(current == null ? "" : "  " + current.name);
+          folderButton.setContentDescription(
+              current == null ? "Папка: без папки" : "Папка: " + current.name);
+        };
+    showFolder.run();
+    folderButton.setOnClickListener(
+        v -> {
+          buzz(0);
+          chooseFolder(
+              editFolder,
+              picked -> {
+                editFolder = picked;
+                stash();
+                showFolder.run();
+              });
+        });
+    LinearLayout.LayoutParams folderParams = new LinearLayout.LayoutParams(-2, dp(40));
+    folderParams.leftMargin = dp(8);
+    footer.addView(folderButton, folderParams);
     if (id == 0) {
       // Компактная кнопка сохранения в правом краю нижней полосы листа.
       footer.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
@@ -1467,6 +1563,12 @@ public final class MainActivity extends Activity
     }
   }
 
+  /** Удаляет файл прежней картинки, если ни заметка, ни черновик на неё больше не ссылаются. */
+  private void releaseImage(String previous, String current) {
+    for (String name : ImageList.removed(previous, current))
+      io.execute(() -> ImageFiles.release(getApplicationContext(), name));
+  }
+
   private void deleteNote(long id) {
     new AlertDialog.Builder(this)
         .setTitle("Удалить заметку?")
@@ -1475,9 +1577,11 @@ public final class MainActivity extends Activity
         .setPositiveButton(
             "Удалить",
             (d, w) -> {
+              Note gone = store.note(id);
               Reminders.cancel(this, id);
               store.delete(id);
               clearDraft(id);
+              if (gone != null) releaseImage(gone.image, "");
               editorActive = false;
               page = returnPage;
               render();
@@ -1493,16 +1597,22 @@ public final class MainActivity extends Activity
       Note old = store.note(editing);
       if (old == null) return true;
       String resolved = Note.autoTitle(title, body);
+      reconcileReminder(old);
       if (old.title.equals(resolved)
           && old.body.equals(body)
           && old.reminder == reminder
+          && old.repeat == (reminder == 0 ? 0 : repeatMode)
+          && old.lead == (reminder == 0 ? -1 : leadChoice)
           && old.image.equals(noteImage)) {
+        if (old.folder != editFolder) new FolderStore(store).move(editing, editFolder);
         clearDraft(editing);
         return true;
       }
-      store.save(editing, title, body, reminder);
+      store.save(editing, title, body, reminder, repeatMode, leadChoice);
+      if (old.folder != editFolder) new FolderStore(store).move(editing, editFolder);
       store.image(editing, noteImage);
       clearDraft(editing);
+      releaseImage(old.image, noteImage);
       Reminders.schedule(this, store.note(editing));
       BackgroundAnalysis.enqueue(this);
       return true;
@@ -1513,8 +1623,26 @@ public final class MainActivity extends Activity
     }
   }
 
+  /**
+   * Повторяющееся напоминание могло сработать и передвинуться, пока заметка была открыта: прошлое
+   * время в редакторе не выбирается вручную, поэтому оно устарело и заменяется текущим из базы.
+   */
+  private void reconcileReminder(Note old) {
+    if (old != null
+        && old.repeat != 0
+        && reminder != 0
+        && reminder < old.reminder
+        && reminder <= System.currentTimeMillis()) reminder = old.reminder;
+  }
+
   private String reminderLabel() {
-    return reminder == 0 ? "" : date(reminder);
+    return reminder == 0 ? "" : date(reminder) + (repeatMode != 0 ? "  ↻" : "");
+  }
+
+  private String leadChoiceLabel() {
+    for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
+      if (Reminders.LEAD_MINUTES[i] == leadChoice) return LEAD_LABELS[i].toLowerCase(new Locale("ru"));
+    return "как в настройках";
   }
 
   /** Кнопка напоминания без даты показывает только значок часов. */
@@ -1524,7 +1652,11 @@ public final class MainActivity extends Activity
     reminderButton.setText(label);
     reminderButton.setCompoundDrawablePadding(label.isEmpty() ? 0 : dp(6));
     reminderButton.setContentDescription(
-        label.isEmpty() ? "Добавить напоминание" : "Напоминание: " + label);
+        label.isEmpty()
+            ? "Добавить напоминание"
+            : "Напоминание: "
+                + date(reminder)
+                + (repeatMode != 0 ? ". " + ReminderPolicy.repeatLabel(repeatMode) : ""));
   }
 
   private void pickReminder() {
@@ -1532,17 +1664,64 @@ public final class MainActivity extends Activity
       new AlertDialog.Builder(this)
           .setTitle("Напоминание")
           .setItems(
-              new String[] {"Изменить дату и время", "Убрать напоминание"},
+              new String[] {
+                "Изменить дату и время",
+                "Повтор: " + ReminderPolicy.repeatLabel(repeatMode).toLowerCase(new Locale("ru")),
+                "Напомнить за: " + leadChoiceLabel(),
+                "Убрать напоминание"
+              },
               (d, w) -> {
                 if (w == 0) datePicker();
+                else if (w == 1) pickRepeat();
+                else if (w == 2) pickLead();
                 else {
                   reminder = 0;
+                  repeatMode = 0;
+                  leadChoice = -1;
                   refreshReminder();
                   stash();
                 }
               })
           .show();
     } else datePicker();
+  }
+
+  private void pickRepeat() {
+    String[] labels = new String[5];
+    for (int i = 0; i < labels.length; i++) labels[i] = ReminderPolicy.repeatLabel(i);
+    new AlertDialog.Builder(this)
+        .setTitle("Повтор")
+        .setSingleChoiceItems(
+            labels,
+            repeatMode,
+            (d, w) -> {
+              repeatMode = w;
+              refreshReminder();
+              stash();
+              d.dismiss();
+            })
+        .show();
+  }
+
+  private void pickLead() {
+    String[] labels = new String[LEAD_LABELS.length + 1];
+    labels[0] = "Как в настройках";
+    System.arraycopy(LEAD_LABELS, 0, labels, 1, LEAD_LABELS.length);
+    int checked = 0;
+    for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
+      if (Reminders.LEAD_MINUTES[i] == leadChoice) checked = i + 1;
+    new AlertDialog.Builder(this)
+        .setTitle("Напомнить за")
+        .setSingleChoiceItems(
+            labels,
+            checked,
+            (d, w) -> {
+              leadChoice = w == 0 ? -1 : Reminders.LEAD_MINUTES[w - 1];
+              refreshReminder();
+              stash();
+              d.dismiss();
+            })
+        .show();
   }
 
   private void datePicker() {
@@ -1587,6 +1766,10 @@ public final class MainActivity extends Activity
   }
 
   private void saveNote() {
+    saveNote(true);
+  }
+
+  private void saveNote(boolean offerVideo) {
     String title = titleField.getText().toString(), body = bodyField.getText().toString();
     if (title.trim().isEmpty() && body.trim().isEmpty() && noteImage.isEmpty()) {
       buzz(2);
@@ -1594,7 +1777,24 @@ public final class MainActivity extends Activity
       bodyField.requestFocus();
       return;
     }
+    // В новую заметку вставили только ссылки на видео: предложим сводку вместо заметки-ссылки.
+    if (offerVideo
+        && editing == 0
+        && noteImage.isEmpty()
+        && title.trim().isEmpty()
+        && !LocalLlm.enabled(this)
+        && YoutubeLink.onlyLinks(body)) {
+      offerVideoSummary(
+          YoutubeLink.all(body),
+          () -> saveNote(false),
+          () -> {
+            bodyField.setText("");
+            clearDraft(0);
+          });
+      return;
+    }
     Note old = editing == 0 ? null : store.note(editing);
+    reconcileReminder(old);
     if (reminder != 0
         && reminder <= System.currentTimeMillis()
         && (old == null || old.reminder != reminder)) {
@@ -1602,8 +1802,11 @@ public final class MainActivity extends Activity
       return;
     }
     try {
-      long id = store.save(editing, title, body, reminder);
+      long id = store.save(editing, title, body, reminder, repeatMode, leadChoice);
+      Note placed = store.note(id);
+      if (placed != null && placed.folder != editFolder) new FolderStore(store).move(id, editFolder);
       store.image(id, noteImage);
+      if (old != null) releaseImage(old.image, noteImage);
       BackgroundAnalysis.enqueue(this);
       Reminders.schedule(this, store.note(id));
       boolean denied =
@@ -1659,6 +1862,8 @@ public final class MainActivity extends Activity
             });
     controls.addView(switcher);
     content.addView(controls);
+    gap(content, 10);
+    content.addView(folderChips());
     gap(content, 12);
     LinearLayout listing = column();
     // Список прокручивается под плавающей панелью, поэтому внизу оставлен запас.
@@ -1670,14 +1875,20 @@ public final class MainActivity extends Activity
           ManagerStore manager = new ManagerStore(store);
           List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search);
           visibleNotes.clear();
-          for (Note n : found)
+          for (Note n : found) {
+            if (folder != FolderPolicy.ALL && n.folder != folder) continue;
             if (!search.trim().isEmpty() || manager.top(n.id) == 0 || manager.top(n.id) == n.id)
               visibleNotes.add(n);
+          }
           count.setText(getString(R.string.notes_count, visibleNotes.size()));
           if (visibleNotes.isEmpty())
             listing.addView(
                 text(
-                    search.isEmpty() ? "Пока здесь чистый лист." : "Ничего не найдено.",
+                    !search.isEmpty()
+                        ? "Ничего не найдено."
+                        : folder == FolderPolicy.ALL
+                            ? "Пока здесь чистый лист."
+                            : "В этой папке пока пусто.",
                     17,
                     MUTED));
           int columns = grid ? (getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2) : 1;
@@ -1740,6 +1951,339 @@ public final class MainActivity extends Activity
         });
   }
 
+  /** Строка папок над списком: «Все заметки», свои папки и «＋ Папка». Долгое нажатие — меню папки. */
+  private View folderChips() {
+    FolderStore folders = new FolderStore(store);
+    if (folder != FolderPolicy.ALL && !folders.exists(folder)) {
+      folder = FolderPolicy.ALL;
+      Store.newNoteFolder = FolderPolicy.ALL;
+    }
+    HorizontalScrollView scroller = new HorizontalScrollView(this);
+    scroller.setHorizontalScrollBarEnabled(false);
+    LinearLayout chips = row();
+    chips.addView(folderChip("Все заметки", folder == FolderPolicy.ALL, FolderPolicy.ALL, null));
+    for (FolderStore.Folder f : folders.list())
+      chips.addView(folderChip(f.name + " · " + f.notes, folder == f.id, f.id, f));
+    TextView add = text("＋ Папка", 14, GREEN);
+    add.setTypeface(null, Typeface.BOLD);
+    add.setGravity(Gravity.CENTER);
+    add.setPadding(dp(14), dp(8), dp(14), dp(8));
+    add.setBackground(ripple(LIME, 18));
+    add.setFocusable(true);
+    add.setContentDescription("Создать папку");
+    add.setOnClickListener(
+        v -> {
+          buzz(0);
+          askFolderName(
+              "Новая папка",
+              "",
+              "Создать",
+              name -> {
+                long id = folders.create(name, false);
+                if (id == 0) {
+                  toast("Название не подходит. «Все заметки» занято системой.");
+                  return;
+                }
+                folder = id;
+                Store.newNoteFolder = id;
+                render();
+              });
+        });
+    LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-2, -2);
+    addParams.leftMargin = dp(8);
+    chips.addView(add, addParams);
+    TextView suggest = text("Подобрать папки", 14, GREEN);
+    suggest.setTypeface(null, Typeface.BOLD);
+    suggest.setGravity(Gravity.CENTER);
+    suggest.setPadding(dp(12), dp(8), dp(14), dp(8));
+    suggest.setCompoundDrawablesWithIntrinsicBounds(new Glyph("spark", GREEN, 18), null, null, null);
+    suggest.setCompoundDrawablePadding(dp(6));
+    suggest.setBackground(ripple(LIME, 18));
+    suggest.setFocusable(true);
+    suggest.setContentDescription("Подобрать папки по темам заметок");
+    suggest.setOnClickListener(
+        v -> {
+          buzz(0);
+          showFolderSuggestions();
+        });
+    LinearLayout.LayoutParams suggestParams = new LinearLayout.LayoutParams(-2, -2);
+    suggestParams.leftMargin = dp(8);
+    chips.addView(suggest, suggestParams);
+    scroller.addView(chips);
+    return scroller;
+  }
+
+  private Map<String, Long> folderKeys() {
+    Map<String, Long> keys = new HashMap<>();
+    for (FolderStore.Folder f : new FolderStore(store).list()) keys.put(FolderPolicy.key(f.name), f.id);
+    return keys;
+  }
+
+  private Set<String> dismissedTopics() {
+    return new HashSet<>(prefs.getStringSet("folderDismissed", new HashSet<>()));
+  }
+
+  private static String plural(int n, String one, String few, String many) {
+    int hundreds = n % 100, ones = n % 10;
+    if (hundreds >= 11 && hundreds <= 14) return many;
+    if (ones == 1) return one;
+    return ones >= 2 && ones <= 4 ? few : many;
+  }
+
+  /** Создаёт папку (или берёт существующую) и переносит в неё заметки без папки. Возвращает число перенесённых. */
+  private int applyFolderSuggestion(FolderSuggestion.Suggestion s) {
+    FolderStore folders = new FolderStore(store);
+    long id = s.existing > 0 && folders.exists(s.existing) ? s.existing : folders.create(s.name, true);
+    if (id == 0) return 0;
+    int moved = 0;
+    for (long noteId : s.notes) {
+      Note current = store.note(noteId);
+      if (current != null && current.folder == FolderPolicy.ALL) {
+        folders.move(noteId, id);
+        moved++;
+      }
+    }
+    return moved;
+  }
+
+  /** Предлагает папки по общим темам заметок; создаёт и переносит только выбранное в окне. */
+  private void showFolderSuggestions() {
+    ManagerStore manager = new ManagerStore(store);
+    List<Note> pool = new ArrayList<>();
+    for (Note n : store.notes())
+      if (manager.top(n.id) == 0 || manager.top(n.id) == n.id) pool.add(n);
+    List<FolderSuggestion.Suggestion> list =
+        FolderSuggestion.suggest(pool, folderKeys(), dismissedTopics());
+    if (list.isEmpty()) {
+      toast("Пока нечего предложить. Нужны заметки с общей темой: темы ИИ появляются после проверки заметок.");
+      return;
+    }
+    String[] labels = new String[list.size()];
+    boolean[] chosen = new boolean[list.size()];
+    for (int i = 0; i < labels.length; i++) {
+      FolderSuggestion.Suggestion s = list.get(i);
+      int n = s.notes.size();
+      labels[i] =
+          s.name
+              + (s.existing > 0 ? " (папка уже есть)" : "")
+              + " · "
+              + n
+              + " "
+              + plural(n, "заметка", "заметки", "заметок");
+      chosen[i] = true;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Папки по темам")
+        .setMultiChoiceItems(labels, chosen, (d, which, checked) -> chosen[which] = checked)
+        .setNegativeButton("Отмена", null)
+        .setNeutralButton(
+            "Скрыть эти",
+            (d, w) -> {
+              Set<String> hidden = dismissedTopics();
+              for (FolderSuggestion.Suggestion s : list) hidden.add(FolderPolicy.key(s.name));
+              prefs.edit().putStringSet("folderDismissed", hidden).apply();
+              toast("Эти темы больше не предлагаются");
+            })
+        .setPositiveButton(
+            "Создать и перенести",
+            (d, w) -> {
+              int folders = 0, moved = 0;
+              for (int i = 0; i < list.size(); i++)
+                if (chosen[i]) {
+                  int count = applyFolderSuggestion(list.get(i));
+                  moved += count;
+                  if (count > 0 && list.get(i).existing == 0) folders++;
+                }
+              toast(
+                  moved == 0
+                      ? "Ничего не перенесено"
+                      : "Создано папок: " + folders + ", перенесено заметок: " + moved);
+              render();
+            })
+        .show();
+  }
+
+  private final ArrayDeque<Long> folderQueue = new ArrayDeque<>();
+
+  /**
+   * После сводки видео предлагает папку по первой теме новой заметки. true — окно показано; очередь
+   * продолжится после ответа. Не мешает окну объединения и работающему запросу.
+   */
+  private boolean askNextFolder() {
+    if (mergeAsking || VideoRunner.running || isDestroyed() || isFinishing()) return mergeAsking;
+    ManagerStore manager = new ManagerStore(store);
+    while (!folderQueue.isEmpty()) {
+      Note n = store.note(folderQueue.poll());
+      if (n == null || manager.top(n.id) != 0) continue;
+      FolderSuggestion.Suggestion s = FolderSuggestion.forNote(n, folderKeys(), dismissedTopics());
+      if (s == null) continue;
+      mergeAsking = true;
+      Runnable next =
+          () -> {
+            mergeAsking = false;
+            askNext();
+          };
+      new AlertDialog.Builder(this)
+          .setTitle(
+              s.existing > 0
+                  ? "Положить в папку «" + s.name + "»?"
+                  : "Создать папку «" + s.name + "»?")
+          .setMessage(
+              "Заметка «"
+                  + n.title
+                  + "» — про «"
+                  + s.name
+                  + "». "
+                  + (s.existing > 0
+                      ? "Такая папка уже есть: переместить заметку туда?"
+                      : "Создать такую папку и переместить заметку в неё?"))
+          .setNegativeButton("Нет", (d, w) -> next.run())
+          .setNeutralButton(
+              "Не предлагать",
+              (d, w) -> {
+                Set<String> hidden = dismissedTopics();
+                hidden.add(FolderPolicy.key(s.name));
+                prefs.edit().putStringSet("folderDismissed", hidden).apply();
+                next.run();
+              })
+          .setPositiveButton(
+              s.existing > 0 ? "Положить" : "Создать",
+              (d, w) -> {
+                applyFolderSuggestion(s);
+                toast("Заметка в папке «" + s.name + "»");
+                next.run();
+                if ("notes".equals(page)) render();
+              })
+          .setOnCancelListener(d -> next.run())
+          .show();
+      return true;
+    }
+    return false;
+  }
+
+  private boolean askNext() {
+    return askNextMerge() || askNextFolder();
+  }
+
+  private View folderChip(String label, boolean selected, long id, FolderStore.Folder f) {
+    TextView chip = text(label, 14, selected ? WHITE : INK);
+    chip.setTypeface(null, selected ? Typeface.BOLD : Typeface.NORMAL);
+    chip.setGravity(Gravity.CENTER);
+    chip.setSingleLine(true);
+    chip.setPadding(dp(14), dp(8), dp(14), dp(8));
+    chip.setBackground(ripple(selected ? GREEN : WHITE, 18));
+    chip.setFocusable(true);
+    chip.setSelected(selected);
+    chip.setContentDescription(f == null ? "Все заметки" : "Папка " + f.name);
+    chip.setOnClickListener(
+        v -> {
+          buzz(0);
+          if (folder == id) return;
+          folder = id;
+          Store.newNoteFolder = id;
+          render();
+        });
+    if (f != null)
+      chip.setOnLongClickListener(
+          v -> {
+            PopupMenu popup = new PopupMenu(this, chip);
+            popup
+                .getMenu()
+                .add("Переименовать")
+                .setOnMenuItemClickListener(
+                    item -> {
+                      askFolderName(
+                          "Переименовать папку",
+                          f.name,
+                          "Сохранить",
+                          name -> {
+                            if (new FolderStore(store).rename(f.id, name)) render();
+                            else toast("Такая папка уже есть или название не подходит.");
+                          });
+                      return true;
+                    });
+            popup
+                .getMenu()
+                .add("Удалить папку")
+                .setOnMenuItemClickListener(
+                    item -> {
+                      new AlertDialog.Builder(this)
+                          .setTitle("Удалить папку «" + f.name + "»?")
+                          .setMessage(
+                              "Заметки из неё не удаляются: они останутся в «Все заметки».")
+                          .setNegativeButton("Отмена", null)
+                          .setPositiveButton(
+                              "Удалить",
+                              (d, w) -> {
+                                new FolderStore(store).delete(f.id);
+                                if (folder == f.id) {
+                                  folder = FolderPolicy.ALL;
+                                  Store.newNoteFolder = FolderPolicy.ALL;
+                                }
+                                render();
+                              })
+                          .show();
+                      return true;
+                    });
+            popup.show();
+            return true;
+          });
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+    if (id != FolderPolicy.ALL) lp.leftMargin = dp(8);
+    chip.setLayoutParams(lp);
+    return chip;
+  }
+
+  private void askFolderName(
+      String title, String initial, String action, java.util.function.Consumer<String> done) {
+    EditText field = input("Название папки", false);
+    field.setText(initial);
+    field.setSelection(field.getText().length());
+    FrameLayout holder = new FrameLayout(this);
+    holder.setPadding(dp(20), dp(8), dp(20), 0);
+    holder.addView(field, new FrameLayout.LayoutParams(-1, -2));
+    new AlertDialog.Builder(this)
+        .setTitle(title)
+        .setView(holder)
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton(action, (d, w) -> done.accept(field.getText().toString()))
+        .show();
+  }
+
+  /**
+   * Выбор папки: «Без папки», существующие и «Новая папка…». Номер папки возвращается в {@code
+   * picked} (0 — без папки); решает вызывающий, применять ли его сразу.
+   */
+  private void chooseFolder(long current, java.util.function.LongConsumer picked) {
+    FolderStore folders = new FolderStore(store);
+    List<FolderStore.Folder> list = folders.list();
+    String[] items = new String[list.size() + 2];
+    items[0] = (current == FolderPolicy.ALL ? "✓ " : "") + "Без папки (Все заметки)";
+    for (int i = 0; i < list.size(); i++)
+      items[i + 1] = (list.get(i).id == current ? "✓ " : "") + list.get(i).name;
+    items[items.length - 1] = "＋ Новая папка…";
+    new AlertDialog.Builder(this)
+        .setTitle("Папка")
+        .setItems(
+            items,
+            (d, which) -> {
+              if (which == 0) picked.accept(FolderPolicy.ALL);
+              else if (which == items.length - 1)
+                askFolderName(
+                    "Новая папка",
+                    "",
+                    "Создать",
+                    name -> {
+                      long id = folders.create(name, false);
+                      if (id == 0) toast("Название не подходит. «Все заметки» занято системой.");
+                      else picked.accept(id);
+                    });
+              else picked.accept(list.get(which - 1).id);
+            })
+        .setNegativeButton("Отмена", null)
+        .show();
+  }
+
   private View noteCard(Note n, boolean grid) {
     LinearLayout card = column();
     pad(card, 16);
@@ -1777,6 +2321,23 @@ public final class MainActivity extends Activity
                     deleteNote(n.id);
                     return true;
                   });
+          popup
+              .getMenu()
+              .add("Переместить в папку")
+              .setOnMenuItemClickListener(
+                  item -> {
+                    chooseFolder(
+                        n.folder,
+                        target -> {
+                          new FolderStore(store).move(n.id, target);
+                          toast(
+                              target == FolderPolicy.ALL
+                                  ? "Заметка без папки"
+                                  : "Заметка перенесена");
+                          render();
+                        });
+                    return true;
+                  });
           long top = manager.top(n.id);
           if (top != 0)
             popup
@@ -1811,7 +2372,31 @@ public final class MainActivity extends Activity
             n.reminder > 0 ? "Напомнить\n" + date(n.reminder) : shortDate(n.created),
             11,
             n.reminder > 0 ? GREEN : MUTED);
-    card.addView(stamp);
+    if (n.image.isEmpty()) card.addView(stamp);
+    else {
+      int imageCount = ImageList.count(n.image);
+      LinearLayout bottom = row();
+      bottom.addView(stamp, new LinearLayout.LayoutParams(0, -2, 1));
+      FrameLayout cell = new FrameLayout(this);
+      ImageView thumb = new ImageView(this);
+      thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+      thumb.setBackground(shape(LIME, 8));
+      thumb.setClipToOutline(true);
+      thumb.setOutlineProvider(rounded(8));
+      thumb.setContentDescription(
+          imageCount > 1 ? "Изображений в заметке: " + imageCount : "Изображение в заметке");
+      ImageThumbs.load(this, thumb, ImageList.cover(n.image), 160);
+      cell.addView(thumb, new FrameLayout.LayoutParams(-1, -1));
+      if (imageCount > 1) {
+        TextView badge = text("+" + (imageCount - 1), 10, WHITE);
+        badge.setTypeface(null, Typeface.BOLD);
+        badge.setBackground(shape(0xAA000000, 6));
+        badge.setPadding(dp(4), dp(1), dp(4), dp(1));
+        cell.addView(badge, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END));
+      }
+      bottom.addView(cell, new LinearLayout.LayoutParams(dp(40), dp(40)));
+      card.addView(bottom);
+    }
     int columns = getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2;
     int tileSize =
         (getResources().getConfiguration().screenWidthDp - 44 - (columns - 1) * 10) / columns;
@@ -2152,6 +2737,8 @@ public final class MainActivity extends Activity
             "Новый чат",
             true,
             () -> {
+              // Не переносим в новый чат неотправленную картинку из прошлого черновика.
+              prefs.edit().remove("chatImage.0").apply();
               chat = 0;
               page = "chat";
               render();
@@ -2251,7 +2838,7 @@ public final class MainActivity extends Activity
                         "Удалить",
                         (d, w) -> {
                           store.deleteChat(id);
-                          prefs.edit().remove("chatDraft." + id).apply();
+                          prefs.edit().remove("chatDraft." + id).remove("chatImage." + id).apply();
                           if (chat == id) {
                             chatInput = null;
                             chat = 0;
@@ -2440,15 +3027,45 @@ public final class MainActivity extends Activity
       content.addView(imagePreview(attached, 120));
       content.addView(
           button(
+              "Повернуть и обрезать",
+              false,
+              () -> {
+                if (ChatRunner.running != 0) {
+                  toast("Дождитесь завершения анализа");
+                  return;
+                }
+                long chatId = chat;
+                showImageEditor(
+                    attached,
+                    edited -> {
+                      String key = "chatImage." + chatId;
+                      if (!attached.equals(prefs.getString(key, ""))) {
+                        releaseImage(edited, "");
+                        return;
+                      }
+                      prefs.edit().putString(key, edited).apply();
+                      releaseImage(attached, edited);
+                      if (page.equals("chat") && chat == chatId) {
+                        stash();
+                        render();
+                      }
+                    });
+              }));
+      gap(content, 6);
+      content.addView(
+          button(
               "Убрать изображение",
               false,
               () -> {
-                if (ChatRunner.running == chat) {
+                // У нового чата chat == 0, как и у ChatRunner.running в покое: без проверки на ноль
+                // кнопка никогда не срабатывала.
+                if (ChatRunner.running != 0 && ChatRunner.running == chat) {
                   toast("Дождитесь завершения анализа");
                   return;
                 }
                 stash();
                 prefs.edit().remove("chatImage." + chat).apply();
+                releaseImage(attached, "");
                 render();
               }));
       secondary(
@@ -2680,20 +3297,190 @@ public final class MainActivity extends Activity
   }
 
   private View imagePreview(String name, int height) {
+    return imagePreview(name, height, List.of(name));
+  }
+
+  /** Предпросмотр грузится в фоне; нажатие открывает просмотр на весь экран со всеми картинками. */
+  private View imagePreview(String name, int height, List<String> all) {
     ImageView preview = new ImageView(this);
     preview.setAdjustViewBounds(true);
     preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-    preview.setContentDescription("Прикреплённое изображение");
-    try {
-      BitmapFactory.Options options = new BitmapFactory.Options();
-      options.inSampleSize = 2;
-      preview.setImageBitmap(
-          BitmapFactory.decodeFile(ImageFiles.file(this, name).getPath(), options));
-    } catch (Exception e) {
-      preview.setContentDescription("Изображение недоступно");
-    }
+    preview.setContentDescription("Прикреплённое изображение. Нажмите, чтобы открыть на весь экран");
+    preview.setBackground(shape(LIME, 10));
     preview.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(height)));
+    preview.setOnClickListener(
+        v -> {
+          buzz(0);
+          showImageViewer(all, Math.max(0, all.indexOf(name)));
+        });
+    ImageThumbs.load(this, preview, name, 900);
     return preview;
+  }
+
+  private ViewOutlineProvider rounded(int radius) {
+    return new ViewOutlineProvider() {
+      @Override
+      public void getOutline(View view, Outline outline) {
+        outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(radius));
+      }
+    };
+  }
+
+  private LinearLayout pair(View first, View second) {
+    LinearLayout row = row();
+    LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, -2, 1);
+    left.rightMargin = dp(8);
+    row.addView(first, left);
+    row.addView(second, new LinearLayout.LayoutParams(0, -2, 1));
+    return row;
+  }
+
+  /** Лента миниатюр заметки: нажатие выбирает картинку, к которой относятся кнопки ниже. */
+  private View imageStrip(List<String> images) {
+    HorizontalScrollView scroll = new HorizontalScrollView(this);
+    scroll.setHorizontalScrollBarEnabled(false);
+    LinearLayout strip = row();
+    for (int i = 0; i < images.size(); i++) {
+      int index = i;
+      FrameLayout cell = new FrameLayout(this);
+      cell.setPadding(dp(2), dp(2), dp(2), dp(2));
+      cell.setBackground(shape(i == selectedImage ? GREEN : 0x00000000, 10));
+      ImageView thumb = new ImageView(this);
+      thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+      thumb.setBackground(shape(LIME, 8));
+      thumb.setClipToOutline(true);
+      thumb.setOutlineProvider(rounded(8));
+      ImageThumbs.load(this, thumb, images.get(i), 160);
+      cell.addView(thumb, new FrameLayout.LayoutParams(dp(60), dp(60)));
+      cell.setContentDescription(
+          "Изображение " + (i + 1) + " из " + images.size() + (i == selectedImage ? ", выбрано" : ""));
+      cell.setOnClickListener(
+          v -> {
+            buzz(0);
+            stash();
+            selectedImage = index;
+            render();
+          });
+      LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
+      params.rightMargin = dp(6);
+      strip.addView(cell, params);
+    }
+    scroll.addView(strip);
+    return scroll;
+  }
+
+  private String selectedImageName() {
+    List<String> images = ImageList.parse(noteImage);
+    return images.isEmpty() ? "" : images.get(Math.max(0, Math.min(selectedImage, images.size() - 1)));
+  }
+
+  private void removeSelectedImage() {
+    String before = noteImage;
+    noteImage = ImageList.remove(noteImage, selectedImageName());
+    selectedImage = Math.min(selectedImage, Math.max(0, ImageList.count(noteImage) - 1));
+    stash();
+    releaseImage(before, noteImage);
+    render();
+  }
+
+  private void moveSelectedImage(int delta) {
+    String name = selectedImageName();
+    String moved = ImageList.move(noteImage, name, delta);
+    if (moved.equals(noteImage)) return;
+    noteImage = moved;
+    selectedImage = ImageList.parse(moved).indexOf(name);
+    stash();
+    render();
+  }
+
+  private void editSelectedImage() {
+    if (ImageRunner.running) {
+      toast("Дождитесь завершения анализа");
+      return;
+    }
+    stash();
+    String current = selectedImageName();
+    long noteId = editing;
+    showImageEditor(
+        current,
+        edited -> {
+          // Пока шло сохранение, заметку могли закрыть или картинку убрать.
+          if (!editorActive || editing != noteId || !ImageList.parse(noteImage).contains(current)) {
+            releaseImage(edited, "");
+            return;
+          }
+          String before = noteImage;
+          noteImage = ImageList.replace(noteImage, current, edited);
+          stash();
+          releaseImage(before, noteImage);
+          render();
+        });
+  }
+
+  /** Полноэкранный просмотр: листание кнопками, щипок и двойное касание увеличивают. */
+  private void showImageViewer(List<String> names, int start) {
+    Dialog viewer = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+    FrameLayout frame = new FrameLayout(this);
+    frame.setBackgroundColor(Color.BLACK);
+    ZoomImageView zoom = new ZoomImageView(this);
+    zoom.setContentDescription("Изображение. Щипком можно увеличить, двойное касание — приблизить");
+    frame.addView(zoom, new FrameLayout.LayoutParams(-1, -1));
+    TextView close = text("✕", 22, WHITE);
+    close.setGravity(Gravity.CENTER);
+    close.setBackground(shape(0x66000000, 24));
+    close.setContentDescription("Закрыть");
+    close.setOnClickListener(v -> viewer.dismiss());
+    FrameLayout.LayoutParams closeParams =
+        new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.END);
+    closeParams.topMargin = dp(36);
+    closeParams.rightMargin = dp(16);
+    frame.addView(close, closeParams);
+    int[] at = {Math.max(0, Math.min(start, names.size() - 1))};
+    TextView counter = text("", 15, WHITE);
+    counter.setGravity(Gravity.CENTER);
+    counter.setBackground(shape(0x66000000, 16));
+    counter.setPadding(dp(12), dp(6), dp(12), dp(6));
+    FrameLayout.LayoutParams counterParams =
+        new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+    counterParams.topMargin = dp(44);
+    counterParams.leftMargin = dp(16);
+    counter.setVisibility(names.size() > 1 ? View.VISIBLE : View.GONE);
+    frame.addView(counter, counterParams);
+    Runnable show =
+        () -> {
+          String name = names.get(at[0]);
+          counter.setText((at[0] + 1) + " / " + names.size());
+          ImageThumbs.request(
+              this,
+              name,
+              2000,
+              bitmap -> {
+                if (viewer.isShowing() && names.get(at[0]).equals(name)) zoom.setImageBitmap(bitmap);
+              });
+        };
+    if (names.size() > 1) {
+      for (int direction : new int[] {-1, 1}) {
+        TextView arrow = text(direction < 0 ? "‹" : "›", 30, WHITE);
+        arrow.setGravity(Gravity.CENTER);
+        arrow.setBackground(shape(0x66000000, 24));
+        arrow.setContentDescription(direction < 0 ? "Предыдущее изображение" : "Следующее изображение");
+        arrow.setOnClickListener(
+            v -> {
+              buzz(0);
+              at[0] = (at[0] + direction + names.size()) % names.size();
+              show.run();
+            });
+        frame.addView(
+            arrow,
+            new FrameLayout.LayoutParams(
+                dp(48),
+                dp(48),
+                Gravity.CENTER_VERTICAL | (direction < 0 ? Gravity.START : Gravity.END)));
+      }
+    }
+    viewer.setContentView(frame);
+    show.run();
+    viewer.show();
   }
 
   private void pickImage(boolean forChat) {
@@ -2701,14 +3488,421 @@ public final class MainActivity extends Activity
       toast("Дождитесь завершения анализа");
       return;
     }
+    if (!forChat && ImageList.full(noteImage)) {
+      toast("В заметке не больше " + ImageList.MAX + " изображений. Уберите лишнее.");
+      return;
+    }
     stash();
     pickerPage = forChat ? "chat" : "note";
     pickerTarget = forChat ? chat : editing;
-    startActivityForResult(
-        new Intent(Intent.ACTION_OPEN_DOCUMENT)
-            .addCategory(Intent.CATEGORY_OPENABLE)
-            .setType("image/*"),
-        88);
+    new AlertDialog.Builder(this)
+        .setTitle("Добавить изображение")
+        .setItems(
+            new String[] {"Выбрать из файлов", "Сделать снимок"},
+            (d, which) -> {
+              if (which == 0)
+                startActivityForResult(
+                    new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                        .addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("image/*"),
+                    88);
+              else takePhoto();
+            })
+        .show();
+  }
+
+  /** Снимок во временный файл приложения; разрешение на камеру не нужно, снимает системное окно. */
+  private void takePhoto() {
+    try {
+      java.io.File dir = new java.io.File(getCacheDir(), "camera");
+      if (!dir.exists() && !dir.mkdirs()) throw new java.io.IOException();
+      java.io.File shot = new java.io.File(dir, "shot-" + System.currentTimeMillis() + ".jpg");
+      prefs.edit().putString("cameraShot", shot.getName()).apply();
+      Uri output =
+          androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".files", shot);
+      Intent camera =
+          new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
+              .putExtra(android.provider.MediaStore.EXTRA_OUTPUT, output)
+              .addFlags(
+                  Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      camera.setClipData(ClipData.newRawUri("", output));
+      startActivityForResult(camera, 90);
+    } catch (ActivityNotFoundException e) {
+      toast("На телефоне нет приложения камеры");
+    } catch (Exception e) {
+      toast("Не удалось открыть камеру");
+    }
+  }
+
+  /** Файл последнего снимка; имя проверяется, чтобы нельзя было выйти за папку снимков. */
+  private java.io.File takeShot() {
+    String name = prefs.getString("cameraShot", "");
+    prefs.edit().remove("cameraShot").apply();
+    if (!name.matches("shot-\\d+\\.jpg")) return null;
+    java.io.File file = new java.io.File(new java.io.File(getCacheDir(), "camera"), name);
+    return file.exists() ? file : null;
+  }
+
+  private TextView darkButton(String label, boolean primary, String description, Runnable click) {
+    TextView b = text(label, 16, WHITE);
+    b.setTypeface(null, Typeface.BOLD);
+    b.setGravity(Gravity.CENTER);
+    b.setMinHeight(dp(48));
+    b.setPadding(dp(12), dp(8), dp(12), dp(8));
+    b.setBackground(ripple(primary ? GREEN : 0x33FFFFFF, 10));
+    b.setFocusable(true);
+    if (description != null) b.setContentDescription(description);
+    b.setOnClickListener(
+        v -> {
+          buzz(0);
+          click.run();
+        });
+    return b;
+  }
+
+  /**
+   * Экран поворота и обрезки. Результат — имя нового файла; исходный файл не меняется. Если
+   * ничего не менялось, {@code done} не вызывается.
+   */
+  private void showImageEditor(String name, java.util.function.Consumer<String> done) {
+    Dialog editor = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+    LinearLayout box = column();
+    box.setBackgroundColor(Color.BLACK);
+    box.setPadding(0, dp(28), 0, dp(12));
+    CropView crop = new CropView(this);
+    crop.setContentDescription("Область обрезки. Перетащите углы или саму рамку");
+    box.addView(crop, new LinearLayout.LayoutParams(-1, 0, 1));
+    Bitmap[] base = {null};
+    int[] turns = {0};
+    Runnable show =
+        () -> {
+          Bitmap source = base[0];
+          if (source == null) return;
+          if (turns[0] == 0) {
+            crop.setBitmap(source);
+            return;
+          }
+          Matrix matrix = new Matrix();
+          matrix.postRotate(90f * turns[0]);
+          crop.setBitmap(
+              Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true));
+        };
+    LinearLayout tools = row();
+    tools.setPadding(dp(12), dp(10), dp(12), 0);
+    LinearLayout.LayoutParams weight = new LinearLayout.LayoutParams(0, -2, 1);
+    weight.rightMargin = dp(8);
+    tools.addView(
+        darkButton(
+            "⟲",
+            false,
+            "Повернуть влево",
+            () -> {
+              turns[0] = CropMath.turns(turns[0] - 1);
+              show.run();
+            }),
+        weight);
+    tools.addView(
+        darkButton(
+            "⟳",
+            false,
+            "Повернуть вправо",
+            () -> {
+              turns[0] = CropMath.turns(turns[0] + 1);
+              show.run();
+            }),
+        weight);
+    tools.addView(
+        darkButton(
+            "Сбросить",
+            false,
+            null,
+            () -> {
+              turns[0] = 0;
+              show.run();
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    box.addView(tools);
+    LinearLayout actions = row();
+    actions.setPadding(dp(12), dp(10), dp(12), 0);
+    actions.addView(darkButton("Отмена", false, null, editor::dismiss), weight);
+    actions.addView(
+        darkButton(
+            "Готово",
+            true,
+            null,
+            () -> {
+              if (base[0] == null) return;
+              float[] fractions = crop.fractions();
+              int quarterTurns = CropMath.turns(turns[0]);
+              editor.dismiss();
+              if (quarterTurns == 0 && CropMath.isFull(fractions)) return;
+              toast("Сохраняю…");
+              io.execute(
+                  () -> {
+                    try {
+                      String edited =
+                          ImageFiles.edit(getApplicationContext(), name, quarterTurns, fractions);
+                      runOnUiThread(
+                          () -> {
+                            if (!isDestroyed()) done.accept(edited);
+                          });
+                    } catch (Exception | OutOfMemoryError e) {
+                      runOnUiThread(
+                          () -> {
+                            if (!isDestroyed()) toast("Не удалось изменить изображение");
+                          });
+                    }
+                  });
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    box.addView(actions);
+    editor.setContentView(box);
+    ImageThumbs.request(
+        this,
+        name,
+        1600,
+        bitmap -> {
+          if (!editor.isShowing()) return;
+          base[0] = bitmap;
+          show.run();
+        });
+    editor.show();
+  }
+
+  /** «Поделиться» из другого приложения: сохраняем заметку сразу и открываем её для правки. */
+  private void handleShare(Intent intent) {
+    CharSequence text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
+    Uri stream =
+        Build.VERSION.SDK_INT >= 33
+            ? intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class)
+            : intent.getParcelableExtra(Intent.EXTRA_STREAM);
+    boolean image = ShareParser.isImage(intent.getType()) && stream != null;
+    String[] parts =
+        ShareParser.note(
+            intent.getStringExtra(Intent.EXTRA_SUBJECT),
+            text == null ? null : text.toString(),
+            image);
+    // Повторный разбор того же intent при пересоздании экрана не нужен.
+    setIntent(new Intent(this, MainActivity.class));
+    if (parts == null) {
+      toast("В этом содержимом нет текста или картинки для заметки");
+      return;
+    }
+    if (!image && !LocalLlm.enabled(this)) {
+      List<String> links = YoutubeLink.all(text == null ? "" : text.toString());
+      if (!links.isEmpty()) {
+        offerVideoSummary(links, () -> saveSharedNote(parts, false, null), null);
+        return;
+      }
+    }
+    saveSharedNote(parts, image, stream);
+  }
+
+  private void saveSharedNote(String[] parts, boolean image, Uri stream) {
+    toast("Сохраняю заметку…");
+    io.execute(
+        () -> {
+          try {
+            String file = image ? ImageFiles.importImage(getApplicationContext(), stream) : "";
+            long id;
+            try (Store saver = new Store(getApplicationContext())) {
+              id = saver.save(0, parts[0], parts[1], 0);
+              if (!file.isEmpty()) saver.image(id, file);
+            }
+            BackgroundAnalysis.enqueue(getApplicationContext());
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  tab = 0;
+                  openNote(id);
+                  toast("Заметка сохранена");
+                });
+          } catch (Exception | OutOfMemoryError e) {
+            runOnUiThread(
+                () -> {
+                  if (!isDestroyed()) toast("Не удалось сохранить. Картинка должна быть до 25 МБ.");
+                });
+          }
+        });
+  }
+
+  private String videoModel() {
+    String model = prefs.getString("videoModel", "").trim();
+    return model.isEmpty() ? VideoAnalysis.DEFAULT_MODEL : model;
+  }
+
+  /**
+   * Предлагает сделать сводку по ссылкам на видео. {@code keep} сохраняет их как обычную заметку,
+   * {@code started} вызывается после запуска (например, очистить поле ввода).
+   */
+  private void offerVideoSummary(List<String> links, Runnable keep, Runnable started) {
+    if (VideoRunner.running) {
+      toast("Сводка видео уже готовится. Подождите её завершения.");
+      return;
+    }
+    String key;
+    try {
+      key = Secrets.read(this);
+    } catch (Exception e) {
+      key = "";
+    }
+    if (key.isEmpty()) {
+      new AlertDialog.Builder(this)
+          .setTitle("Подключите Polza.AI")
+          .setMessage(
+              "Сводку видео делает модель Polza.AI. Укажите API-ключ в настройках или сохраните"
+                  + " ссылку как обычную заметку.")
+          .setNeutralButton("Отмена", null)
+          .setNegativeButton("Сохранить как есть", (d, w) -> keep.run())
+          .setPositiveButton("Настройки", (d, w) -> navigate(3))
+          .show();
+      return;
+    }
+    final String apiKey = key, model = videoModel();
+    new AlertDialog.Builder(this)
+        .setTitle(links.size() == 1 ? "Сделать сводку видео?" : "Сделать сводки видео?")
+        .setMessage(
+            (links.size() == 1
+                    ? "Ссылка на видео будет отправлена в Polza.AI, и модель "
+                    : "Ссылок на видео: " + links.size() + ", каждая — отдельный запрос. Модель ")
+                + model
+                + " посмотрит ролик. Запрос оплачивается с вашего баланса Polza.AI, цена растёт с"
+                + " длиной видео. Ориентир: ролик на 10 минут обошёлся примерно в 2 ₽ на "
+                + VideoAnalysis.DEFAULT_MODEL
+                + ". Результат появится отдельной заметкой; повтор после ошибки — только вручную.")
+        .setNeutralButton("Отмена", null)
+        .setNegativeButton("Сохранить как есть", (d, w) -> keep.run())
+        .setPositiveButton(
+            "Сделать сводку",
+            (d, w) -> {
+              if (VideoRunner.start(this, links, apiKey, model)) {
+                if (started != null) started.run();
+                toast("Видео отправлено на анализ. Это может занять до минуты.");
+              }
+            })
+        .show();
+  }
+
+  @Override
+  public void videoFinished() {
+    if (isDestroyed() || isFinishing() || VideoRunner.running) return;
+    VideoRunner.Outcome outcome = VideoRunner.take();
+    if (outcome.empty()) return;
+    boolean idle = ("home".equals(page) || "notes".equals(page)) && !editorActive;
+    if (outcome.merged > 0 || !outcome.mergeError.isEmpty()) {
+      // Закончилось объединение с общей заметкой.
+      if (!outcome.mergeError.isEmpty()) {
+        new AlertDialog.Builder(this)
+            .setTitle("Объединить не удалось")
+            .setMessage(outcome.mergeError)
+            .setPositiveButton("Понятно", null)
+            .show();
+      } else {
+        toast("Видео добавлено в общую заметку");
+      }
+      if (outcome.merged > 0) folderQueue.add(outcome.merged);
+      boolean asking = askNext();
+      if (outcome.merged > 0 && !asking && idle) {
+        tab = 0;
+        openNote(outcome.merged);
+      } else if ("notes".equals(page)) {
+        render();
+      }
+      return;
+    }
+    int made = outcome.created.size();
+    if (!outcome.error.isEmpty()) {
+      new AlertDialog.Builder(this)
+          .setTitle("Сводка видео не готова")
+          .setMessage(
+              (made > 0 ? "Готово заметок: " + made + ".\n\n" : "") + outcome.error)
+          .setPositiveButton("Понятно", null)
+          .show();
+    } else {
+      mergeQueue.addAll(outcome.created);
+      folderQueue.addAll(outcome.created);
+    }
+    long open = made == 1 ? outcome.created.get(0) : 0;
+    if (made == 0 && outcome.existing.size() == 1 && outcome.error.isEmpty())
+      open = outcome.existing.get(0);
+    if (outcome.error.isEmpty()) {
+      if (made > 1) toast("Готово сводок: " + made);
+      else if (made == 1) toast("Сводка видео готова");
+      else toast("Это видео уже есть в заметках");
+    }
+    boolean asking = outcome.error.isEmpty() && askNext();
+    if (open > 0 && idle && !asking && outcome.error.isEmpty()) {
+      tab = 0;
+      openNote(open);
+    } else if ("notes".equals(page)) {
+      render();
+    }
+  }
+
+  private final ArrayDeque<Long> mergeQueue = new ArrayDeque<>();
+  private boolean mergeAsking;
+
+  /**
+   * Предлагает добавить свежую сводку в заметку по той же теме. Идёт по очереди только что
+   * созданных заметок; true — окно показано и очередь продолжится после ответа.
+   */
+  private boolean askNextMerge() {
+    if (mergeAsking || VideoRunner.running || isDestroyed() || isFinishing()) return mergeAsking;
+    while (!mergeQueue.isEmpty()) {
+      Note fresh = store.note(mergeQueue.poll());
+      if (fresh == null) continue;
+      Note target = VideoMerge.best(fresh, store.videoNotes());
+      if (target == null) continue;
+      mergeAsking = true;
+      Runnable decline =
+          () -> {
+            mergeAsking = false;
+            askNext();
+          };
+      new AlertDialog.Builder(this)
+          .setTitle("Добавить в общую заметку?")
+          .setMessage(
+              "Видео «"
+                  + fresh.title
+                  + "» похоже на тему заметки «"
+                  + target.title
+                  + "». Добавить его отдельным разделом туда и обновить общую сводку? Нужен ещё"
+                  + " один небольшой платный запрос (только текст, без видео). Отдельная заметка"
+                  + " о видео после этого удаляется.")
+          .setNegativeButton("Оставить отдельно", (d, w) -> decline.run())
+          .setPositiveButton(
+              "Объединить",
+              (d, w) -> {
+                mergeAsking = false;
+                startMerge(fresh, target, decline);
+              })
+          .setOnCancelListener(d -> decline.run())
+          .show();
+      return true;
+    }
+    return false;
+  }
+
+  private void startMerge(Note fresh, Note target, Runnable fallback) {
+    if (editorActive && (editing == fresh.id || editing == target.id)) {
+      toast("Закройте открытую заметку и повторите объединение вручную.");
+      fallback.run();
+      return;
+    }
+    String key;
+    try {
+      key = Secrets.read(this);
+    } catch (Exception e) {
+      key = "";
+    }
+    if (key.isEmpty()) {
+      toast("Не удалось прочитать API-ключ");
+      fallback.run();
+      return;
+    }
+    if (VideoRunner.merge(this, fresh.id, target.id, key, videoModel()))
+      toast("Объединяю видео в одну заметку…");
+    else fallback.run();
   }
 
   private void analyzeNoteImage() {
@@ -2722,6 +3916,7 @@ public final class MainActivity extends Activity
     }
     if (!persistEditedNote()) return;
     stash();
+    String image = selectedImageName();
     try {
       String key = Secrets.read(this), model = prefs.getString("model", "");
       if (key.isEmpty() || model.isEmpty()) {
@@ -2738,7 +3933,7 @@ public final class MainActivity extends Activity
           .setPositiveButton(
               "Проанализировать",
               (d, w) -> {
-                if (ImageRunner.start(this, editing, key, model, noteImage))
+                if (ImageRunner.start(this, editing, key, model, image))
                   toast("Изображение отправлено на анализ");
               })
           .show();
@@ -2747,9 +3942,83 @@ public final class MainActivity extends Activity
     }
   }
 
+  /** Описывает выбранную картинку и дописывает текст в конец этой заметки, ничего не сохраняя. */
+  private void describeNoteImage() {
+    if (LocalLlm.enabled(this)) {
+      toast("Картинки пока доступны только через Polza.AI. Переключите режим в настройках.");
+      return;
+    }
+    if (ImageRunner.running) {
+      toast("Изображение уже анализируется");
+      return;
+    }
+    stash();
+    String image = selectedImageName();
+    long noteId = editing;
+    try {
+      String key = Secrets.read(this), model = prefs.getString("model", "");
+      if (key.isEmpty() || model.isEmpty()) {
+        toast("Сначала сохраните API-ключ и модель с поддержкой изображений в настройках");
+        return;
+      }
+      new AlertDialog.Builder(this)
+          .setTitle("Описать изображение?")
+          .setMessage(
+              "Картинка будет отправлена в Polza.AI и выбранную модель. С вашего баланса спишется"
+                  + " стоимость анализа. Описание добавится в конец этой заметки; проверьте его"
+                  + " и сохраните заметку.")
+          .setNegativeButton("Отмена", null)
+          .setPositiveButton(
+              "Описать",
+              (d, w) -> {
+                if (ImageRunner.describe(this, noteId, key, model, image))
+                  toast("Изображение отправлено на описание");
+              })
+          .show();
+    } catch (Exception e) {
+      toast("Не удалось прочитать API-ключ");
+    }
+  }
+
+  /**
+   * Дописывает описание в конец заметки. Модель получила только картинку, а не текст заметки,
+   * поэтому описание не зависит от версии текста. Если заметку уже закрыли, текст ждёт в черновике.
+   */
+  private void applyDescription(long origin, String title, String description) {
+    if (editorActive && editing == origin && titleField != null && bodyField != null) {
+      String body = bodyField.getText().toString().trim();
+      boolean blank = body.isEmpty() && titleField.getText().toString().trim().isEmpty();
+      bodyField.setText(body.isEmpty() ? description : body + "\n\n" + description);
+      if (blank) titleField.setText(title);
+      stash();
+      toast("Описание добавлено в заметку. Проверьте и сохраните её.");
+      return;
+    }
+    String draft = "draft." + origin + ".";
+    Note saved = origin > 0 ? store.note(origin) : null;
+    String body = prefs.getString(draft + "body", saved == null ? "" : saved.body).trim();
+    String heading = prefs.getString(draft + "title", saved == null ? "" : saved.title).trim();
+    prefs
+        .edit()
+        .putString(draft + "body", body.isEmpty() ? description : body + "\n\n" + description)
+        .putString(draft + "title", body.isEmpty() && heading.isEmpty() ? title : heading)
+        .apply();
+    toast("Описание готово. Откройте заметку, чтобы проверить и сохранить.");
+  }
+
   @Override
   public void imageFinished() {
     if (isDestroyed() || isFinishing()) return;
+    String described = ImageRunner.describeText;
+    if (!described.isEmpty()) {
+      String heading = ImageRunner.describeTitle;
+      long origin = ImageRunner.source;
+      ImageRunner.describeText = "";
+      ImageRunner.describeTitle = "";
+      ImageRunner.describeImage = "";
+      applyDescription(origin, heading, described);
+      return;
+    }
     long result = ImageRunner.note;
     String error = ImageRunner.error;
     if (result > 0) {
@@ -2771,122 +4040,439 @@ public final class MainActivity extends Activity
     }
   }
 
+  private LinearLayout reliabilityBox;
+
+  /** Ставит будильники будущих напоминаний и показывает пропущенные за время простоя. */
+  private void restoreReminders() {
+    io.execute(
+        () -> {
+          try (Store reminders = new Store(getApplicationContext())) {
+            List<Note> notes = reminders.notes();
+            for (Note n : notes)
+              if (n.reminder > System.currentTimeMillis())
+                Reminders.schedule(getApplicationContext(), n);
+            Reminders.restoreSnoozed(getApplicationContext());
+            Reminders.scheduleDigest(getApplicationContext());
+            Reminders.deliverMissed(getApplicationContext(), notes);
+          }
+        });
+  }
+
+  private void statusRow(LinearLayout box, boolean ok, String message, String action, Runnable fix) {
+    TextView row = text((ok ? "✓  " : "!  ") + message, 14, ok ? GREEN : RED);
+    row.setLineSpacing(dp(3), 1);
+    box.addView(row);
+    if (!ok && fix != null) {
+      gap(box, 6);
+      box.addView(button(action, false, fix));
+    }
+    gap(box, 12);
+  }
+
+  /** Блок «всё ли настроено для напоминаний»; пересобирается при возврате из системных настроек. */
+  private void fillReliability(LinearLayout box) {
+    box.removeAllViews();
+    boolean notifications = Reminders.notificationsAllowed(this);
+    statusRow(
+        box,
+        notifications,
+        notifications
+            ? "Уведомления разрешены"
+            : "Уведомления выключены — напоминания не придут",
+        "Включить уведомления",
+        () -> {
+          boolean asked = prefs.getBoolean("notificationsAsked", false);
+          if (Build.VERSION.SDK_INT >= 33
+              && !asked
+              && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                  != PackageManager.PERMISSION_GRANTED) {
+            prefs.edit().putBoolean("notificationsAsked", true).apply();
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
+            return;
+          }
+          startActivity(
+              new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                  .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()));
+        });
+    if (Build.VERSION.SDK_INT >= 31) {
+      boolean exact = Reminders.exactAllowed(this);
+      statusRow(
+          box,
+          exact,
+          exact
+              ? "Точное время напоминаний включено"
+              : "Точные будильники выключены — напоминания могут опаздывать на несколько минут",
+          "Разрешить точные будильники",
+          () ->
+              startActivity(
+                  new Intent(
+                          android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                          Uri.parse("package:" + getPackageName()))));
+    }
+    boolean battery = Reminders.batteryUnrestricted(this);
+    statusRow(
+        box,
+        battery,
+        battery
+            ? "Экономия батареи не ограничивает приложение"
+            : "Экономия батареи может задерживать напоминания. Если они опаздывают, снимите"
+                + " ограничение",
+        "Настроить батарею",
+        () ->
+            startActivity(
+                new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)));
+  }
+
+  // ===== Настройки: хаб и четыре подэкрана. Изменения применяются сразу, кнопки «Сохранить» нет. =====
+
+  private static final String[] LEAD_LABELS = {
+    "В момент события",
+    "За 5 минут",
+    "За 10 минут",
+    "За 15 минут",
+    "За 30 минут",
+    "За 1 час",
+    "За 2 часа",
+    "За 1 день"
+  };
+  private static final int MODE_POLZA = 0, MODE_NANO = 1, MODE_GGUF = 2;
+  private EditText keyField, modelField;
+  private boolean credentialsDirty, advancedOpen;
+  private final Handler saveHandler = new Handler(Looper.getMainLooper());
+  private final Runnable saveCredentials = this::flushCredentials;
+
+  private boolean isSettings() {
+    return page.startsWith("settings");
+  }
+
+  private void openSettings(String target) {
+    flushCredentials();
+    hideKeyboard();
+    page = target;
+    render();
+  }
+
+  /** Ключ и модель сохраняются через паузу после ввода, при уходе с экрана и при сворачивании. */
+  private void scheduleCredentials() {
+    credentialsDirty = true;
+    saveHandler.removeCallbacks(saveCredentials);
+    saveHandler.postDelayed(saveCredentials, 700);
+  }
+
+  private void flushCredentials() {
+    saveHandler.removeCallbacks(saveCredentials);
+    if (!credentialsDirty || keyField == null || modelField == null) return;
+    credentialsDirty = false;
+    try {
+      Secrets.save(this, keyField.getText().toString().trim());
+      prefs.edit().putString("model", modelField.getText().toString().trim()).apply();
+    } catch (Exception e) {
+      toast("Не удалось безопасно сохранить ключ");
+    }
+  }
+
+  private boolean credentialsReady() {
+    try {
+      return !Secrets.read(this).isEmpty() && !prefs.getString("model", "").trim().isEmpty();
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  private int aiMode() {
+    return !LocalLlm.enabled(this) ? MODE_POLZA : LocalLlm.aicore(this) ? MODE_NANO : MODE_GGUF;
+  }
+
+  private void applyBackground() {
+    BackgroundAnalysis.configure(this);
+    if (prefs.getBoolean("backgroundAi", false) || prefs.getBoolean("managerAi", false))
+      BackgroundAnalysis.enqueue(this);
+  }
+
+  private void askNotificationPermission() {
+    if (Build.VERSION.SDK_INT >= 33
+        && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED)
+      requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
+  }
+
+  private void setAiMode(int mode) {
+    if (mode == aiMode()) return;
+    flushCredentials();
+    if (mode == MODE_GGUF && !LocalLlm.hasModel(this)) {
+      toast("Выберите файл GGUF-модели");
+      importGguf();
+      return;
+    }
+    SharedPreferences.Editor edit = prefs.edit().putBoolean("localLlm", mode != MODE_POLZA);
+    if (mode != MODE_POLZA) edit.putString("localEngine", mode == MODE_NANO ? "aicore" : "gguf");
+    edit.apply();
+    applyBackground();
+    render();
+  }
+
+  private void importGguf() {
+    if (LocalLlm.busy()) {
+      toast("Дождитесь завершения локального ответа");
+      return;
+    }
+    startActivityForResult(
+        new Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*"),
+        89);
+  }
+
+  private void deleteGguf() {
+    if (LocalLlm.busy()) {
+      toast("Сначала остановите локальный ответ");
+      return;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Удалить GGUF с устройства?")
+        .setMessage(
+            "Будет удалена только копия модели в приложении. Исходный файл и заметки сохранятся.")
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton(
+            "Удалить",
+            (d, w) -> {
+              if (LocalLlm.busy()) {
+                toast("Локальный движок занят");
+                return;
+              }
+              if (LocalLlm.model(this).delete()) {
+                prefs.edit().remove("localModelName").putBoolean("localLlm", false).apply();
+                applyBackground();
+                toast("Модель удалена. Включён режим Polza.AI.");
+                render();
+              } else toast("Нет модели для удаления");
+            })
+        .show();
+  }
+
+  private void onPick(Spinner spinner, java.util.function.IntConsumer pick) {
+    int[] shown = {spinner.getSelectedItemPosition()};
+    spinner.setOnItemSelectedListener(
+        new AdapterView.OnItemSelectedListener() {
+          @Override
+          public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+            if (position == shown[0]) return;
+            shown[0] = position;
+            buzz(0);
+            pick.accept(position);
+          }
+
+          @Override
+          public void onNothingSelected(AdapterView<?> parent) {}
+        });
+  }
+
+  private Switch toggle(String label, boolean value) {
+    Switch s = new Switch(this);
+    s.setText(label);
+    s.setTextColor(INK);
+    s.setMinHeight(dp(52));
+    s.setChecked(value);
+    return s;
+  }
+
+  /** Длинное пояснение прячется за ссылкой «Подробнее», чтобы экран оставался коротким. */
+  private TextView infoLink(String title, String message) {
+    TextView link = text("Подробнее", 13, GREEN);
+    link.setTypeface(null, Typeface.BOLD);
+    link.setPadding(0, dp(10), dp(16), dp(10));
+    link.setOnClickListener(
+        v ->
+            new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("Понятно", null)
+                .show());
+    return link;
+  }
+
+  private void subHeader(String title) {
+    content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
+    gap(content, 10);
+    heading(title, "");
+  }
+
+  private void settingsRow(String title, String summary, String target) {
+    LinearLayout row = row();
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    pad(row, 16);
+    row.setBackground(ripple(LIME, 12));
+    row.setClickable(true);
+    row.setFocusable(true);
+    LinearLayout labels = column();
+    TextView head = text(title, 17, INK);
+    head.setTypeface(null, Typeface.BOLD);
+    labels.addView(head);
+    TextView detail = text(summary, 13, MUTED);
+    detail.setLineSpacing(dp(2), 1);
+    labels.addView(detail);
+    row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+    row.addView(text("›", 26, MUTED));
+    row.setContentDescription(title + ". " + summary);
+    row.setOnClickListener(
+        v -> {
+          buzz(0);
+          openSettings(target);
+        });
+    content.addView(row, new LinearLayout.LayoutParams(-1, -2));
+    gap(content, 10);
+  }
+
+  private String aiSummary() {
+    int mode = aiMode();
+    if (mode == MODE_NANO) return "Gemini Nano на телефоне";
+    if (mode == MODE_GGUF)
+      return "GGUF · " + prefs.getString("localModelName", "model.gguf");
+    String model = prefs.getString("model", "").trim();
+    return "Polza.AI · "
+        + (model.isEmpty() ? "модель не выбрана" : model)
+        + (credentialsReady() || model.isEmpty() ? "" : " · нет ключа");
+  }
+
+  private String reminderSummary() {
+    if (!Reminders.notificationsAllowed(this)) return "Уведомления выключены — напоминания не придут";
+    if (Build.VERSION.SDK_INT >= 31 && !Reminders.exactAllowed(this))
+      return "Время может быть неточным";
+    int lead = Reminders.leadMinutes(this);
+    String digest =
+        Reminders.digestEnabled(this)
+            ? String.format(
+                Locale.US,
+                " · сводка в %02d:%02d",
+                Reminders.digestMinutes(this) / 60,
+                Reminders.digestMinutes(this) % 60)
+            : "";
+    for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
+      if (Reminders.LEAD_MINUTES[i] == lead)
+        return "Всё работает · " + LEAD_LABELS[i].toLowerCase(new Locale("ru")) + digest;
+    return "Всё работает" + digest;
+  }
+
+  private String assistantSummary() {
+    boolean background = prefs.getBoolean("backgroundAi", false),
+        manager = prefs.getBoolean("managerAi", false);
+    if (!background && !manager) return "Выключен";
+    String on =
+        background && manager ? "Фоновый помощник и менеджер" : background ? "Фоновый помощник" : "Менеджер";
+    return LocalLlm.cloudBackground(this)
+        ? on + " включены"
+        : on + " · на паузе, пока выбран GGUF";
+  }
+
+  // ---- Хаб ----
+
   private void settings() {
     content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 10);
     heading("Настройки", "");
-    section("ИИ на телефоне", false);
-    Switch local = new Switch(this);
-    local.setText(R.string.local_gguf);
-    local.setTextColor(INK);
-    local.setMinHeight(dp(52));
-    local.setChecked(LocalLlm.enabled(this));
-    local.setOnCheckedChangeListener((v, checked) -> buzz(0));
-    content.addView(local);
-    gap(content, 8);
-    secondary(
-        content,
-        "Текстовый ИИ на телефоне, без Polza.AI. ARM64, CPU, контекст 4096 токенов, ответ до 256"
-            + " токенов. Начните с небольшой instruct-модели 0.5–1.5B в Q4 до 2 ГБ. Понадобятся"
-            + " свободная память и место для копии файла. Картинки и фоновые проверки в этом режиме"
-            + " пока недоступны.");
-    gap(content, 10);
-    secondary(
-        content,
-        LocalLlm.hasModel(this)
-            ? "Модель: "
-                + prefs.getString("localModelName", "model.gguf")
-                + " ("
-                + (LocalLlm.model(this).length() / 1024 / 1024)
-                + " МБ)"
-            : "GGUF-модель не выбрана");
-    gap(content, 10);
-    content.addView(
-        button(
-            "Импортировать GGUF",
-            false,
-            () -> {
-              if (LocalLlm.busy()) {
-                toast("Дождитесь завершения локального ответа");
-                return;
-              }
-              startActivityForResult(
-                  new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                      .addCategory(Intent.CATEGORY_OPENABLE)
-                      .setType("*/*"),
-                  89);
-            }));
-    gap(content, 8);
-    content.addView(
-        button(
-            "Удалить локальную модель",
-            false,
-            () -> {
-              if (LocalLlm.busy()) {
-                toast("Сначала остановите локальный ответ");
-                return;
-              }
-              new AlertDialog.Builder(this)
-                  .setTitle("Удалить GGUF с устройства?")
-                  .setMessage(
-                      "Будет удалена только копия модели в приложении. Исходный файл и заметки"
-                          + " сохранятся.")
-                  .setNegativeButton("Отмена", null)
-                  .setPositiveButton(
-                      "Удалить",
-                      (d, w) -> {
-                        if (LocalLlm.busy()) {
-                          toast("Локальный движок занят");
-                          return;
-                        }
-                        if (LocalLlm.model(this).delete()) {
-                          prefs.edit().remove("localModelName").apply();
-                          toast("Модель удалена");
-                          render();
-                        } else toast("Нет модели для удаления");
-                      })
-                  .show();
-            }));
-    gap(content, 16);
-    Switch aicore = new Switch(this);
-    aicore.setText(R.string.local_aicore);
-    aicore.setTextColor(INK);
-    aicore.setMinHeight(dp(52));
-    aicore.setChecked(LocalLlm.enabled(this) && LocalLlm.aicore(this));
-    // Gemini Nano — это и есть локальный режим: отдельно включать второй переключатель не нужно.
-    aicore.setOnCheckedChangeListener(
-        (button, checked) -> {
-          if (checked) local.setChecked(true);
+    gap(content, 6);
+    settingsRow("ИИ", aiSummary(), "settings.ai");
+    settingsRow("Напоминания и уведомления", reminderSummary(), "settings.reminders");
+    settingsRow("Помощник заметок", assistantSummary(), "settings.assistant");
+    settingsRow(
+        "Приложение",
+        "Внешний вид, данные · версия " + appVersion(),
+        "settings.app");
+  }
+
+  // ---- ИИ ----
+
+  private void modeChoice(int mode, String title, String hint, int selected) {
+    boolean on = mode == selected;
+    LinearLayout row = row();
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    pad(row, 14);
+    row.setBackground(ripple(on ? LIME : WHITE, 12));
+    row.setClickable(true);
+    row.setFocusable(true);
+    TextView mark = text(on ? "●" : "○", 20, on ? GREEN : MUTED);
+    mark.setPadding(0, 0, dp(12), 0);
+    row.addView(mark);
+    LinearLayout labels = column();
+    TextView head = text(title, 16, INK);
+    head.setTypeface(null, Typeface.BOLD);
+    labels.addView(head);
+    labels.addView(text(hint, 13, MUTED));
+    row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+    row.setContentDescription(title + ". " + hint + (on ? ". Выбрано" : ""));
+    row.setOnClickListener(
+        v -> {
+          buzz(0);
+          setAiMode(mode);
         });
-    local.setOnCheckedChangeListener(
-        (button, checked) -> {
-          if (!checked) aicore.setChecked(false);
-        });
-    content.addView(aicore);
+    content.addView(row, new LinearLayout.LayoutParams(-1, -2));
     gap(content, 8);
-    secondary(
-        content,
-        "Gemini Nano работает на самом телефоне через системный Google AICore: файл модели"
-            + " импортировать не нужно, ключ и сеть не требуются. Нужен поддерживаемый телефон"
-            + " (например, Samsung Galaxy S25), актуальные Google AICore и система, разблокированный"
-            + " экран. Модель отвечает, только пока приложение открыто. Ответ до 256 токенов,"
-            + " запрос ограничен лимитом AICore. Достаточно включить этот переключатель и"
-            + " сохранить настройки: ключ Polza.AI для чата не нужен. GGUF при этом не"
-            + " используется. Фоновые проверки, менеджер и выжимки Gemini Nano не обслуживает:"
-            + " они идут через Polza.AI (для них нужны ключ и модель ниже), чат и поиск остаются"
-            + " на телефоне.");
+  }
+
+  private void settingsAi() {
+    subHeader("ИИ");
+    int mode = aiMode();
+    secondary(content, "Кто отвечает в чате и ищет по заметкам.");
     gap(content, 10);
-    TextView aicoreStatus = secondary(content, "Состояние Gemini Nano не проверено");
-    gap(content, 10);
-    content.addView(
-        button(
-            "Проверить и скачать Gemini Nano",
-            false,
-            () -> checkAiCore(aicoreStatus, true)));
-    // Статус читается из системного AICore без скачивания: уже скачанная модель подхватывается сама.
-    checkAiCore(aicoreStatus, false);
-    section("Polza.AI", true);
+    modeChoice(MODE_POLZA, "Polza.AI", "В облаке. Нужны ключ и модель.", mode);
+    modeChoice(MODE_NANO, "Gemini Nano", "На телефоне через Google AICore. Без ключа.", mode);
+    modeChoice(MODE_GGUF, "Своя модель GGUF", "На телефоне, из файла. Только текст.", mode);
+    gap(content, 8);
+    if (mode == MODE_NANO) {
+      secondary(
+          content,
+          "Нужен поддерживаемый телефон, например Samsung Galaxy S25. Отвечает, пока приложение"
+              + " открыто.");
+      content.addView(
+          infoLink(
+              "Gemini Nano",
+              "Gemini Nano работает на самом телефоне через системный Google AICore: файл модели"
+                  + " импортировать не нужно, ключ и сеть для чата не требуются. Нужны"
+                  + " актуальные Google AICore и система, разблокированный экран. Модель"
+                  + " отвечает, только пока приложение открыто. Ответ до 256 токенов, запрос"
+                  + " ограничен лимитом AICore. Фоновые проверки, менеджер и выжимки Gemini Nano"
+                  + " не обслуживает: они идут через Polza.AI, ключ и модель задаются ниже."));
+      TextView status = secondary(content, "Состояние Gemini Nano не проверено");
+      gap(content, 10);
+      content.addView(
+          button("Проверить и скачать Gemini Nano", false, () -> checkAiCore(status, true)));
+      // Статус читается из системного AICore без скачивания: скачанная модель подхватывается сама.
+      checkAiCore(status, false);
+    }
+    if (mode == MODE_GGUF) {
+      secondary(
+          content,
+          LocalLlm.hasModel(this)
+              ? "Модель: "
+                  + prefs.getString("localModelName", "model.gguf")
+                  + " ("
+                  + (LocalLlm.model(this).length() / 1024 / 1024)
+                  + " МБ)"
+              : "GGUF-модель не выбрана");
+      content.addView(
+          infoLink(
+              "Своя модель GGUF",
+              "Текстовый ИИ на телефоне, без Polza.AI. ARM64, CPU, контекст 4096 токенов, ответ"
+                  + " до 256 токенов. Начните с небольшой instruct-модели 0.5–1.5B в Q4 до 2 ГБ."
+                  + " Понадобятся свободная память и место для копии файла. Картинки и фоновые"
+                  + " проверки в этом режиме недоступны: для них выберите Polza.AI или Gemini"
+                  + " Nano."));
+      content.addView(button("Заменить модель", false, this::importGguf));
+      gap(content, 8);
+      content.addView(button("Удалить модель", false, this::deleteGguf));
+      gap(content, 8);
+      secondary(
+          content,
+          "Фоновые проверки и менеджер при GGUF на паузе. Чтобы они работали, выберите Polza.AI"
+              + " или Gemini Nano.");
+    }
+    if (mode != MODE_GGUF) polzaBlock(mode);
+  }
+
+  private void polzaBlock(int mode) {
+    section(mode == MODE_POLZA ? "Polza.AI" : "Polza.AI для фоновых проверок", true);
     EditText key = input("API-ключ Polza.AI", false);
+    keyField = key;
     key.setInputType(
         android.text.InputType.TYPE_CLASS_TEXT
             | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -2976,11 +4562,14 @@ public final class MainActivity extends Activity
         () -> {
           balance.setText(R.string.polza_balance);
           balanceStatus.setText("Обновите баланс для введённого ключа");
+          scheduleCredentials();
         });
     if (LocalLlm.cloudBackground(this) && !key.getText().toString().trim().isEmpty())
       refresh.post(updateBalance);
     EditText model = input("ID модели, например openai/gpt-4o-mini", false);
     model.setText(prefs.getString("model", ""));
+    modelField = model;
+    watch(model, this::scheduleCredentials);
     content.addView(model);
     gap(content, 10);
     TextView load =
@@ -2990,188 +4579,256 @@ public final class MainActivity extends Activity
             () -> loadModels(key.getText().toString().trim(), model));
     content.addView(load);
     gap(content, 16);
-    secondary(content, "Максимальная длина ответа");
-    Spinner tokens = new Spinner(this);
-    String[] choices = {
-      "Коротко — до 300 токенов", "Обычно — до 600 токенов", "Подробно — до 1200 токенов"
-    };
-    tokens.setAdapter(
-        new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, choices));
-    int current = prefs.getInt("maxTokens", 600);
-    tokens.setSelection(current == 300 ? 0 : current == 1200 ? 2 : 1);
-    tokens.setMinimumHeight(dp(50));
-    content.addView(tokens);
-    gap(content, 12);
-    section("Напоминания", true);
-    Switch large = new Switch(this);
+    if (mode == MODE_POLZA) {
+      secondary(content, "Модель для видео YouTube");
+      EditText videoField = input(VideoAnalysis.DEFAULT_MODEL, false);
+      videoField.setText(prefs.getString("videoModel", ""));
+      watch(
+          videoField,
+          () ->
+              prefs
+                  .edit()
+                  .putString("videoModel", videoField.getText().toString().trim())
+                  .apply());
+      content.addView(videoField);
+      gap(content, 6);
+      secondary(
+          content,
+          "Модель, которая смотрит видео по ссылке, например Gemini. Если пусто, используется "
+              + VideoAnalysis.DEFAULT_MODEL
+              + ". Самые новые модели Polza.AI может потребовать с большим запасом на балансе.");
+      gap(content, 16);
+      TextView more = text((advancedOpen ? "▾  " : "▸  ") + "Дополнительно", 15, GREEN);
+      more.setTypeface(null, Typeface.BOLD);
+      more.setPadding(0, dp(10), 0, dp(10));
+      more.setOnClickListener(
+          v -> {
+            advancedOpen = !advancedOpen;
+            flushCredentials();
+            render();
+          });
+      content.addView(more);
+      if (advancedOpen) {
+        secondary(content, "Максимальная длина ответа");
+        Spinner tokens = new Spinner(this);
+        String[] choices = {
+          "Коротко — до 300 токенов", "Обычно — до 600 токенов", "Подробно — до 1200 токенов"
+        };
+        tokens.setAdapter(
+            new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, choices));
+        int current = prefs.getInt("maxTokens", 600);
+        tokens.setSelection(current == 300 ? 0 : current == 1200 ? 2 : 1);
+        tokens.setMinimumHeight(dp(50));
+        content.addView(tokens);
+        onPick(
+            tokens,
+            position ->
+                prefs.edit().putInt("maxTokens", new int[] {300, 600, 1200}[position]).apply());
+        gap(content, 12);
+        secondary(
+            content,
+            "Экономия без подписки приложения\n\n"
+                + "Локальный поиск по всем заметкам. До 8 фрагментов и 6 последних сообщений на"
+                + " запрос. Повторные одинаковые запросы — из кеша в течение суток. Точная цена"
+                + " зависит от выбранной модели.");
+      }
+    }
+  }
+
+  // ---- Напоминания и уведомления ----
+
+  private void settingsReminders() {
+    subHeader("Напоминания и уведомления");
+    reliabilityBox = column();
+    content.addView(reliabilityBox);
+    fillReliability(reliabilityBox);
     secondary(content, "Напоминать до события");
     Spinner lead = new Spinner(this);
-    String[] leadLabels = {
-      "В момент события",
-      "За 5 минут",
-      "За 10 минут",
-      "За 15 минут",
-      "За 30 минут",
-      "За 1 час",
-      "За 2 часа",
-      "За 1 день"
-    };
     lead.setAdapter(
-        new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, leadLabels));
+        new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, LEAD_LABELS));
     int leadSelection = 0;
     for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
       if (Reminders.LEAD_MINUTES[i] == Reminders.leadMinutes(this)) leadSelection = i;
     lead.setSelection(leadSelection);
     lead.setMinimumHeight(dp(50));
     content.addView(lead);
+    onPick(
+        lead,
+        position -> {
+          prefs.edit().putInt("reminderLead", Reminders.LEAD_MINUTES[position]).apply();
+          // Новый интервал сразу применяется ко всем будущим событиям.
+          restoreReminders();
+        });
+    content.addView(
+        infoLink(
+            "Как работают напоминания",
+            "Интервал применяется ко всем будущим событиям. Если выбранное время уже прошло,"
+                + " напоминание придёт в ближайшее время. Уже доставленные напоминания не"
+                + " повторяются. В уведомлении можно отложить напоминание: на 10 минут, на час"
+                + " или на завтра, 9:00. Если телефон был выключен в нужное время, напоминание"
+                + " придёт как пропущенное при включении или открытии приложения (за последние 7"
+                + " дней). После принудительной остановки приложения откройте его снова."));
+    gap(content, 12);
+    Switch digest = toggle("Утренняя сводка", Reminders.digestEnabled(this));
+    TextView digestTime = button("", false, () -> {});
+    Runnable showDigestTime =
+        () -> {
+          int minutes = Reminders.digestMinutes(this);
+          digestTime.setText(
+              String.format(Locale.US, "Время сводки: %02d:%02d", minutes / 60, minutes % 60));
+          digestTime.setVisibility(digest.isChecked() ? View.VISIBLE : View.GONE);
+        };
+    digest.setOnCheckedChangeListener(
+        (v, checked) -> {
+          buzz(0);
+          prefs.edit().putBoolean("digestOn", checked).apply();
+          Reminders.scheduleDigest(this);
+          if (checked) askNotificationPermission();
+          showDigestTime.run();
+        });
+    digestTime.setOnClickListener(
+        v -> {
+          buzz(0);
+          int minutes = Reminders.digestMinutes(this);
+          new TimePickerDialog(
+                  this,
+                  (tv, hour, minute) -> {
+                    prefs.edit().putInt("digestMinutes", hour * 60 + minute).apply();
+                    Reminders.scheduleDigest(this);
+                    showDigestTime.run();
+                  },
+                  minutes / 60,
+                  minutes % 60,
+                  true)
+              .show();
+        });
+    content.addView(digest);
+    content.addView(digestTime);
+    showDigestTime.run();
     secondary(
         content,
-        "Применяется ко всем будущим событиям. Если выбранное время уже прошло, напоминание придёт"
-            + " в ближайшее время. Уже доставленные напоминания не повторяются.");
-    section("Внешний вид", true);
-    large.setText("Крупный текст заметок");
-    large.setTextColor(INK);
-    large.setMinHeight(dp(52));
-    large.setChecked(prefs.getBoolean("large", false));
-    large.setOnCheckedChangeListener((v, checked) -> buzz(0));
-    content.addView(large);
-    Switch haptics = new Switch(this);
-    haptics.setText("Вибрация в приложении");
-    haptics.setTextColor(INK);
-    haptics.setMinHeight(dp(52));
-    haptics.setChecked(prefs.getBoolean("haptics", true));
-    // Включение сразу показывает отклик, даже пока настройка не сохранена.
-    haptics.setOnCheckedChangeListener((v, checked) -> vibrate(0, checked));
-    content.addView(haptics);
-    secondary(
-        content,
-        "Короткий отклик при нажатиях, переходах между вкладками и сохранении заметки.");
-    section("Помощник заметок", true);
-    Switch background = new Switch(this);
-    background.setText("Фоновый помощник ИИ");
-    background.setTextColor(INK);
-    background.setMinHeight(dp(52));
-    background.setChecked(prefs.getBoolean("backgroundAi", false));
-    background.setOnCheckedChangeListener((v, checked) -> buzz(0));
+        "Одно тихое уведомление утром со списком событий на сегодня. Если событий нет, сводки не"
+            + " будет.");
+    gap(content, 12);
+    content.addView(
+        button(
+            "Проверочное уведомление",
+            false,
+            () -> {
+              if (Reminders.test(this)) toast("Проверочное уведомление отправлено");
+              else toast("Уведомления выключены. Включите их выше.");
+            }));
+    gap(content, 8);
+    content.addView(
+        iconButton(
+            "Каналы и звук в Android",
+            "clock",
+            () ->
+                startActivity(
+                    new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(
+                            android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName()))));
+  }
+
+  // ---- Помощник заметок ----
+
+  private void settingsAssistant() {
+    subHeader("Помощник заметок");
+    Switch background = toggle("Фоновый помощник ИИ", prefs.getBoolean("backgroundAi", false));
+    background.setOnCheckedChangeListener(
+        (v, checked) -> {
+          buzz(0);
+          if (checked && LocalLlm.cloudBackground(this) && !credentialsReady()) {
+            toast("Сначала укажите ключ и модель Polza.AI в разделе «ИИ».");
+            background.setChecked(false);
+            return;
+          }
+          prefs.edit().putBoolean("backgroundAi", checked).apply();
+          applyBackground();
+          if (checked) askNotificationPermission();
+        });
     content.addView(background);
-    Switch manager = new Switch(this);
-    manager.setText(R.string.note_manager);
-    manager.setTextColor(INK);
-    manager.setMinHeight(dp(52));
-    manager.setChecked(prefs.getBoolean("managerAi", false));
+    Switch manager = toggle(getString(R.string.note_manager), prefs.getBoolean("managerAi", false));
     manager.setOnCheckedChangeListener(
         (v, checked) -> {
           buzz(0);
-          if (checked && !prefs.getBoolean("managerAi", false))
-            new AlertDialog.Builder(this)
-                .setTitle("Включить менеджера заметок?")
-                .setMessage(
-                    "Выбранные тексты из всей коллекции будут передаваться в Polza.AI примерно"
-                        + " каждые 6 часов, даже при закрытом приложении. По умолчанию — 4 платных"
-                        + " запроса в сутки; дневной лимит можно снять. До 8 заметок и 12 000"
-                        + " символов на запрос. Изменения — только после подтверждения. Сохраните"
-                        + " настройки для включения.")
-                .setPositiveButton("Согласен", (d, w) -> {})
-                .setNegativeButton("Отмена", (d, w) -> manager.setChecked(false))
-                .setOnCancelListener(d -> manager.setChecked(false))
-                .show();
+          if (!checked) {
+            prefs.edit().putBoolean("managerAi", false).apply();
+            applyBackground();
+            return;
+          }
+          if (prefs.getBoolean("managerAi", false)) return;
+          if (LocalLlm.cloudBackground(this) && !credentialsReady()) {
+            toast("Сначала укажите ключ и модель Polza.AI в разделе «ИИ».");
+            manager.setChecked(false);
+            return;
+          }
+          new AlertDialog.Builder(this)
+              .setTitle("Включить менеджера заметок?")
+              .setMessage(
+                  "Выбранные тексты из всей коллекции будут передаваться в Polza.AI примерно"
+                      + " каждые 6 часов, даже при закрытом приложении. По умолчанию — 4 платных"
+                      + " запроса в сутки; дневной лимит можно снять. До 8 заметок и 12 000"
+                      + " символов на запрос. Изменения — только после подтверждения.")
+              .setPositiveButton(
+                  "Согласен",
+                  (d, w) -> {
+                    prefs.edit().putBoolean("managerAi", true).apply();
+                    applyBackground();
+                    askNotificationPermission();
+                  })
+              .setNegativeButton("Отмена", (d, w) -> manager.setChecked(false))
+              .setOnCancelListener(d -> manager.setChecked(false))
+              .show();
         });
     content.addView(manager);
     secondary(
         content,
-        "Менеджер предлагает объединения, связи, дела и вопросы. Сводка доступна в заметках."
-            + " Уведомления — не чаще раза в сутки.");
-    gap(content, 8);
-    secondary(
-        content,
-        "При включении новые и изменённые заметки передаются в Polza.AI даже при закрытом"
-            + " приложении. По умолчанию до 4 платных пакетов в сутки; дневной лимит можно снять."
-            + " Проверка примерно раз в 6 часов; Android может отложить её. ИИ улучшает"
-            + " автоматические заголовки и предлагает напоминания. События назначаются только после"
-            + " подтверждения.");
-    gap(content, 10);
+        "Предлагает названия, напоминания, связи и объединения. Запросы идут через Polza.AI, по"
+            + " умолчанию до 4 платных в сутки.");
+    content.addView(
+        infoLink(
+            "Как работает помощник",
+            "Менеджер предлагает объединения, связи, дела и вопросы. Сводка доступна в заметках."
+                + " Уведомления — не чаще раза в сутки.\n\n"
+                + "При включении новые и изменённые заметки передаются в Polza.AI даже при"
+                + " закрытом приложении. По умолчанию до 4 платных пакетов в сутки; дневной лимит"
+                + " можно снять. Проверка примерно раз в 6 часов; Android может отложить её. ИИ"
+                + " улучшает автоматические заголовки и предлагает напоминания. События"
+                + " назначаются только после подтверждения.\n\n"
+                + "Ручная проверка запускает названия, напоминания и объединения независимо от"
+                + " переключателей и повторяет записи после ошибок."));
+    gap(content, 6);
     showAnalysisStatus();
     content.addView(quietAction("История проверок", this::showAnalysisLog));
     content.addView(limitButton());
     gap(content, 10);
     content.addView(button("Проверить сейчас", false, this::manualAnalysis));
+  }
+
+  // ---- Приложение ----
+
+  private void settingsApp() {
+    subHeader("Приложение");
+    section("Внешний вид", false);
+    Switch large = toggle("Крупный текст заметок", prefs.getBoolean("large", false));
+    large.setOnCheckedChangeListener(
+        (v, checked) -> {
+          prefs.edit().putBoolean("large", checked).apply();
+          buzz(0);
+        });
+    content.addView(large);
+    Switch haptics = toggle("Вибрация в приложении", prefs.getBoolean("haptics", true));
+    // Включение сразу показывает отклик.
+    haptics.setOnCheckedChangeListener(
+        (v, checked) -> {
+          prefs.edit().putBoolean("haptics", checked).apply();
+          vibrate(0, checked);
+        });
+    content.addView(haptics);
     secondary(
         content,
-        "Ручная проверка запускает названия, напоминания и объединения независимо от фоновых"
-            + " переключателей. Включает повтор записей после ошибок.");
-    gap(content, 8);
-    content.addView(button("Повторить неудачные проверки", false, this::manualAnalysis));
-    gap(content, 12);
-    content.addView(
-        button(
-            "Сохранить настройки",
-            true,
-            () -> {
-              try {
-                if (local.isChecked() && !aicore.isChecked() && !LocalLlm.hasModel(this)) {
-                  toast("Сначала импортируйте GGUF-модель или включите Gemini Nano");
-                  return;
-                }
-                if ((!local.isChecked() || aicore.isChecked())
-                    && (background.isChecked() || manager.isChecked())
-                    && (key.getText().toString().trim().isEmpty()
-                        || model.getText().toString().trim().isEmpty())) {
-                  toast("Для фонового ИИ укажите ключ и модель");
-                  return;
-                }
-                Secrets.save(this, key.getText().toString().trim());
-                prefs
-                    .edit()
-                    .putString("model", model.getText().toString().trim())
-                    .putInt(
-                        "maxTokens", new int[] {300, 600, 1200}[tokens.getSelectedItemPosition()])
-                    .putBoolean("large", large.isChecked())
-                    .putInt("reminderLead", Reminders.LEAD_MINUTES[lead.getSelectedItemPosition()])
-                    .putBoolean("backgroundAi", background.isChecked())
-                    .putBoolean("managerAi", manager.isChecked())
-                    .putBoolean("localLlm", local.isChecked())
-                    .putBoolean("haptics", haptics.isChecked())
-                    .putString("localEngine", aicore.isChecked() ? "aicore" : "gguf")
-                    .apply();
-                BackgroundAnalysis.configure(this);
-                io.execute(
-                    () -> {
-                      try (Store reminders = new Store(getApplicationContext())) {
-                        for (Note n : reminders.notes())
-                          if (n.reminder > System.currentTimeMillis()
-                              && !Reminders.delivered(getApplicationContext(), n))
-                            Reminders.schedule(getApplicationContext(), n);
-                      }
-                    });
-                if (background.isChecked() || manager.isChecked()) {
-                  BackgroundAnalysis.enqueue(this);
-                  if (Build.VERSION.SDK_INT >= 33
-                      && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                          != PackageManager.PERMISSION_GRANTED)
-                    requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
-                }
-                hideKeyboard();
-                toast("Настройки сохранены");
-              } catch (Exception e) {
-                toast("Не удалось безопасно сохранить ключ");
-              }
-            }));
-    section("Уведомления", true);
-    content.addView(
-        iconButton(
-            "Уведомления Android",
-            "clock",
-            () -> {
-              Intent intent =
-                  new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                      .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName());
-              startActivity(intent);
-            }));
-    gap(content, 10);
-    secondary(
-        content,
-        "Напоминания могут приходить с задержкой из-за энергосбережения Android. После"
-            + " принудительной остановки откройте приложение снова.");
+        "Короткий отклик при нажатиях, переходах между вкладками и сохранении заметки.");
     section("Данные", true);
     content.addView(
         button(
@@ -3185,12 +4842,38 @@ public final class MainActivity extends Activity
                         .putExtra(Intent.EXTRA_TITLE, "mimohodom-notes.json"),
                     77)));
     gap(content, 12);
-    secondary(
-        content,
-        "Экономия без подписки приложения\n\n"
-            + "Локальный поиск по всем заметкам. До 8 фрагментов и 6 последних сообщений на запрос."
-            + " Повторные одинаковые запросы — из кеша в течение суток. Точная цена зависит от"
-            + " выбранной модели.");
+    TextView imagesUsage = secondary(content, "");
+    Runnable showUsage =
+        () -> {
+          long[] usage = ImageFiles.usage(this);
+          imagesUsage.setText(
+              usage[0] == 0
+                  ? "Изображения: нет сохранённых файлов"
+                  : "Изображения: "
+                      + ImageCleanup.files((int) usage[0])
+                      + " · "
+                      + ImageCleanup.size(usage[1]));
+        };
+    showUsage.run();
+    gap(content, 8);
+    content.addView(
+        button(
+            "Очистить неиспользуемые изображения",
+            false,
+            () ->
+                io.execute(
+                    () -> {
+                      int removed = ImageFiles.cleanup(getApplicationContext(), 0);
+                      runOnUiThread(
+                          () -> {
+                            if (isDestroyed()) return;
+                            showUsage.run();
+                            toast(
+                                removed == 0
+                                    ? "Лишних файлов нет"
+                                    : "Удалено: " + ImageCleanup.files(removed));
+                          });
+                    })));
     section("О приложении", true);
     secondary(
         content,
@@ -3238,7 +4921,7 @@ public final class MainActivity extends Activity
             List<String> ids = Polza.models(key);
             runOnUiThread(
                 () -> {
-                  if (isDestroyed() || !page.equals("settings")) return;
+                  if (isDestroyed() || !isSettings()) return;
                   LinearLayout dialog = column();
                   pad(dialog, 16);
                   EditText filter = input("Поиск модели", false);
@@ -3305,7 +4988,7 @@ public final class MainActivity extends Activity
                   () -> {
                     if (!isDestroyed()) {
                       toast("GGUF скопирован. Локальный режим включён.");
-                      if (page.equals("settings")) render();
+                      if (isSettings()) render();
                     }
                   });
             } catch (Exception e) {
@@ -3322,23 +5005,58 @@ public final class MainActivity extends Activity
       return;
     }
     if (request == 88 && result == RESULT_OK && data != null && data.getData() != null) {
-      android.net.Uri uri = data.getData();
-      String targetPage = pickerPage;
-      long target = pickerTarget;
+      attachImage(data.getData(), pickerPage, pickerTarget, null);
+      return;
+    }
+    if (request == 90) {
+      java.io.File shot = takeShot();
+      if (result == RESULT_OK && shot != null && shot.length() > 0)
+        attachImage(Uri.fromFile(shot), pickerPage, pickerTarget, shot);
+      else if (shot != null) shot.delete();
+      return;
+    }
+    if (request == 77 && result == RESULT_OK && data != null && data.getData() != null) {
+      exportNotes(data.getData());
+    }
+  }
+
+  /** Сжимает выбранную или снятую картинку и прикрепляет её к заметке или чату. */
+  private void attachImage(Uri uri, String targetPage, long target, java.io.File temporary) {
+    {
       toast("Подготавливаю изображение…");
       io.execute(
           () -> {
             try {
               String imported = ImageFiles.importImage(getApplicationContext(), uri);
-              if (targetPage.equals("chat"))
+              String combined = imported;
+              if (targetPage.equals("chat")) {
+                // В чате картинка одна: новая заменяет прежнюю.
+                String previous = prefs.getString("chatImage." + target, "");
                 prefs.edit().putString("chatImage." + target, imported).apply();
-              else {
-                if (target > 0)
+                ImageFiles.release(getApplicationContext(), previous);
+              } else {
+                // В заметке картинки добавляются в конец списка. Источник правды — черновик, его
+                // редактор ведёт при каждом изменении; без него берём сохранённую заметку.
+                String base = prefs.getString("draft." + target + ".image", null);
+                if (base == null && target > 0)
                   try (Store images = new Store(getApplicationContext())) {
-                    if (images.note(target) != null) images.image(target, imported);
+                    Note existing = images.note(target);
+                    base = existing == null ? "" : existing.image;
                   }
-                prefs.edit().putString("draft." + target + ".image", imported).apply();
+                if (base == null) base = "";
+                combined = ImageList.add(base, imported);
+                if (ImageList.count(combined) == ImageList.count(base)) {
+                  ImageFiles.release(getApplicationContext(), imported);
+                  runOnUiThread(
+                      () -> {
+                        if (!isDestroyed())
+                          toast("В заметке не больше " + ImageList.MAX + " изображений.");
+                      });
+                  return;
+                }
+                prefs.edit().putString("draft." + target + ".image", combined).apply();
               }
+              String result = combined;
               runOnUiThread(
                   () -> {
                     if (isDestroyed()) return;
@@ -3346,7 +5064,8 @@ public final class MainActivity extends Activity
                       stash();
                       render();
                     } else if (targetPage.equals("note") && editorActive && editing == target) {
-                      noteImage = imported;
+                      noteImage = result;
+                      selectedImage = ImageList.count(result) - 1;
                       stash();
                       render();
                     }
@@ -3357,12 +5076,15 @@ public final class MainActivity extends Activity
                     if (!isDestroyed())
                       toast("Не удалось прикрепить изображение. Выберите картинку до 25 МБ.");
                   });
+            } finally {
+              if (temporary != null) temporary.delete();
             }
           });
-      return;
     }
-    if (request == 77 && result == RESULT_OK && data != null && data.getData() != null) {
-      android.net.Uri uri = data.getData();
+  }
+
+  private void exportNotes(Uri uri) {
+    {
       io.execute(
           () -> {
             try (Store exportStore = new Store(getApplicationContext())) {
@@ -3376,10 +5098,18 @@ public final class MainActivity extends Activity
                         .put("created", n.created)
                         .put("updated", n.updated)
                         .put("reminder", n.reminder)
+                        .put("repeat", n.repeat)
+                        .put("lead", n.lead)
+                        .put("folder", n.folder)
                         .put("metadata", Metadata.read(n.metadata)));
+              JSONArray folderList = new JSONArray();
+              for (FolderStore.Folder f : new FolderStore(exportStore).list())
+                folderList.put(
+                    new JSONObject().put("id", f.id).put("name", f.name).put("auto", f.auto));
               JSONObject export =
                   new JSONObject()
-                      .put("version", 3)
+                      .put("version", 4)
+                      .put("folders", folderList)
                       .put("notes", notes)
                       .put("groups", new ManagerStore(exportStore).export("note_groups"))
                       .put("members", new ManagerStore(exportStore).export("note_members"))
@@ -3432,7 +5162,7 @@ public final class MainActivity extends Activity
               String shown = result;
               runOnUiThread(
                   () -> {
-                    if (!isDestroyed() && page.equals("settings")) status.setText(shown);
+                    if (!isDestroyed() && status.isAttachedToWindow()) status.setText(shown);
                   });
             },
             "aicore-check")
@@ -3584,6 +5314,21 @@ public final class MainActivity extends Activity
             c.drawCircle(4, y, .5f, paint);
             c.drawLine(9, y, 21, y, paint);
           }
+        }
+        case "folder" -> {
+          Path outline = new Path();
+          outline.moveTo(3, 6.5f);
+          outline.quadTo(3, 5, 4.5f, 5);
+          outline.lineTo(9, 5);
+          outline.lineTo(11, 7.5f);
+          outline.lineTo(19.5f, 7.5f);
+          outline.quadTo(21, 7.5f, 21, 9);
+          outline.lineTo(21, 18);
+          outline.quadTo(21, 19.5f, 19.5f, 19.5f);
+          outline.lineTo(4.5f, 19.5f);
+          outline.quadTo(3, 19.5f, 3, 18);
+          outline.close();
+          c.drawPath(outline, paint);
         }
         case "trash" -> {
           c.drawLine(4, 6, 20, 6, paint);
