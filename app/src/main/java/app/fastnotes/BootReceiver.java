@@ -20,6 +20,7 @@ public final class BootReceiver extends BroadcastReceiver {
                   if (n.reminder > System.currentTimeMillis()) Reminders.schedule(c, n);
                 Reminders.restoreSnoozed(c);
                 Reminders.scheduleDigest(c);
+                CheckInJob.arm(c);
                 // Напоминания, время которых прошло, пока телефон был выключен.
                 Reminders.deliverMissed(c, notes);
               } finally {

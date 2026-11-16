@@ -283,6 +283,30 @@ public final class PolzaTest {
     check(
         !enriched.text.contains("[[index]]") && enriched.sources.length() == 1,
         "Metadata stays hidden while source links remain");
+    // Диалог, начатый помощником: правила в промпте и вопрос помощника в поиске заметок.
+    Memory shifts = new Memory();
+    shifts.notes.add(new Note(7, "Смена в буфете", "график смен у кассы", 1000, 2000, 0));
+    shifts.notes.add(new Note(8, "Рецепт борща", "свёкла и капуста", 1000, 2001, 0));
+    reply = response("С кем вы работаете?");
+    JSONArray talk =
+        new JSONArray()
+            .put(
+                new JSONObject()
+                    .put("role", "assistant")
+                    .put("content", "Когда у вас следующая смена в буфете?"));
+    Polza.ask(shifts, "key", "test/model", "14,15,21,22", talk, 300, CheckIn.followUp(false));
+    JSONObject followUp = new JSONObject(sent.toString("UTF-8"));
+    String guided = followUp.getJSONArray("messages").getJSONObject(0).getString("content");
+    check(guided.startsWith(CheckIn.followUp(false)), "Guidance leads the system prompt");
+    check(guided.contains("ДАННЫЕ: ") && guided.contains("\"id\":7"), "Assistant question finds the note");
+    Polza.ask(shifts, "key", "test/model", "14,15,21,23", talk, 300);
+    check(
+        !new JSONObject(sent.toString("UTF-8"))
+            .getJSONArray("messages")
+            .getJSONObject(0)
+            .getString("content")
+            .contains("Ты сам начал"),
+        "Ordinary chats get no check-in guidance");
     System.out.println("PASS: " + count + " Polza contract checks (no network)");
   }
 }

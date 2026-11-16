@@ -6,6 +6,10 @@ public final class ReminderReceiver extends BroadcastReceiver {
   @Override
   public void onReceive(Context c, Intent intent) {
     long id = intent.getLongExtra("id", 0);
+    if (CheckInJob.ACTION.equals(intent.getAction())) {
+      CheckInJob.onAlarm(c);
+      return;
+    }
     if (Reminders.ACTION_DIGEST.equals(intent.getAction())) {
       try (Store store = new Store(c)) {
         Reminders.sendDigest(c, store.notes());

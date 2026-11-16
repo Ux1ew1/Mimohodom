@@ -603,6 +603,53 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     return a;
   }
 
+  /** Время последнего сообщения пользователя в любом чате или 0. */
+  public long lastUserMessage() {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery("SELECT MAX(created) FROM messages WHERE role='user'", null)) {
+      return c.moveToFirst() ? c.getLong(0) : 0;
+    }
+  }
+
+  /** Все ответы пользователя в чате одной строкой (для памяти помощника) или пустая строка. */
+  public String userText(long chat) {
+    StringBuilder out = new StringBuilder();
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT body FROM messages WHERE chat=? AND role='user' ORDER BY id",
+                new String[] {"" + chat})) {
+      while (c.moveToNext()) out.append(out.length() == 0 ? "" : "; ").append(c.getString(0));
+    }
+    return out.toString();
+  }
+
+  /** Первое сообщение чата — вопрос, который помощник задал сам. */
+  public String firstMessage(long chat) {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT body FROM messages WHERE chat=? ORDER BY id LIMIT 1",
+                new String[] {"" + chat})) {
+      return c.moveToFirst() ? c.getString(0) : "";
+    }
+  }
+
+  /** Начинает чат с вопроса помощника одной транзакцией. */
+  public long newAssistantChat(String title, String question) {
+    SQLiteDatabase db = getWritableDatabase();
+    db.beginTransaction();
+    try {
+      long id = newChat(title);
+      message(id, "assistant", question, new JSONArray());
+      db.setTransactionSuccessful();
+      return id;
+    } finally {
+      db.endTransaction();
+    }
+  }
+
   public long acceptDraft(long message, String title, String body) {
     SQLiteDatabase db = getWritableDatabase();
     db.beginTransaction();

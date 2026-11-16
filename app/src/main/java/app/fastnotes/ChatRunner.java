@@ -90,7 +90,12 @@ public final class ChatRunner {
               if (image.equals(prefs.getString("chatImage." + chat, "")))
                 prefs.edit().remove("chatImage." + chat).apply();
               answer.usage = "Изображение проанализировано. Заметка сохранена.";
-            } else answer = Polza.ask(store, key, model, query, history, maxTokens);
+            } else {
+              // Диалог, начатый помощником: он продолжает расспрашивать по ситуации.
+              String guidance =
+                  CheckInJob.isCheckInChat(app, chat) ? CheckIn.followUp(local) : "";
+              answer = Polza.ask(store, key, model, query, history, maxTokens, guidance);
+            }
             if (image.isEmpty() && store.chatExists(chat)) {
               store.getWritableDatabase().beginTransaction();
               try {

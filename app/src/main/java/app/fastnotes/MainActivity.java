@@ -201,6 +201,8 @@ public final class MainActivity extends Activity
     // Файлы изображений, на которые больше никто не ссылается (удалённые заметки, замены).
     io.execute(
         () -> {
+          // Вопросы помощника: после обновления или смены режима будильник ставится заново.
+          CheckInJob.arm(getApplicationContext());
           ImageFiles.cleanup(getApplicationContext(), 10 * 60_000L);
           java.io.File[] shots = new java.io.File(getCacheDir(), "camera").listFiles();
           if (shots != null)
@@ -219,6 +221,14 @@ public final class MainActivity extends Activity
       editing = requested;
       page = "edit";
       tab = 0;
+      return;
+    }
+    long question = intent.getLongExtra("chat", 0);
+    if (question > 0) {
+      // Уведомление «Помощник спрашивает»: открываем чат с его вопросом.
+      chat = question;
+      page = "chat";
+      tab = 2;
       return;
     }
     if (intent.getBooleanExtra("manager", false)) {
@@ -2839,6 +2849,7 @@ public final class MainActivity extends Activity
                         (d, w) -> {
                           store.deleteChat(id);
                           prefs.edit().remove("chatDraft." + id).remove("chatImage." + id).apply();
+                          CheckInJob.forgetChat(this, id);
                           if (chat == id) {
                             chatInput = null;
                             chat = 0;
@@ -4356,9 +4367,14 @@ public final class MainActivity extends Activity
   private String assistantSummary() {
     boolean background = prefs.getBoolean("backgroundAi", false),
         manager = prefs.getBoolean("managerAi", false);
-    if (!background && !manager) return "Выключен";
-    String on =
-        background && manager ? "Фоновый помощник и менеджер" : background ? "Фоновый помощник" : "Менеджер";
+    boolean asks = CheckInJob.enabled(this);
+    if (!background && !manager && !asks) return "Выключен";
+    List<String> names = new ArrayList<>();
+    if (background) names.add("Фоновый помощник");
+    if (manager) names.add("менеджер");
+    if (asks) names.add("вопросы о планах");
+    String on = String.join(", ", names);
+    on = on.substring(0, 1).toUpperCase(new Locale("ru")) + on.substring(1);
     return LocalLlm.cloudBackground(this)
         ? on + " включены"
         : on + " · на паузе, пока выбран GGUF";
@@ -4804,6 +4820,179 @@ public final class MainActivity extends Activity
     content.addView(limitButton());
     gap(content, 10);
     content.addView(button("Проверить сейчас", false, this::manualAnalysis));
+    checkInSettings();
+  }
+
+  /** Помощник сам пишет первым и по ситуации расспрашивает о делах и планах. */
+  private void checkInSettings() {
+    section("Вопросы о планах", true);
+    Switch ask = toggle("Помощник спрашивает о планах", CheckInJob.enabled(this));
+    TextView time = button("", false, () -> {});
+    TextView every = button("", false, () -> {});
+    TextView now = button("Спросить сейчас", false, () -> {});
+    TextView status = text("", 13, MUTED);
+    Runnable refresh =
+        () -> {
+          boolean on = ask.isChecked();
+          int minutes = CheckInJob.minutes(this);
+          time.setText(
+              String.format(Locale.US, "Время вопроса: около %02d:%02d", minutes / 60, minutes % 60));
+          every.setText(
+              "Как часто: " + CheckIn.everyLabel(CheckInJob.every(this)).toLowerCase(new Locale("ru")));
+          String report =
+              !on || LocalLlm.cloudBackground(this)
+                  ? CheckInJob.status(this)
+                  : "На паузе, пока выбран GGUF: вопросы идут через Polza.AI.";
+          status.setText(report);
+          status.setVisibility(on && !report.isEmpty() ? View.VISIBLE : View.GONE);
+          int visible = on ? View.VISIBLE : View.GONE;
+          time.setVisibility(visible);
+          every.setVisibility(visible);
+          now.setVisibility(visible);
+        };
+    ask.setOnCheckedChangeListener(
+        (v, checked) -> {
+          buzz(0);
+          if (!checked) {
+            prefs.edit().putBoolean(CheckInJob.ON, false).apply();
+            io.execute(() -> CheckInJob.arm(getApplicationContext()));
+            refresh.run();
+            return;
+          }
+          if (CheckInJob.enabled(this)) return;
+          if (LocalLlm.cloudBackground(this) && !credentialsReady()) {
+            toast("Сначала укажите ключ и модель Polza.AI в разделе «ИИ».");
+            ask.setChecked(false);
+            return;
+          }
+          new AlertDialog.Builder(this)
+              .setTitle("Включить вопросы о планах?")
+              .setMessage(
+                  "Время от времени помощник будет писать сам: спрашивать о делах и планах, когда и"
+                      + " во сколько что-то происходит, с кем и что взять с собой. Вопросы"
+                      + " составляются по вашим заметкам, а не из готового списка. Для этого"
+                      + " ближайшие события, названия и начало свежих заметок отправляются в"
+                      + " Polza.AI — один платный запрос на вопрос, не чаще выбранного"
+                      + " интервала. Если не отвечать, помощник замолчит.")
+              .setPositiveButton(
+                  "Согласен",
+                  (d, w) -> {
+                    prefs.edit().putBoolean(CheckInJob.ON, true).apply();
+                    CheckInJob.reset(this);
+                    io.execute(() -> CheckInJob.arm(getApplicationContext()));
+                    askNotificationPermission();
+                    refresh.run();
+                  })
+              .setNegativeButton("Отмена", (d, w) -> ask.setChecked(false))
+              .setOnCancelListener(d -> ask.setChecked(false))
+              .show();
+        });
+    time.setOnClickListener(
+        v -> {
+          buzz(0);
+          int minutes = CheckInJob.minutes(this);
+          new TimePickerDialog(
+                  this,
+                  (tv, hour, minute) -> {
+                    prefs.edit().putInt(CheckInJob.MINUTES, hour * 60 + minute).apply();
+                    io.execute(() -> CheckInJob.arm(getApplicationContext()));
+                    refresh.run();
+                  },
+                  minutes / 60,
+                  minutes % 60,
+                  true)
+              .show();
+        });
+    every.setOnClickListener(
+        v -> {
+          buzz(0);
+          String[] labels = new String[CheckIn.EVERY_DAYS.length];
+          int selected = 0;
+          for (int i = 0; i < labels.length; i++) {
+            labels[i] = CheckIn.everyLabel(CheckIn.EVERY_DAYS[i]);
+            if (CheckIn.EVERY_DAYS[i] == CheckInJob.every(this)) selected = i;
+          }
+          new AlertDialog.Builder(this)
+              .setTitle("Как часто спрашивать")
+              .setSingleChoiceItems(
+                  labels,
+                  selected,
+                  (d, which) -> {
+                    prefs.edit().putInt(CheckInJob.EVERY, CheckIn.EVERY_DAYS[which]).apply();
+                    io.execute(() -> CheckInJob.arm(getApplicationContext()));
+                    d.dismiss();
+                    refresh.run();
+                  })
+              .setNegativeButton("Отмена", null)
+              .show();
+        });
+    now.setOnClickListener(
+        v -> {
+          if (!LocalLlm.cloudBackground(this)) {
+            toast("Сейчас выбран GGUF: вопросы идут через Polza.AI.");
+            return;
+          }
+          if (!credentialsReady()) {
+            toast("Сначала укажите ключ и модель Polza.AI в разделе «ИИ».");
+            return;
+          }
+          now.setEnabled(false);
+          now.setText("Составляю вопрос…");
+          Context app = getApplicationContext();
+          io.execute(
+              () -> {
+                long id = 0;
+                String error = "";
+                try (Store s = new Store(app)) {
+                  id = CheckInJob.compose(app, s);
+                } catch (Exception e) {
+                  error = CheckInJob.errorText(e);
+                }
+                CheckInJob.arm(app);
+                long opened = id;
+                String failure = error;
+                runOnUiThread(
+                    () -> {
+                      if (isFinishing() || isDestroyed()) return;
+                      if (opened > 0) {
+                        chat = opened;
+                        tab = 2;
+                        page = "chat";
+                        render();
+                      } else {
+                        now.setEnabled(true);
+                        now.setText("Спросить сейчас");
+                        toast(failure.isEmpty() ? CheckInJob.status(this) : failure);
+                        refresh.run();
+                      }
+                    });
+              });
+        });
+    content.addView(ask);
+    secondary(
+        content,
+        "Помощник сам пишет в ИИ-чат и присылает уведомление: спрашивает о ближайших делах,"
+            + " времени, людях и подготовке. Ответьте в чате, и он уточнит детали и предложит"
+            + " сохранить заметку.");
+    content.addView(
+        infoLink(
+            "Как работают вопросы",
+            "Вопрос составляет модель по ситуации: смотрит на ближайшие события, свежие заметки,"
+                + " день недели и ваши прошлые ответы. Готового набора вопросов нет.\n\n"
+                + "Уведомление приходит около выбранного времени и не чаще выбранного интервала."
+                + " Если вы как раз пишете в чате, вопрос пропускается. Если не отвечать на вопросы,"
+                + " интервал растёт, а после трёх подряд без ответа помощник замолкает, пока вы не"
+                + " ответите в чате.\n\n"
+                + "Каждый вопрос — один платный запрос к Polza.AI с коротким ответом. Повторов после"
+                + " ошибки нет: следующая попытка в следующий срок или кнопкой «Спросить сейчас»."
+                + " Работает при Polza.AI и Gemini Nano; при GGUF на паузе."));
+    content.addView(time);
+    content.addView(every);
+    gap(content, 6);
+    content.addView(status);
+    gap(content, 6);
+    content.addView(now);
+    refresh.run();
   }
 
   // ---- Приложение ----
