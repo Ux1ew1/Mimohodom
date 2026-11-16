@@ -130,6 +130,7 @@ public final class Reminders {
     if (before == null || before.reminder != after.reminder || before.repeat != after.repeat)
       cancel(c, after.id);
     schedule(c, after);
+    CalendarSync.runAsync(c);
   }
 
   /** Ставит будильник, не трогая показанное уведомление и отложенное оповещение. */
@@ -163,6 +164,7 @@ public final class Reminders {
       c.getSystemService(AlarmManager.class).cancel(intent(c, n.id));
       arm(c, updated);
     }
+    CalendarSync.runAsync(c);
   }
 
   // ---- Откладывание ----

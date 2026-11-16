@@ -306,7 +306,26 @@ public final class MainActivity extends Activity
     flushCredentials();
     stash();
     persistEditedNote();
+    // Ловит всё, что изменилось не через редактор: чат, помощник, удаление.
+    CalendarSync.runAsync(this);
     super.onPause();
+  }
+
+  @Override
+  public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+    super.onRequestPermissionsResult(code, permissions, results);
+    if (code != CalendarSync.REQUEST_CODE) return;
+    boolean granted = results.length > 0;
+    for (int r : results) if (r != PackageManager.PERMISSION_GRANTED) granted = false;
+    if (granted) {
+      CalendarSync.setEnabled(this, true);
+      CalendarSync.runAsync(this);
+      toast("Календарь «Мимоходом» подключён");
+    } else {
+      CalendarSync.setEnabled(this, false);
+      toast("Без доступа к календарю синхронизация не работает");
+    }
+    if ("settings.reminders".equals(page)) render();
   }
 
   @Override
@@ -1627,6 +1646,7 @@ public final class MainActivity extends Activity
               Note gone = store.note(id);
               Reminders.cancel(this, id);
               store.delete(id);
+              CalendarSync.runAsync(this);
               clearDraft(id);
               if (gone != null) releaseImage(gone.image, "");
               editorActive = false;
@@ -4186,6 +4206,7 @@ public final class MainActivity extends Activity
             Reminders.scheduleDigest(getApplicationContext());
             Reminders.deliverMissed(getApplicationContext(), notes);
           }
+          CalendarSync.runAsync(getApplicationContext());
         });
   }
 
@@ -4804,6 +4825,45 @@ public final class MainActivity extends Activity
                 + " или на завтра, 9:00. Если телефон был выключен в нужное время, напоминание"
                 + " придёт как пропущенное при включении или открытии приложения (за последние 7"
                 + " дней). После принудительной остановки приложения откройте его снова."));
+    gap(content, 12);
+    Switch calendar = toggle("Синхронизация с календарём", CalendarSync.enabled(this));
+    TextView calendarStatus = secondary(content, "");
+    Runnable showCalendarStatus =
+        () -> {
+          String status = CalendarSync.enabled(this) ? CalendarSync.status(this) : "";
+          calendarStatus.setText(status);
+          calendarStatus.setVisibility(status.isEmpty() ? View.GONE : View.VISIBLE);
+        };
+    calendar.setOnCheckedChangeListener(
+        (v, checked) -> {
+          buzz(0);
+          if (checked == CalendarSync.enabled(this)) return;
+          if (!checked) {
+            CalendarSync.setEnabled(this, false);
+            CalendarSync.removeAsync(this);
+            toast("События убраны из календаря");
+          } else if (CalendarSync.permitted(this)) {
+            CalendarSync.setEnabled(this, true);
+            CalendarSync.runAsync(this);
+            toast("Календарь «Мимоходом» подключён");
+          } else {
+            requestPermissions(
+                new String[] {
+                  Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR
+                },
+                CalendarSync.REQUEST_CODE);
+          }
+          showCalendarStatus.run();
+        });
+    content.addView(calendar);
+    showCalendarStatus.run();
+    secondary(
+        content,
+        "Заметки с напоминанием появляются в отдельном календаре «Мимоходом» (его видно в Календаре"
+            + " Samsung) и обновляются при правке и удалении. Оповещает по-прежнему приложение,"
+            + " событие в календаре тихое. Если выключить, события из календаря удаляются; заметки"
+            + " остаются. Если удалить событие в календаре самому, оно вернётся только после"
+            + " правки заметки.");
     gap(content, 12);
     Switch digest = toggle("Утренняя сводка", Reminders.digestEnabled(this));
     TextView digestTime = button("", false, () -> {});
