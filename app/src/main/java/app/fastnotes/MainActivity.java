@@ -1254,6 +1254,14 @@ public final class MainActivity extends Activity
             "Помощник и проверка заметок",
             () -> {
               suggestionsPopup.dismiss();
+              // Экран помощника относится к вкладке «Заметки» (как и переход из уведомления):
+              // иначе «Назад» вело бы на «Заметки» с подсветкой «Записать», а потом сворачивало
+              // приложение.
+              stash();
+              if (!persistEditedNote()) return;
+              hideKeyboard();
+              editing = 0;
+              tab = 0;
               page = "manager";
               render();
             }));
@@ -1641,7 +1649,7 @@ public final class MainActivity extends Activity
       store.image(editing, noteImage);
       clearDraft(editing);
       releaseImage(old.image, noteImage);
-      Reminders.schedule(this, store.note(editing));
+      Reminders.scheduleEdited(this, old, store.note(editing));
       BackgroundAnalysis.enqueue(this);
       return true;
     } catch (Exception e) {
@@ -1836,7 +1844,7 @@ public final class MainActivity extends Activity
       store.image(id, noteImage);
       if (old != null) releaseImage(old.image, noteImage);
       BackgroundAnalysis.enqueue(this);
-      Reminders.schedule(this, store.note(id));
+      Reminders.scheduleEdited(this, old, store.note(id));
       boolean denied =
           reminder > 0 && !getSystemService(NotificationManager.class).areNotificationsEnabled();
       clearDraft(editing);

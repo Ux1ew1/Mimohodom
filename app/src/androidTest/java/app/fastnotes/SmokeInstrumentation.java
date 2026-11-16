@@ -113,6 +113,21 @@ public final class SmokeInstrumentation extends Instrumentation {
       require(
           note.created == created && note.body.equals("Новый текст"), "Edit preserves creation");
       Reminders.schedule(getTargetContext(), note);
+      // Отложенное оповещение переживает повторную постановку будильников (открытие приложения,
+      // перезагрузку) и правку текста, а перенос события его снимает.
+      Reminders.snooze(getTargetContext(), id, note.reminder, 0);
+      Reminders.schedule(getTargetContext(), note);
+      require(
+          Reminders.snoozedReminder(getTargetContext(), id) == note.reminder,
+          "Snooze survives reschedule");
+      Reminders.scheduleEdited(getTargetContext(), note, note);
+      require(
+          Reminders.snoozedReminder(getTargetContext(), id) == note.reminder,
+          "Snooze survives text edit");
+      Note moved = db.note(id);
+      moved.reminder = note.reminder + 60_000;
+      Reminders.scheduleEdited(getTargetContext(), note, moved);
+      require(Reminders.snoozedReminder(getTargetContext(), id) == 0, "Moving event clears snooze");
       Reminders.cancel(getTargetContext(), id);
       chat = db.newChat("Smoke test");
       db.message(chat, "user", "Вопрос", new JSONArray());

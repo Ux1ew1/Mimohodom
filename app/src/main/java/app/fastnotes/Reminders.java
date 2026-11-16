@@ -105,10 +105,27 @@ public final class Reminders {
     c.getSystemService(NotificationManager.class).cancel("note-" + id, 1);
   }
 
+  /**
+   * Ставит будильник события заново (запуск приложения, перезагрузка). Отложенное оповещение и
+   * показанное уведомление не трогает: они относятся к уже сработавшему событию, а у повторяющегося
+   * напоминания время к этому моменту уже передвинуто на следующий раз. Их снимают {@link #cancel}
+   * при удалении заметки и {@link #scheduleEdited} при переносе события.
+   */
   public static void schedule(Context c, Note n) {
     if (n.reminder > 0 && delivered(c, n)) return;
-    cancel(c, n.id);
+    c.getSystemService(AlarmManager.class).cancel(intent(c, n.id));
     arm(c, n);
+  }
+
+  /**
+   * После сохранения заметки: если событие перенесли, убрали или сменили повтор, снимает и отложенное
+   * оповещение с уведомлением; правка одного текста их не трогает.
+   */
+  public static void scheduleEdited(Context c, Note before, Note after) {
+    if (after == null) return;
+    if (before == null || before.reminder != after.reminder || before.repeat != after.repeat)
+      cancel(c, after.id);
+    schedule(c, after);
   }
 
   /** Ставит будильник, не трогая показанное уведомление и отложенное оповещение. */
