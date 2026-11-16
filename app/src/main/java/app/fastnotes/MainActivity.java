@@ -1734,12 +1734,14 @@ public final class MainActivity extends Activity
                 "Изменить дату и время",
                 "Повтор: " + ReminderPolicy.repeatLabel(repeatMode).toLowerCase(new Locale("ru")),
                 "Напомнить за: " + leadChoiceLabel(),
+                "Добавить в календарь",
                 "Убрать напоминание"
               },
               (d, w) -> {
                 if (w == 0) datePicker();
                 else if (w == 1) pickRepeat();
                 else if (w == 2) pickLead();
+                else if (w == 3) addToCalendar();
                 else {
                   reminder = 0;
                   repeatMode = 0;
@@ -1750,6 +1752,37 @@ public final class MainActivity extends Activity
               })
           .show();
     } else datePicker();
+  }
+
+  /**
+   * Прототип: открывает системное окно «Новое событие» (Календарь Samsung или любой другой) с
+   * данными заметки. Разрешения не нужны, пользователь сам нажимает «Сохранить» в календаре.
+   */
+  private void addToCalendar() {
+    CalendarLink link =
+        CalendarLink.of(
+            titleField == null ? "" : titleField.getText().toString(),
+            bodyField == null ? "" : bodyField.getText().toString(),
+            reminder,
+            repeatMode);
+    if (link == null) {
+      toast("Сначала выберите дату напоминания");
+      return;
+    }
+    Intent intent =
+        new Intent(Intent.ACTION_INSERT)
+            .setData(android.provider.CalendarContract.Events.CONTENT_URI)
+            .putExtra(android.provider.CalendarContract.Events.TITLE, link.title)
+            .putExtra(android.provider.CalendarContract.Events.DESCRIPTION, link.description)
+            .putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, link.begin)
+            .putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, link.end);
+    if (link.rrule != null)
+      intent.putExtra(android.provider.CalendarContract.Events.RRULE, link.rrule);
+    try {
+      startActivity(intent);
+    } catch (ActivityNotFoundException e) {
+      toast("На устройстве нет приложения «Календарь»");
+    }
   }
 
   private void pickRepeat() {
