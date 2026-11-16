@@ -101,6 +101,14 @@ public final class ReminderPolicy {
     return next.toInstant().toEpochMilli();
   }
 
+  /**
+   * Пора ли передвигать доставленное повторяющееся напоминание: только когда наступило само событие
+   * (с допуском в секунду на неточность будильника), а не время предупреждения «за N минут».
+   */
+  public static boolean advanceDue(long reminder, long now) {
+    return reminder > 0 && now >= reminder - 1000;
+  }
+
   /** Ближайшее время утренней сводки: сегодня в указанные минуты от полуночи или завтра. */
   public static long nextDigestAt(long now, int minutes, ZoneId zone) {
     int safe = Math.max(0, Math.min(minutes, 24 * 60 - 1));

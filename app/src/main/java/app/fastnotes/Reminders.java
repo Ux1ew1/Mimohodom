@@ -112,7 +112,11 @@ public final class Reminders {
    * при удалении заметки и {@link #scheduleEdited} при переносе события.
    */
   public static void schedule(Context c, Note n) {
-    if (n.reminder > 0 && delivered(c, n)) return;
+    if (n.reminder > 0 && delivered(c, n)) {
+      // Предупреждение уже показано, а само событие ещё впереди: серию передвинем в его время.
+      if (n.repeat != 0) advanceWhenDue(c, n);
+      return;
+    }
     c.getSystemService(AlarmManager.class).cancel(intent(c, n.id));
     arm(c, n);
   }
@@ -132,6 +136,18 @@ public final class Reminders {
   private static void arm(Context c, Note n) {
     if (n.reminder <= System.currentTimeMillis() || delivered(c, n)) return;
     arm(c, Math.max(System.currentTimeMillis() + 1000, trigger(c, n)), intent(c, n.id));
+  }
+
+  /**
+   * Передвигает доставленное повторяющееся напоминание, но не раньше самого события. Предупреждение
+   * «за N минут» приходит до события; если сразу передвинуть серию, сегодняшнее событие пропадёт из
+   * заметки, утренней сводки и «ближайших» в чате. Поэтому до события ставится будильник на его
+   * время, а передвигает серию уже он ({@link ReminderReceiver}).
+   */
+  public static void advanceWhenDue(Context c, Note n) {
+    long now = System.currentTimeMillis();
+    if (ReminderPolicy.advanceDue(n.reminder, now)) advance(c, n);
+    else arm(c, n.reminder, intent(c, n.id));
   }
 
   /** Передвигает повторяющееся напоминание на ближайшее будущее время и ставит будильник. */
@@ -207,7 +223,7 @@ public final class Reminders {
           .edit()
           .putLong("note." + n.id, n.reminder)
           .apply();
-      if (n.repeat != 0) advance(c, n);
+      if (n.repeat != 0) advanceWhenDue(c, n);
     }
     return true;
   }

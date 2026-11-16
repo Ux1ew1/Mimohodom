@@ -172,6 +172,18 @@ public final class ReminderPolicyTest {
     check(ReminderPolicy.eventCount(21).equals("21 событие"), "count 21");
     check(ReminderPolicy.eventCount(112).equals("112 событий"), "count 112");
 
+    // Серия передвигается в момент события, а не предупреждения «за N минут»
+    long meeting = at(zu, 2026, 11, 16, 10, 0);
+    check(!ReminderPolicy.advanceDue(meeting, meeting - 24 * 60 * 60_000L), "lead a day early does not advance");
+    check(!ReminderPolicy.advanceDue(meeting, meeting - 2 * 60 * 60_000L), "lead two hours early does not advance");
+    check(ReminderPolicy.advanceDue(meeting, meeting - 500), "alarm a bit early still advances");
+    check(ReminderPolicy.advanceDue(meeting, meeting), "advance at event time");
+    check(ReminderPolicy.advanceDue(meeting, meeting + 3 * 24 * 60 * 60_000L), "advance long after event");
+    check(!ReminderPolicy.advanceDue(0, meeting), "no reminder never advances");
+    check(
+        ReminderPolicy.upcomingToday(meeting, at(zu, 2026, 11, 16, 8, 0), zu),
+        "unadvanced event stays in today's digest");
+
     System.out.println("ReminderPolicyTest: " + count + " checks passed");
   }
 }

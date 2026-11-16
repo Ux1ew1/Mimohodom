@@ -45,6 +45,11 @@ public final class ReminderReceiver extends BroadcastReceiver {
       if (n == null
           || n.reminder == 0
           || Reminders.trigger(c, n) > System.currentTimeMillis() + 1000) return;
+      if (n.repeat != 0 && Reminders.delivered(c, n)) {
+        // Предупреждение уже было, это будильник на само событие: передвигаем серию.
+        Reminders.advanceWhenDue(c, n);
+        return;
+      }
       Reminders.fire(c, n, false);
     }
   }

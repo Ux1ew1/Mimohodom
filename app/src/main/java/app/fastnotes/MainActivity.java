@@ -53,6 +53,11 @@ public final class MainActivity extends Activity
   private int selectedImage = 0;
   private long selectedImageFor = -1;
   private boolean editorActive = false, rendering = false;
+  /**
+   * Открытая заметка, какой её загрузили в редактор. Поля, совпадающие с ней, пользователь не
+   * трогал: при выходе их не записываем, чтобы не затереть изменения ИИ за это время.
+   */
+  private Note editorBase;
   private String returnPage = "notes";
   private TextView reminderButton, analysisStatusView;
   private AlertDialog managerPreview, analysisLogDialog;
@@ -1334,6 +1339,12 @@ public final class MainActivity extends Activity
       content.addView(button("К заметкам", false, () -> navigate(0)));
       return;
     }
+    // Снимок для persistEditedNote: поля загружаются из базы, если черновика нет; с черновиком
+    // остаётся снимок, сделанный при открытии этой заметки.
+    if (id > 0
+        && (editorBase == null
+            || editorBase.id != id
+            || !prefs.contains("draft." + id + ".title"))) editorBase = note;
     if (id > 0) {
       LinearLayout toolbar = row();
       ImageButton back = new ImageButton(this);
@@ -1632,25 +1643,44 @@ public final class MainActivity extends Activity
     try {
       Note old = store.note(editing);
       if (old == null) return true;
-      String resolved = Note.autoTitle(title, body);
       reconcileReminder(old);
-      if (old.title.equals(resolved)
-          && old.body.equals(body)
-          && old.reminder == reminder
-          && old.repeat == (reminder == 0 ? 0 : repeatMode)
-          && old.lead == (reminder == 0 ? -1 : leadChoice)
-          && old.image.equals(noteImage)) {
-        if (old.folder != editFolder) new FolderStore(store).move(editing, editFolder);
-        clearDraft(editing);
-        return true;
+      int repeatNow = reminder == 0 ? 0 : repeatMode, leadNow = reminder == 0 ? -1 : leadChoice;
+      // Пока заметка была открыта, её могли изменить фоновая проверка ИИ (название, предложение
+      // напоминания) или помощник в чате (итог). Поэтому сравниваем с тем, что загрузили в
+      // редактор, и записываем только поля, которые изменил пользователь; остальное берём из базы.
+      Note base = editorBase != null && editorBase.id == editing ? editorBase : old;
+      boolean titleEdited = !title.equals(base.title) && !title.equals(old.title);
+      boolean bodyEdited = !body.equals(base.body) && !body.equals(old.body);
+      boolean reminderEdited =
+          !(reminder == base.reminder && repeatNow == base.repeat && leadNow == base.lead)
+              && !(reminder == old.reminder && repeatNow == old.repeat && leadNow == old.lead);
+      boolean imageEdited = !noteImage.equals(base.image) && !noteImage.equals(old.image);
+      boolean folderEdited = editFolder != base.folder && editFolder != old.folder;
+      if (folderEdited) new FolderStore(store).move(editing, editFolder);
+      if (titleEdited || bodyEdited || reminderEdited || imageEdited) {
+        store.save(
+            editing,
+            titleEdited ? title : old.title,
+            bodyEdited ? body : old.body,
+            reminderEdited ? reminder : old.reminder,
+            reminderEdited ? repeatMode : old.repeat,
+            reminderEdited ? leadChoice : old.lead);
+        if (imageEdited) {
+          store.image(editing, noteImage);
+          releaseImage(old.image, noteImage);
+        }
+        Reminders.scheduleEdited(this, old, store.note(editing));
+        BackgroundAnalysis.enqueue(this);
       }
-      store.save(editing, title, body, reminder, repeatMode, leadChoice);
-      if (old.folder != editFolder) new FolderStore(store).move(editing, editFolder);
-      store.image(editing, noteImage);
       clearDraft(editing);
-      releaseImage(old.image, noteImage);
-      Reminders.scheduleEdited(this, old, store.note(editing));
-      BackgroundAnalysis.enqueue(this);
+      // Редактор может остаться открытым (сворачивание приложения): дальше сравниваем с тем, что
+      // сейчас в полях, чтобы нетронутые поля и потом не затирали изменения из базы.
+      Note shown = new Note(editing, title, body, old.created, old.updated, reminder);
+      shown.repeat = repeatNow;
+      shown.lead = leadNow;
+      shown.image = noteImage;
+      shown.folder = editFolder;
+      editorBase = shown;
       return true;
     } catch (Exception e) {
       stash();
@@ -1864,8 +1894,13 @@ public final class MainActivity extends Activity
 
   private void openNote(long id) {
     stash();
+    if ("edit".equals(page)) {
+      // Из открытой заметки в другую («Поделиться», готовая сводка видео): сохраняем текущую,
+      // а «Назад» ведёт туда, откуда открыли первую, — иначе редактор открывался бы по кругу.
+      if (!persistEditedNote()) return;
+      if ("edit".equals(returnPage)) returnPage = "notes";
+    } else returnPage = page;
     hideKeyboard();
-    returnPage = page;
     editing = id;
     page = "edit";
     render();
