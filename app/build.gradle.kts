@@ -10,7 +10,12 @@ android {
         externalNativeBuild { cmake { cppFlags += "-O3"; arguments += "-DANDROID_STL=c++_shared" } }
     }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
-    buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
+    buildTypes {
+        release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") }
+        // Сборка для проверки агентом: как debug (тот же applicationId и ключ, ставится поверх), плюс мост консольных команд из src/agent.
+        // В обычные debug и release он не попадает.
+        create("agent") { initWith(getByName("debug")); matchingFallbacks += listOf("debug") }
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 dependencies {
