@@ -31,6 +31,8 @@ public final class MainActivity extends Activity
       WHITE = 0xFFFFFFFF,
       RED = 0xFFA74335;
   private final ExecutorService io = Executors.newSingleThreadExecutor();
+  /** Долгое копирование GGUF идёт отдельно, чтобы не задерживать «Поделиться», картинки и экспорт. */
+  private final ExecutorService heavy = Executors.newSingleThreadExecutor();
   private Store store;
   private SharedPreferences prefs;
   private LinearLayout root, content;
@@ -193,7 +195,6 @@ public final class MainActivity extends Activity
       returnPage = state.getString("return", "notes");
       search = state.getString("search", "");
       folder = state.getLong("folder");
-      Store.newNoteFolder = folder;
       pickerPage = state.getString("pickerPage", "");
       pickerTarget = state.getLong("pickerTarget");
     }
@@ -332,6 +333,7 @@ public final class MainActivity extends Activity
   protected void onDestroy() {
     if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(analysisListener);
     io.shutdown();
+    heavy.shutdown();
     store.close();
     super.onDestroy();
   }
@@ -1997,12 +1999,16 @@ public final class MainActivity extends Activity
         () -> {
           listing.removeAllViews();
           ManagerStore manager = new ManagerStore(store);
+          // Стопки читаем один раз на обновление, а не по запросу на каждую заметку и карточку.
+          Map<Long, Long> tops = manager.topMap();
+          Map<Long, List<Long>> groups = manager.membersMap();
+          membersCache = groups;
           List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search);
           visibleNotes.clear();
           for (Note n : found) {
             if (folder != FolderPolicy.ALL && n.folder != folder) continue;
-            if (!search.trim().isEmpty() || manager.top(n.id) == 0 || manager.top(n.id) == n.id)
-              visibleNotes.add(n);
+            long top = tops.getOrDefault(n.id, 0L);
+            if (!search.trim().isEmpty() || top == 0 || top == n.id) visibleNotes.add(n);
           }
           count.setText(getString(R.string.notes_count, visibleNotes.size()));
           if (visibleNotes.isEmpty())
@@ -2021,7 +2027,7 @@ public final class MainActivity extends Activity
           LinearLayout line = null;
           int occupied = 0;
           for (Note n : visibleNotes) {
-            List<Long> members = manager.members(n.id);
+            List<Long> members = groups.getOrDefault(n.id, Collections.emptyList());
             boolean expanded =
                 !members.isEmpty() && manager.expanded(n.id) && search.trim().isEmpty();
             if (expanded) {
@@ -2065,14 +2071,29 @@ public final class MainActivity extends Activity
               occupied++;
             }
           }
+          membersCache = null;
         };
     refresh.run();
     watch(
         find,
         () -> {
           search = find.getText().toString();
-          refresh.run();
+          // Список перестраивается после короткой паузы в наборе, а не на каждый символ.
+          find.removeCallbacks(refresh);
+          find.postDelayed(refresh, SEARCH_DELAY_MS);
         });
+  }
+
+  private static final long SEARCH_DELAY_MS = 150;
+
+  /** Состав стопок на время построения списка; вне его {@code null} и карточки спрашивают базу. */
+  private Map<Long, List<Long>> membersCache;
+
+  private List<Long> membersOf(long id) {
+    Map<Long, List<Long>> cache = membersCache;
+    if (cache == null) return new ManagerStore(store).members(id);
+    List<Long> found = cache.get(id);
+    return found == null ? Collections.emptyList() : found;
   }
 
   /** Строка папок над списком: «Все заметки», свои папки и «＋ Папка». Долгое нажатие — меню папки. */
@@ -2080,7 +2101,6 @@ public final class MainActivity extends Activity
     FolderStore folders = new FolderStore(store);
     if (folder != FolderPolicy.ALL && !folders.exists(folder)) {
       folder = FolderPolicy.ALL;
-      Store.newNoteFolder = FolderPolicy.ALL;
     }
     HorizontalScrollView scroller = new HorizontalScrollView(this);
     scroller.setHorizontalScrollBarEnabled(false);
@@ -2109,7 +2129,6 @@ public final class MainActivity extends Activity
                   return;
                 }
                 folder = id;
-                Store.newNoteFolder = id;
                 render();
               });
         });
@@ -2304,7 +2323,6 @@ public final class MainActivity extends Activity
           buzz(0);
           if (folder == id) return;
           folder = id;
-          Store.newNoteFolder = id;
           render();
         });
     if (f != null)
@@ -2342,7 +2360,6 @@ public final class MainActivity extends Activity
                                 new FolderStore(store).delete(f.id);
                                 if (folder == f.id) {
                                   folder = FolderPolicy.ALL;
-                                  Store.newNoteFolder = FolderPolicy.ALL;
                                 }
                                 render();
                               })
@@ -2477,9 +2494,9 @@ public final class MainActivity extends Activity
           popup.show();
         });
     card.addView(titleRow);
-    if (!new ManagerStore(store).members(n.id).isEmpty())
-      card.addView(
-          text("Исходных: " + new ManagerStore(store).members(n.id).size(), 11, 0xFF75449B));
+    List<Long> sources = membersOf(n.id);
+    if (!sources.isEmpty())
+      card.addView(text("Исходных: " + sources.size(), 11, 0xFF75449B));
     gap(card, 8);
     TextView body =
         text(n.body.isEmpty() ? "Без текста" : Retrieval.excerpt(n.body, "", 320), 14, MUTED);
@@ -2535,7 +2552,7 @@ public final class MainActivity extends Activity
 
   private View groupedCard(Note n, boolean grid, boolean expanded) {
     View card = noteCard(n, grid);
-    int layers = Math.min(3, new ManagerStore(store).members(n.id).size());
+    int layers = Math.min(3, membersOf(n.id).size());
     if (layers == 0 || expanded) return card;
     FrameLayout stack = new FrameLayout(this);
     int height = card.getLayoutParams().height;
@@ -5337,7 +5354,7 @@ public final class MainActivity extends Activity
     if (request == 89 && result == RESULT_OK && data != null && data.getData() != null) {
       android.net.Uri uri = data.getData();
       toast("Копирую GGUF в приложение. Большая модель может занять несколько минут.");
-      io.execute(
+      heavy.execute(
           () -> {
             try {
               String name = "model.gguf";
@@ -5501,13 +5518,25 @@ public final class MainActivity extends Activity
     }
   }
 
+  // Форматтеры создаются один раз: на каждую карточку списка их раньше строили заново.
+  private final java.text.SimpleDateFormat dateFormat =
+      new java.text.SimpleDateFormat("d MMM yyyy, HH:mm", new Locale("ru"));
+  private final java.text.SimpleDateFormat shortDateFormat =
+      new java.text.SimpleDateFormat("d MMM yyyy", new Locale("ru"));
+
+  private static String formatted(java.text.SimpleDateFormat format, long ms) {
+    synchronized (format) {
+      format.setTimeZone(TimeZone.getDefault());
+      return format.format(new Date(ms));
+    }
+  }
+
   private String date(long ms) {
-    return new java.text.SimpleDateFormat("d MMM yyyy, HH:mm", new Locale("ru"))
-        .format(new Date(ms));
+    return formatted(dateFormat, ms);
   }
 
   private String shortDate(long ms) {
-    return new java.text.SimpleDateFormat("d MMM yyyy", new Locale("ru")).format(new Date(ms));
+    return formatted(shortDateFormat, ms);
   }
 
   /** Проверяет AICore и при необходимости скачивает Gemini Nano. Работает вне UI-потока. */

@@ -785,11 +785,19 @@ final class AgentBridge {
   private static Reply notesUnseed(Context context) throws Exception {
     Store store = AgentData.store(context);
     int removed = 0;
+    android.content.SharedPreferences.Editor drafts = context.getSharedPreferences("settings", 0).edit();
     for (Note n : store.notes())
       if (n.title != null && n.title.startsWith(AgentData.SEED)) {
+        // Как при удалении заметки в приложении: будильник, черновик и файлы картинок.
+        Reminders.cancel(context, n.id);
         store.delete(n.id);
+        for (String key : new String[] {"title", "body", "reminder", "folder", "repeat", "lead", "image"})
+          drafts.remove("draft." + n.id + "." + key);
+        for (String name : ImageList.removed(n.image, "")) ImageFiles.release(context, name);
         removed++;
       }
+    drafts.apply();
+    CalendarSync.runAsync(context);
     return new Reply("удалено тестовых заметок: " + removed);
   }
 

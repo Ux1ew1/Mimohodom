@@ -7,9 +7,6 @@ import java.util.*;
 import org.json.*;
 
 public final class Store extends SQLiteOpenHelper implements Polza.Memory {
-  /** Папка, открытая на экране: новая заметка создаётся в ней. 0 — «Все заметки». */
-  public static volatile long newNoteFolder = FolderPolicy.ALL;
-
   private final Context appContext;
   private final boolean local;
 
@@ -320,9 +317,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("search_text", Metadata.searchText(metadata));
     if (id == 0) {
       v.put("created", now);
-      long folder = newNoteFolder;
-      if (folder != FolderPolicy.ALL && new FolderStore(this).exists(folder))
-        v.put("folder", folder);
+      // Новая заметка всегда попадает в «Все заметки»: папку явно выбирает только редактор.
       return getWritableDatabase().insertOrThrow("notes", null, v);
     }
     if (getWritableDatabase().update("notes", v, "id=?", new String[] {"" + id}) != 1)

@@ -196,7 +196,8 @@ const LOCAL = {
   install(args) {
     const apk = args[0] || defaultApk();
     if (!existsSync(apk)) fail(`нет файла ${apk}. Соберите: node scripts/agent.mjs build`);
-    const r = adb(['install', '-r', '-g', apk]);
+    // Без -g: разрешения на личном телефоне не выдаём, их подтверждает пользователь.
+    const r = adb(['install', '-r', apk]);
     const out = `${r.stdout}${r.stderr}`.trim();
     if (r.status !== 0 || /Failure/.test(out)) {
       fail(`${out}\nЕсли подпись другая, сначала удалите приложение (потеряются данные!): adb uninstall ${PACKAGE}`);
@@ -257,7 +258,7 @@ const LOCAL_HELP = `Локальные команды клиента (не че�
   devices                       список устройств adb
   doctor                        устройство, версия приложения, отвечает ли мост
   build                         собрать сборку agent (scripts/build-agent.ps1)
-  install [apk]                 установить сборку agent поверх текущей (adb install -r -g)
+  install [apk]                 установить сборку agent поверх текущей (adb install -r)
   launch [--fresh]              запустить и дождаться экрана; --fresh сначала останавливает приложение
   stop                          остановить приложение
   reset --yes                   стереть ВСЕ данные приложения (pm clear) — только тестовое устройство
