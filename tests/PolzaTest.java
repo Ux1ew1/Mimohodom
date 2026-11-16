@@ -299,6 +299,19 @@ public final class PolzaTest {
     String guided = followUp.getJSONArray("messages").getJSONObject(0).getString("content");
     check(guided.startsWith(CheckIn.followUp(false)), "Guidance leads the system prompt");
     check(guided.contains("ДАННЫЕ: ") && guided.contains("\"id\":7"), "Assistant question finds the note");
+    reply = response("С кем вы работаете?\n[[memo]]\nСмены в буфете: 14, 15, 21, 22\n[[/memo]]");
+    Polza.Answer remembered =
+        Polza.ask(shifts, "key", "test/model", "14,15,21,24", talk, 300, CheckIn.followUp(false));
+    check(
+        remembered.text.equals("С кем вы работаете?")
+            && remembered.facts.size() == 1
+            && remembered.facts.get(0).startsWith("Смены в буфете"),
+        "Memo block becomes facts and never reaches the text");
+    reply = response("[[memo]]\nРаботает с Ольгой\n[[/memo]]");
+    Polza.Answer onlyMemo =
+        Polza.ask(shifts, "key", "test/model", "с Ольгой", talk, 300, CheckIn.followUp(false));
+    check(onlyMemo.text.equals("Понял, запомнил.") && onlyMemo.facts.size() == 1, "Memo without text");
+    reply = response("С кем вы работаете?");
     Polza.ask(shifts, "key", "test/model", "14,15,21,23", talk, 300);
     check(
         !new JSONObject(sent.toString("UTF-8"))

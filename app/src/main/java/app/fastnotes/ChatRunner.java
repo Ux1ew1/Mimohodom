@@ -3,6 +3,8 @@ package app.fastnotes;
 import android.content.Context;
 import android.os.*;
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.*;
 import org.json.*;
 
@@ -52,6 +54,7 @@ public final class ChatRunner {
     usage = "";
     Context app = context.getApplicationContext();
     boolean local = LocalLlm.enabled(context);
+    boolean checkin = CheckInJob.isCheckInChat(context, chat);
     worker.execute(
         () -> {
           try (Store store = new Store(app, local)) {
@@ -92,11 +95,13 @@ public final class ChatRunner {
               answer.usage = "Изображение проанализировано. Заметка сохранена.";
             } else {
               // Диалог, начатый помощником: он продолжает расспрашивать по ситуации.
-              String guidance =
-                  CheckInJob.isCheckInChat(app, chat) ? CheckIn.followUp(local) : "";
+              String guidance = checkin ? CheckIn.followUp(local) : "";
               answer = Polza.ask(store, key, model, query, history, maxTokens, guidance);
             }
             if (image.isEmpty() && store.chatExists(chat)) {
+              long memoNote = 0;
+              boolean memoUpdated = false;
+              String memoBody = "", memoTitle = "", memoRef = "";
               store.getWritableDatabase().beginTransaction();
               try {
                 for (int i = 0; i < answer.metadataUpdates.length(); i++) {
@@ -117,8 +122,64 @@ public final class ChatRunner {
                       new JSONObject().put("id", id).put("title", answer.draft.getString("title")));
                   answer.text += "\n\nЗаметка создана [[note:" + id + "]].";
                   answer.draft = null;
+                } else if (checkin && answer.draft != null) {
+                  // Диалог помощника: заметку записываем сами. Свою прежнюю запись из этого чата
+                  // обновляем, пока пользователь её не правил; если правил, оставляем предложение.
+                  var prefs = app.getSharedPreferences("settings", 0);
+                  String ref = prefs.getString("checkInNote." + chat, "");
+                  Note previous = null;
+                  boolean edited = false;
+                  int colon = ref.indexOf(':');
+                  if (colon > 0) {
+                    Note n = store.note(Long.parseLong(ref.substring(0, colon)));
+                    if (n != null && n.updated == Long.parseLong(ref.substring(colon + 1)))
+                      previous = n;
+                    else edited = n != null;
+                  }
+                  if (!edited) {
+                    memoTitle = answer.draft.getString("title");
+                    memoBody = answer.draft.getString("body");
+                    long id =
+                        store.save(
+                            previous == null ? 0 : previous.id,
+                            memoTitle,
+                            memoBody,
+                            previous == null ? 0 : previous.reminder);
+                    long revision = store.note(id).updated;
+                    store.applyMetadata(id, revision, answer.draft.optJSONObject("metadata"));
+                    memoNote = id;
+                    memoUpdated = previous != null;
+                    memoRef = id + ":" + revision;
+                    answer.sources.put(new JSONObject().put("id", id).put("title", memoTitle));
+                    answer.draft = null;
+                  }
                 }
-                store.message(chat, "assistant", answer.text, answer.sources, answer.draft);
+                store.message(
+                    chat,
+                    "assistant",
+                    checkin ? ChatMemo.attach(answer.text, answer.facts) : answer.text,
+                    answer.sources,
+                    answer.draft);
+                if (memoNote > 0) {
+                  List<String> bodies = new ArrayList<>();
+                  for (int i = 0; i < history.length(); i++)
+                    bodies.add(history.getJSONObject(i).getString("content"));
+                  bodies.add(ChatMemo.attach(answer.text, answer.facts));
+                  List<String> facts = ChatMemo.all(bodies);
+                  if (facts.isEmpty()) facts = ChatMemo.fromNote(memoBody);
+                  store.message(
+                      chat,
+                      "assistant",
+                      ChatMemo.recap(facts, memoNote, memoUpdated),
+                      new JSONArray()
+                          .put(new JSONObject().put("id", memoNote).put("title", memoTitle)),
+                      null);
+                  app.getSharedPreferences("settings", 0)
+                      .edit()
+                      .putString("checkInNote." + chat, memoRef)
+                      .apply();
+                  if (!memoUpdated) created = memoNote;
+                }
                 store.getWritableDatabase().setTransactionSuccessful();
               } finally {
                 store.getWritableDatabase().endTransaction();

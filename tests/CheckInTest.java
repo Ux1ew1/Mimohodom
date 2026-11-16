@@ -61,6 +61,7 @@ public final class CheckInTest {
         "minutes are clamped");
     check(CheckIn.every(5) == CheckIn.DEFAULT_EVERY, "unknown interval falls back");
     check(CheckIn.every(7) == 7, "known interval kept");
+    check(CheckIn.DEFAULT_EVERY == 1 && CheckIn.every(0) == 1, "asks once a day by default");
     check(CheckIn.everyLabel(1).equals("Каждый день"), "label daily");
 
     // Запоздавший запуск и занятость

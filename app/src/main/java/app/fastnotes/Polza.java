@@ -57,6 +57,8 @@ public final class Polza {
     public boolean cached;
     public JSONObject draft;
     public JSONArray metadataUpdates = new JSONArray();
+    /** Что модель узнала из последнего сообщения (диалог, начатый помощником). */
+    public List<String> facts = new ArrayList<>();
   }
 
   public static boolean wantsNote(String query) {
@@ -388,13 +390,17 @@ public final class Polza {
         }
       } catch (JSONException ignored) {
       }
+    answer.facts = ChatMemo.parse(answer.text);
     answer.text = answer.text.replaceAll("(?s)\\[\\[index]].*?(?:\\[\\[/index]]|$)", "").trim();
     answer.text = answer.text.replaceAll("(?s)\\[\\[draft]].*?(?:\\[\\[/draft]]|$)", "").trim();
+    answer.text = ChatMemo.strip(answer.text);
     if (answer.text.isEmpty())
       answer.text =
-          answer.draft == null
-              ? "Не удалось подготовить заметку. Уточните, что нужно сохранить."
-              : "Предлагаю сохранить информацию в заметку.";
+          answer.draft != null
+              ? "Предлагаю сохранить информацию в заметку."
+              : !answer.facts.isEmpty()
+                  ? "Понял, запомнил."
+                  : "Не удалось подготовить заметку. Уточните, что нужно сохранить.";
     if (!answer.cached) store.cache(hash, response.toString());
     if (store.localMode()) answer.text = linkMentionedNotes(answer.text, selected);
     Set<Long> used = new HashSet<>();

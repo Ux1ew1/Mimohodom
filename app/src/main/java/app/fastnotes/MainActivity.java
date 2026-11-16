@@ -548,6 +548,24 @@ public final class MainActivity extends Activity
     return b;
   }
 
+  /** Мелкая серая пометка для плотных экранов, например ИИ-чата. */
+  private TextView chatNote(LinearLayout l, String value) {
+    TextView t = text(value, 11, MUTED);
+    t.setLineSpacing(dp(1), 1);
+    l.addView(t);
+    return t;
+  }
+
+  /** Кнопка меньшего размера: ниже, с мелким шрифтом, чтобы на экране помещалось больше. */
+  private TextView compactButton(String label, boolean primary, Runnable click) {
+    TextView b = button(label, primary, click);
+    b.setTextSize(12);
+    b.setMinHeight(dp(34));
+    b.setPadding(dp(10), dp(6), dp(10), dp(6));
+    b.setBackground(ripple(primary ? GREEN : LIME, 10));
+    return b;
+  }
+
   private TextView secondary(LinearLayout l, String value) {
     TextView t = text(value, 13, MUTED);
     t.setLineSpacing(dp(3), 1);
@@ -2741,9 +2759,9 @@ public final class MainActivity extends Activity
 
   private void chats() {
     content.addView(topBar(true, true, true), new LinearLayout.LayoutParams(-1, dp(44)));
-    gap(content, 14);
+    gap(content, 8);
     content.addView(
-        button(
+        compactButton(
             "Новый чат",
             true,
             () -> {
@@ -2753,9 +2771,9 @@ public final class MainActivity extends Activity
               page = "chat";
               render();
             }));
-    gap(content, 22);
-    secondary(content, "История чатов");
     gap(content, 12);
+    chatNote(content, "История чатов");
+    gap(content, 6);
     LinearLayout listing = column();
     content.addView(listing);
     EditText find = searchField;
@@ -2769,15 +2787,15 @@ public final class MainActivity extends Activity
             any = true;
             long id = Long.parseLong(c[0]);
             LinearLayout item = row();
-            pad(item, 14);
-            item.setBackground(shape(WHITE, 12));
+            item.setPadding(dp(12), dp(6), dp(4), dp(6));
+            item.setBackground(shape(WHITE, 10));
             LinearLayout words = column();
-            TextView title = text(c[1], 16, INK);
+            TextView title = text(c[1], 14, INK);
             title.setMaxLines(2);
             title.setEllipsize(TextUtils.TruncateAt.END);
             words.addView(title);
-            gap(words, 6);
-            secondary(words, date(Long.parseLong(c[2])));
+            gap(words, 2);
+            chatNote(words, date(Long.parseLong(c[2])));
             words.setOnClickListener(
                 v -> {
                   buzz(0);
@@ -2789,7 +2807,7 @@ public final class MainActivity extends Activity
             item.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
             item.addView(chatMenu(id));
             listing.addView(item);
-            gap(listing, 10);
+            gap(listing, 5);
           }
           if (!any) {
             gap(listing, 12);
@@ -2811,9 +2829,10 @@ public final class MainActivity extends Activity
 
   private TextView chatMenu(long id) {
     TextView menu = button("⋮", false, () -> {});
-    menu.setTextSize(24);
+    menu.setTextSize(20);
     menu.setPadding(0, 0, 0, 0);
-    menu.setMinWidth(dp(48));
+    menu.setMinHeight(dp(36));
+    menu.setMinWidth(dp(40));
     menu.setContentDescription("Меню чата");
     menu.setOnClickListener(
         v -> {
@@ -2876,11 +2895,11 @@ public final class MainActivity extends Activity
               page = "chats";
               render();
             }),
-        new LinearLayout.LayoutParams(dp(44), dp(44)));
+        new LinearLayout.LayoutParams(dp(36), dp(36)));
     String chatTitle = "Новый чат";
     if (chat > 0)
       for (String[] c : store.chats()) if (Long.parseLong(c[0]) == chat) chatTitle = c[1];
-    TextView titleView = text(chatTitle, 16, INK);
+    TextView titleView = text(chatTitle, 14, INK);
     titleView.setTypeface(null, Typeface.BOLD);
     titleView.setSingleLine(true);
     titleView.setEllipsize(TextUtils.TruncateAt.END);
@@ -2890,154 +2909,174 @@ public final class MainActivity extends Activity
       actions.addView(chatMenu(chat));
     }
     content.addView(actions);
-    gap(content, 12);
+    gap(content, 6);
     LinearLayout messages = column();
     ScrollView scroller = scroll(messages);
     content.addView(scroller, new LinearLayout.LayoutParams(-1, 0, 1));
     JSONArray history = chat == 0 ? new JSONArray() : store.messages(chat);
     if (history.length() == 0) {
-      gap(messages, 24);
-      TextView title = text("Память, с которой\nможно поговорить.", 28, INK);
+      gap(messages, 12);
+      TextView title = text("Память, с которой\nможно поговорить.", 20, INK);
       title.setTypeface(Typeface.create("serif", Typeface.NORMAL));
       messages.addView(title);
+      gap(messages, 6);
+      chatNote(messages, "Помощник найдёт подходящие заметки и даст ссылки на источники.");
       gap(messages, 12);
-      secondary(messages, "Помощник найдёт подходящие заметки и даст ссылки на источники.");
-      gap(messages, 22);
       for (String suggestion :
           new String[] {
             "Какие есть рецепты?", "Какой ближайший праздник?", "Что мне нужно сделать?"
           }) {
         messages.addView(
-            button(
+            compactButton(
                 suggestion,
                 false,
                 () -> {
                   chatInput.setText(suggestion);
                   chatInput.requestFocus();
                 }));
-        gap(messages, 8);
+        gap(messages, 5);
       }
     }
     for (int i = 0; i < history.length(); i++)
       try {
         JSONObject m = history.getJSONObject(i);
         boolean user = m.getString("role").equals("user");
+        // Факты «запомнил» и итог хранятся в тексте сообщения; текст показываем без служебных меток.
+        ChatMemo.Split part = ChatMemo.split(m.getString("content"));
         LinearLayout bubble = column();
-        pad(bubble, 16);
-        bubble.setBackground(shape(user ? LIME : WHITE, 12));
-        secondary(bubble, user ? "Вы" : "Помощник");
-        gap(bubble, 8);
-        TextView body = text("", 16, INK);
-        body.setLineSpacing(dp(4), 1);
+        bubble.setPadding(dp(11), dp(7), dp(11), dp(8));
+        bubble.setBackground(shape(user ? LIME : part.recap ? 0xFFEEF0EA : WHITE, 10));
+        TextView who =
+            text(user ? "Вы" : part.recap ? "Итог" : "Помощник", 10, part.recap ? GREEN : MUTED);
+        who.setTypeface(null, part.recap ? Typeface.BOLD : Typeface.NORMAL);
+        bubble.addView(who);
+        gap(bubble, 2);
+        TextView body = text("", 14, INK);
+        body.setLineSpacing(dp(2), 1);
         body.setTextIsSelectable(true);
-        body.setText(linkedAnswer(m.getString("content"), m.getJSONArray("sources")));
+        String shown = part.recap ? part.text.replaceFirst("^Итог\\.?\\s*", "") : part.text;
+        body.setText(linkedAnswer(shown, m.getJSONArray("sources")));
         body.setMovementMethod(LinkMovementMethod.getInstance());
         bubble.addView(body);
+        if (!part.facts.isEmpty()) {
+          // То, что помощник запомнил из этого сообщения, — серым.
+          gap(bubble, 4);
+          for (String fact : part.facts) {
+            TextView memory = text("✓ Запомнил: " + fact, 12, MUTED);
+            memory.setLineSpacing(dp(1), 1);
+            bubble.addView(memory);
+          }
+        }
         String draftJson = m.optString("draft", "");
         if (!user && !draftJson.isEmpty()) {
           JSONObject draft = new JSONObject(draftJson);
           long message = m.getLong("id");
-          gap(bubble, 12);
-          secondary(bubble, "Можно сохранить в заметку");
           gap(bubble, 6);
-          TextView draftTitle = text(draft.getString("title"), 16, GREEN);
+          chatNote(bubble, "Можно сохранить в заметку");
+          TextView draftTitle = text(draft.getString("title"), 13, GREEN);
           draftTitle.setTypeface(null, Typeface.BOLD);
           bubble.addView(draftTitle);
+          TextView excerpt = chatNote(bubble, Retrieval.excerpt(draft.getString("body"), "", 200));
+          excerpt.setPadding(0, dp(2), 0, 0);
           gap(bubble, 6);
-          secondary(bubble, Retrieval.excerpt(draft.getString("body"), "", 300));
-          gap(bubble, 10);
-          bubble.addView(
-              button("Проверить и сохранить", false, () -> reviewChatDraft(message, draft)));
-          gap(bubble, 6);
-          bubble.addView(
-              button(
+          LinearLayout draftActions = row();
+          draftActions.addView(
+              compactButton("Проверить и сохранить", false, () -> reviewChatDraft(message, draft)),
+              new LinearLayout.LayoutParams(0, -2, 1));
+          View spacer = new View(this);
+          draftActions.addView(spacer, new LinearLayout.LayoutParams(dp(6), 1));
+          draftActions.addView(
+              compactButton(
                   "Не сохранять",
                   false,
                   () -> {
                     store.dismissDraft(message);
                     stash();
                     render();
-                  }));
+                  }),
+              new LinearLayout.LayoutParams(0, -2, 1));
+          bubble.addView(draftActions);
         }
         JSONArray sources = m.getJSONArray("sources");
         if (sources.length() > 0) {
-          gap(bubble, 12);
-          secondary(bubble, "Источники");
+          gap(bubble, 6);
           for (int j = 0; j < sources.length(); j++) {
             JSONObject s = sources.getJSONObject(j);
             long id = s.getLong("id");
-            gap(bubble, 6);
             LinearLayout source = row();
-            source.setMinimumHeight(dp(64));
-            pad(source, 12);
-            source.setBackground(ripple(LIME, 10));
+            source.setMinimumHeight(dp(34));
+            source.setPadding(dp(8), dp(4), dp(8), dp(4));
+            source.setBackground(ripple(LIME, 8));
             source.setGravity(Gravity.CENTER_VERTICAL);
             ImageView icon = new ImageView(this);
-            icon.setImageDrawable(new Glyph("notes", GREEN, 22));
-            source.addView(icon, new LinearLayout.LayoutParams(dp(22), dp(22)));
-            LinearLayout words = column();
-            words.setPadding(dp(12), 0, dp(8), 0);
-            TextView title = text(s.getString("title"), 14, GREEN);
+            icon.setImageDrawable(new Glyph("notes", GREEN, 16));
+            source.addView(icon, new LinearLayout.LayoutParams(dp(16), dp(16)));
+            TextView title = text(s.getString("title"), 12, GREEN);
             title.setTypeface(null, Typeface.BOLD);
-            title.setMaxLines(2);
+            title.setMaxLines(1);
             title.setEllipsize(TextUtils.TruncateAt.END);
-            words.addView(title);
-            TextView caption = text("Открыть заметку", 11, MUTED);
-            words.addView(caption);
-            source.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
-            TextView arrow = text("›", 24, GREEN);
-            source.addView(arrow);
+            title.setPadding(dp(8), 0, dp(6), 0);
+            source.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+            source.addView(text("›", 18, GREEN));
             source.setFocusable(true);
             source.setContentDescription("Открыть заметку: " + s.getString("title"));
             source.setOnClickListener(v -> openNote(id));
-            bubble.addView(source);
+            LinearLayout.LayoutParams sourceParams = new LinearLayout.LayoutParams(-1, -2);
+            sourceParams.topMargin = dp(3);
+            bubble.addView(source, sourceParams);
           }
         }
         messages.addView(bubble);
-        gap(messages, 12);
+        gap(messages, 5);
       } catch (JSONException ignored) {
       }
     if (ChatRunner.running == chat && chat != 0) {
+      LinearLayout waiting = row();
       ProgressBar progress = new ProgressBar(this);
-      messages.addView(progress, new LinearLayout.LayoutParams(dp(28), dp(28)));
+      waiting.addView(progress, new LinearLayout.LayoutParams(dp(18), dp(18)));
       String stage = LocalLlm.stage();
-      secondary(messages, stage.isEmpty() ? "Подготавливаю ответ…" : stage);
-      gap(messages, 10);
+      TextView waitingText = chatNote(waiting, stage.isEmpty() ? "Подготавливаю ответ…" : stage);
+      waitingText.setPadding(dp(8), 0, 0, 0);
+      messages.addView(waiting);
+      gap(messages, 6);
     }
     if (ChatRunner.errorChat == chat && !ChatRunner.error.isEmpty()) {
-      TextView error = text(ChatRunner.error, 14, RED);
+      TextView error = text(ChatRunner.error, 12, RED);
       messages.addView(error);
-      gap(messages, 8);
+      gap(messages, 5);
       if (history.length() > 0) {
         String last = history.optJSONObject(history.length() - 1).optString("content");
         messages.addView(
-            button(
+            compactButton(
                 "Повторить запрос",
                 false,
                 () -> {
-                  chatInput.setText(last);
+                  chatInput.setText(ChatMemo.split(last).text);
                   send();
                 }));
+        gap(messages, 5);
       }
     }
     if (ChatRunner.usageChat == chat && !ChatRunner.usage.isEmpty() && history.length() > 0) {
-      secondary(messages, ChatRunner.usage);
-      gap(messages, 10);
+      chatNote(messages, ChatRunner.usage);
+      gap(messages, 5);
     }
-    gap(content, 8);
-    secondary(
+    gap(content, 4);
+    chatNote(
         content,
         LocalLlm.enabled(this)
             ? (LocalLlm.aicore(this)
-                ? "Локальный режим · Gemini Nano (Google AICore) отвечает на телефоне"
-                : "Локальный режим GGUF · модель отвечает на телефоне")
+                ? "Локально · Gemini Nano (Google AICore) отвечает на телефоне"
+                : "Локально · GGUF отвечает на телефоне")
             : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
-    gap(content, 8);
+    gap(content, 4);
     String attached = prefs.getString("chatImage." + chat, "");
     if (!attached.isEmpty()) {
-      content.addView(imagePreview(attached, 120));
-      content.addView(
-          button(
+      content.addView(imagePreview(attached, 80));
+      gap(content, 4);
+      LinearLayout imageActions = row();
+      imageActions.addView(
+          compactButton(
               "Повернуть и обрезать",
               false,
               () -> {
@@ -3061,10 +3100,11 @@ public final class MainActivity extends Activity
                         render();
                       }
                     });
-              }));
-      gap(content, 6);
-      content.addView(
-          button(
+              }),
+          new LinearLayout.LayoutParams(0, -2, 1));
+      imageActions.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+      imageActions.addView(
+          compactButton(
               "Убрать изображение",
               false,
               () -> {
@@ -3078,15 +3118,19 @@ public final class MainActivity extends Activity
                 prefs.edit().remove("chatImage." + chat).apply();
                 releaseImage(attached, "");
                 render();
-              }));
-      secondary(
+              }),
+          new LinearLayout.LayoutParams(0, -2, 1));
+      content.addView(imageActions);
+      chatNote(
           content,
           "После отправки ИИ создаст отдельную заметку по картинке. Нужна модель с поддержкой"
               + " изображений.");
     }
-    gap(content, 8);
+    gap(content, 4);
     // Одна строка ввода: изображение, поле и отправка.
     chatInput = input("Сообщение или просьба создать заметку…", true);
+    chatInput.setTextSize(15);
+    chatInput.setPadding(dp(12), dp(9), dp(12), dp(9));
     chatInput.setMinLines(1);
     chatInput.setMaxLines(4);
     chatInput.setFilters(new InputFilter[] {new InputFilter.LengthFilter(2000)});
@@ -3095,7 +3139,7 @@ public final class MainActivity extends Activity
     composer.setGravity(Gravity.BOTTOM);
     ImageView attach = new ImageView(this);
     attach.setScaleType(ImageView.ScaleType.CENTER);
-    attach.setImageDrawable(new Glyph("image", GREEN, 22));
+    attach.setImageDrawable(new Glyph("image", GREEN, 18));
     attach.setBackground(ripple(WHITE, 10));
     attach.setContentDescription("Прикрепить изображение");
     attach.setFocusable(true);
@@ -3104,14 +3148,14 @@ public final class MainActivity extends Activity
           buzz(0);
           pickImage(true);
         });
-    composer.addView(attach, new LinearLayout.LayoutParams(dp(50), dp(50)));
+    composer.addView(attach, new LinearLayout.LayoutParams(dp(40), dp(40)));
     LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, -2, 1);
-    inputParams.leftMargin = dp(8);
-    inputParams.rightMargin = dp(8);
+    inputParams.leftMargin = dp(6);
+    inputParams.rightMargin = dp(6);
     composer.addView(chatInput, inputParams);
     ImageView sendButton = new ImageView(this);
     sendButton.setScaleType(ImageView.ScaleType.CENTER);
-    sendButton.setImageDrawable(new Glyph("send", WHITE, 22));
+    sendButton.setImageDrawable(new Glyph("send", WHITE, 18));
     sendButton.setBackground(ripple(GREEN, 10));
     sendButton.setContentDescription(ChatRunner.running == 0 ? "Отправить" : "Ожидаем ответ");
     sendButton.setFocusable(true);
@@ -3122,12 +3166,12 @@ public final class MainActivity extends Activity
           buzz(0);
           send();
         });
-    composer.addView(sendButton, new LinearLayout.LayoutParams(dp(50), dp(50)));
+    composer.addView(sendButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
     content.addView(composer);
     if (LocalLlm.enabled(this) && ChatRunner.running != 0) {
-      gap(content, 6);
+      gap(content, 4);
       content.addView(
-          button(
+          compactButton(
               "Остановить генерацию",
               false,
               () -> {
@@ -4873,7 +4917,9 @@ public final class MainActivity extends Activity
                       + " составляются по вашим заметкам, а не из готового списка. Для этого"
                       + " ближайшие события, названия и начало свежих заметок отправляются в"
                       + " Polza.AI — один платный запрос на вопрос, не чаще выбранного"
-                      + " интервала. Если не отвечать, помощник замолчит.")
+                      + " интервала. Что помощник запомнил из разговора, он показывает серым в"
+                      + " чате, а в конце сам записывает заметку и присылает итог. Если не"
+                      + " отвечать, помощник замолчит.")
               .setPositiveButton(
                   "Согласен",
                   (d, w) -> {
@@ -4979,6 +5025,10 @@ public final class MainActivity extends Activity
             "Как работают вопросы",
             "Вопрос составляет модель по ситуации: смотрит на ближайшие события, свежие заметки,"
                 + " день недели и ваши прошлые ответы. Готового набора вопросов нет.\n\n"
+                + "Пока вы отвечаете, помощник серым отмечает, что запомнил. Когда сведений"
+                + " хватает, он сам записывает заметку (или обновляет её, если вы её не правили) и"
+                + " присылает итог со ссылкой. Напоминание он не ставит: его можно добавить в"
+                + " заметке.\n\n"
                 + "Уведомление приходит около выбранного времени и не чаще выбранного интервала."
                 + " Если вы как раз пишете в чате, вопрос пропускается. Если не отвечать на вопросы,"
                 + " интервал растёт, а после трёх подряд без ответа помощник замолкает, пока вы не"
