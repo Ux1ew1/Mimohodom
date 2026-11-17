@@ -253,6 +253,25 @@ public final class Polza {
       String guidance,
       JSONArray images)
       throws Exception {
+    return ask(store, key, model, query, history, maxTokens, guidance, images, "");
+  }
+
+  /**
+   * {@code tail} — памятка для модели, которая добавляется в конец последнего сообщения после
+   * вопроса (только в запросе с картинками): в сообщении пользователя она соблюдается лучше, чем в
+   * системном промпте. В поиск по заметкам и в историю чата она не попадает.
+   */
+  public static Answer ask(
+      Memory store,
+      String key,
+      String model,
+      String query,
+      JSONArray history,
+      int maxTokens,
+      String guidance,
+      JSONArray images,
+      String tail)
+      throws Exception {
     long now = System.currentTimeMillis();
     String retrievalQuery = query;
     for (int i = Math.max(0, history.length() - 4); i < history.length(); i++) {
@@ -367,7 +386,10 @@ public final class Polza {
     if (withImages) {
       JSONArray parts = new JSONArray();
       for (int i = 0; i < images.length(); i++) parts.put(images.get(i));
-      parts.put(new JSONObject().put("type", "text").put("text", query));
+      parts.put(
+          new JSONObject()
+              .put("type", "text")
+              .put("text", tail.isEmpty() ? query : query + "\n\n" + tail));
       messages.put(new JSONObject().put("role", "user").put("content", parts));
     } else messages.put(new JSONObject().put("role", "user").put("content", query));
     JSONObject payload =

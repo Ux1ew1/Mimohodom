@@ -85,6 +85,12 @@ public final class ChatImagesTest {
             .equals("[Приложено: изображение №1]"),
         "images only message");
 
+    check(ChatImages.answerTokens(600) == ChatImages.MIN_ANSWER_TOKENS, "small cap raised");
+    check(ChatImages.answerTokens(9000) == 9000, "large cap kept");
+    check(ChatImages.guidance(1, 1).contains("строка за строкой"), "table rules in guidance");
+    check(ChatImages.guidance(1, 1).contains("ВСЕ строки"), "list every row first");
+    check(ChatImages.guidance(1, 1).contains("зачёркнутую"), "crossed-out rows are not highlighted");
+    check(ChatImages.questionHint().contains("ВСЕ строки"), "question hint asks for every row");
     String guidance = ChatImages.guidance(3, 5);
     check(guidance.contains("3 из 5") && guidance.contains("№1"), "guidance counts");
     System.out.println("ChatImagesTest: " + count + " checks passed");

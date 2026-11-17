@@ -180,9 +180,10 @@ public final class ChatRunner {
                       picked.isEmpty() ? model : visionModel,
                       query,
                       clean,
-                      maxTokens,
+                      picked.isEmpty() ? maxTokens : ChatImages.answerTokens(maxTokens),
                       guidance,
-                      parts);
+                      parts,
+                      picked.isEmpty() ? "" : ChatImages.questionHint());
               if (!picked.isEmpty())
                 answer.usage =
                     (answer.usage == null || answer.usage.isEmpty() ? "" : answer.usage + " · ")
