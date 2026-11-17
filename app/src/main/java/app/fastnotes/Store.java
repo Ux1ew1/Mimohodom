@@ -339,6 +339,17 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     return out;
   }
 
+  /** Картинки, приложенные к сообщениям чатов: чат помнит их, пока он существует. */
+  public Set<String> chatImageNames() {
+    Set<String> out = new HashSet<>();
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery("SELECT body FROM messages WHERE instr(body,'[[img:')>0", null)) {
+      while (c.moveToNext()) out.addAll(ChatImages.split(c.getString(0)).images);
+    }
+    return out;
+  }
+
   public void image(long id, String image) {
     ContentValues v = new ContentValues();
     v.put("image", image);

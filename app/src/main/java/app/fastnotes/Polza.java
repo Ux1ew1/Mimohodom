@@ -236,6 +236,23 @@ public final class Polza {
       int maxTokens,
       String guidance)
       throws Exception {
+    return ask(store, key, model, query, history, maxTokens, guidance, null);
+  }
+
+  /**
+   * {@code images} — части сообщения (подпись и картинка по очереди) с картинками чата: они идут
+   * в последнем сообщении пользователя перед вопросом, чтобы чат помнил их и без повторной отправки.
+   */
+  public static Answer ask(
+      Memory store,
+      String key,
+      String model,
+      String query,
+      JSONArray history,
+      int maxTokens,
+      String guidance,
+      JSONArray images)
+      throws Exception {
     long now = System.currentTimeMillis();
     String retrievalQuery = query;
     for (int i = Math.max(0, history.length() - 4); i < history.length(); i++) {
@@ -346,7 +363,13 @@ public final class Polza {
       recent.add(0, new JSONObject().put("role", h.getString("role")).put("content", content));
     }
     for (JSONObject h : recent) messages.put(h);
-    messages.put(new JSONObject().put("role", "user").put("content", query));
+    boolean withImages = images != null && images.length() > 0;
+    if (withImages) {
+      JSONArray parts = new JSONArray();
+      for (int i = 0; i < images.length(); i++) parts.put(images.get(i));
+      parts.put(new JSONObject().put("type", "text").put("text", query));
+      messages.put(new JSONObject().put("role", "user").put("content", parts));
+    } else messages.put(new JSONObject().put("role", "user").put("content", query));
     JSONObject payload =
         new JSONObject().put("model", model).put("messages", messages).put("max_tokens", maxTokens);
     String hash = hash(payload.toString() + store.revision());
@@ -354,7 +377,10 @@ public final class Polza {
     JSONObject response;
     if (cached != null) response = new JSONObject(cached);
     else {
-      response = store.complete(key, payload);
+      response =
+          withImages
+              ? request("chat/completions", key, payload, 180000)
+              : store.complete(key, payload);
     }
     Answer answer = new Answer();
     answer.cached = cached != null;

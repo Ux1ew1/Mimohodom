@@ -43,8 +43,9 @@ public final class ImageFiles {
       BitmapFactory.decodeFile(raw.getPath(), options);
       if (options.outWidth <= 0 || options.outHeight <= 0)
         throw new IOException("Не удалось прочитать изображение");
+      // 2048 px по длинной стороне: мелкий текст на скриншотах и чеках остаётся читаемым для ИИ.
       options.inSampleSize = 1;
-      while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 1600)
+      while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 2048)
         options.inSampleSize *= 2;
       options.inJustDecodeBounds = false;
       bitmap = BitmapFactory.decodeFile(raw.getPath(), options);
@@ -89,11 +90,18 @@ public final class ImageFiles {
       bitmap = flattened;
       String name = UUID.randomUUID() + ".jpg";
       File destination = file(c, name);
-      try (OutputStream out = new FileOutputStream(destination)) {
-        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out))
-          throw new IOException("Не удалось сохранить изображение");
+      boolean saved = false;
+      for (int quality : new int[] {88, 78, 68}) {
+        try (OutputStream out = new FileOutputStream(destination)) {
+          if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out))
+            throw new IOException("Не удалось сохранить изображение");
+        }
+        if (destination.length() <= 2_000_000) {
+          saved = true;
+          break;
+        }
       }
-      if (destination.length() > 2_000_000) {
+      if (!saved) {
         destination.delete();
         throw new IOException("Изображение слишком большое после сжатия");
       }
@@ -158,6 +166,7 @@ public final class ImageFiles {
     Set<String> out = new HashSet<>();
     try (Store store = new Store(c)) {
       out.addAll(store.imageNames());
+      out.addAll(store.chatImageNames());
     }
     for (Map.Entry<String, ?> e : c.getSharedPreferences("settings", 0).getAll().entrySet()) {
       String key = e.getKey();
@@ -222,22 +231,42 @@ public final class ImageFiles {
     }
   }
 
+  /** Размеры существующих файлов; потерянных в карте нет. */
+  public static Map<String, Long> sizes(Context c, java.util.List<String> names) {
+    Map<String, Long> out = new HashMap<>();
+    for (String name : names)
+      try {
+        File f = file(c, name);
+        if (f.isFile()) out.put(name, f.length());
+      } catch (IOException ignored) {
+      }
+    return out;
+  }
+
+  /**
+   * {@code image} — одно имя файла или список через запятую (до {@link ImageList#MAX} штук):
+   * по всем строится одна заметка.
+   */
   public static Vision.Result analyze(
       Context c, String key, String model, String image, String question) throws Exception {
     if (LocalLlm.enabled(c))
       throw new IOException(
           "Локальная модель пока поддерживает только текст. Для картинок выберите Polza.AI в"
               + " настройках.");
+    java.util.List<String> encoded = new java.util.ArrayList<>();
+    for (String name : ImageList.parse(image)) encoded.add(base64(c, name));
+    if (encoded.isEmpty()) throw new IOException("Нет изображения для анализа");
     org.json.JSONObject response =
         Polza.request(
             "chat/completions",
             key,
             Vision.payload(
                 model,
-                base64(c, image),
+                encoded,
                 question,
                 System.currentTimeMillis(),
-                java.time.ZoneId.systemDefault()));
+                java.time.ZoneId.systemDefault()),
+            180000);
     return Vision.parse(
         response
             .getJSONArray("choices")

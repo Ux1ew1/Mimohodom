@@ -1441,39 +1441,27 @@ public final class MainActivity extends Activity
       List<String> images = ImageList.parse(noteImage);
       selectedImage = Math.max(0, Math.min(selectedImage, images.size() - 1));
       LinearLayout imageBox = column();
-      imageBox.setPadding(dp(12), 0, dp(12), dp(12));
-      imageBox.addView(imagePreview(images.get(selectedImage), 220, images));
-      if (images.size() > 1) {
-        gap(imageBox, 8);
-        imageBox.addView(imageStrip(images));
-        secondary(
-            imageBox,
-            "Изображение "
-                + (selectedImage + 1)
-                + " из "
-                + images.size()
-                + ". Первое показывается в списке заметок.");
-      }
-      gap(imageBox, 8);
-      imageBox.addView(button("Описать и добавить в заметку", false, this::describeNoteImage));
+      imageBox.setPadding(dp(12), 0, dp(12), dp(10));
+      imageBox.addView(imageStrip(images));
       gap(imageBox, 6);
-      imageBox.addView(
-          button(
-              ImageRunner.running ? "Изображение анализируется…" : "Создать заметку по изображению",
-              false,
-              this::analyzeNoteImage));
-      gap(imageBox, 6);
-      imageBox.addView(
-          pair(
-              button("Повернуть и обрезать", false, this::editSelectedImage),
-              button("Убрать", false, this::removeSelectedImage)));
-      if (images.size() > 1) {
-        gap(imageBox, 6);
-        imageBox.addView(
-            pair(
-                button("‹ Раньше", false, () -> moveSelectedImage(-1)),
-                button("Позже ›", false, () -> moveSelectedImage(1))));
-      }
+      LinearLayout imageBar = row();
+      imageBar.setGravity(Gravity.CENTER_VERTICAL);
+      TextView caption =
+          text(
+              images.size() == 1
+                  ? "1 изображение · нажмите, чтобы открыть"
+                  : "Изображение "
+                      + (selectedImage + 1)
+                      + " из "
+                      + images.size()
+                      + " · нажмите выбранное, чтобы открыть",
+              12,
+              MUTED);
+      imageBar.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
+      LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(-2, -2);
+      actionParams.leftMargin = dp(8);
+      imageBar.addView(compactButton("Действия", false, this::showImageActions), actionParams);
+      imageBox.addView(imageBar);
       sheet.addView(imageBox);
     }
     View footerRule = new View(this);
@@ -2870,6 +2858,13 @@ public final class MainActivity extends Activity
     dialog.show();
   }
 
+  private List<String> chatBodies(long id) {
+    List<String> out = new ArrayList<>();
+    JSONArray all = store.messages(id);
+    for (int i = 0; i < all.length(); i++) out.add(all.optJSONObject(i).optString("content"));
+    return out;
+  }
+
   private void chats() {
     content.addView(topBar(true, true, true), new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 8);
@@ -2979,8 +2974,13 @@ public final class MainActivity extends Activity
                     .setPositiveButton(
                         "Удалить",
                         (d, w) -> {
+                          Set<String> chatPictures = new HashSet<>();
+                          for (String body : chatBodies(id))
+                            chatPictures.addAll(ChatImages.split(body).images);
                           store.deleteChat(id);
                           prefs.edit().remove("chatDraft." + id).remove("chatImage." + id).apply();
+                          for (String name : chatPictures)
+                            io.execute(() -> ImageFiles.release(getApplicationContext(), name));
                           CheckInJob.forgetChat(this, id);
                           if (chat == id) {
                             chatInput = null;
@@ -3055,7 +3055,8 @@ public final class MainActivity extends Activity
         JSONObject m = history.getJSONObject(i);
         boolean user = m.getString("role").equals("user");
         // Факты «запомнил» и итог хранятся в тексте сообщения; текст показываем без служебных меток.
-        ChatMemo.Split part = ChatMemo.split(m.getString("content"));
+        ChatImages.Split pictures = ChatImages.split(m.getString("content"));
+        ChatMemo.Split part = ChatMemo.split(pictures.text);
         LinearLayout bubble = column();
         bubble.setPadding(dp(11), dp(7), dp(11), dp(8));
         bubble.setBackground(shape(user ? LIME : part.recap ? 0xFFEEF0EA : WHITE, 10));
@@ -3070,7 +3071,11 @@ public final class MainActivity extends Activity
         String shown = part.recap ? part.text.replaceFirst("^Итог\\.?\\s*", "") : part.text;
         body.setText(linkedAnswer(shown, m.getJSONArray("sources")));
         body.setMovementMethod(LinkMovementMethod.getInstance());
-        bubble.addView(body);
+        if (!pictures.images.isEmpty()) {
+          bubble.addView(messageImages(pictures.images));
+          if (!shown.isEmpty()) gap(bubble, 4);
+        }
+        if (!shown.isEmpty() || pictures.images.isEmpty()) bubble.addView(body);
         if (!part.facts.isEmpty()) {
           // То, что помощник запомнил из этого сообщения, — серым.
           gap(bubble, 4);
@@ -3164,7 +3169,7 @@ public final class MainActivity extends Activity
                 "Повторить запрос",
                 false,
                 () -> {
-                  chatInput.setText(ChatMemo.split(last).text);
+                  chatInput.setText(ChatMemo.split(ChatImages.split(last).text).text);
                   send();
                 }));
         gap(messages, 5);
@@ -3183,61 +3188,30 @@ public final class MainActivity extends Activity
                 : "Локально · GGUF отвечает на телефоне")
             : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
     gap(content, 4);
-    String attached = prefs.getString("chatImage." + chat, "");
-    if (!attached.isEmpty()) {
-      content.addView(imagePreview(attached, 80));
+    List<String> attachedList = ImageList.parse(prefs.getString("chatImage." + chat, ""));
+    List<String> historyBodies = new ArrayList<>();
+    for (int i = 0; i < history.length(); i++)
+      historyBodies.add(history.optJSONObject(i).optString("content"));
+    int remembered = ChatImages.all(historyBodies).size();
+    if (!attachedList.isEmpty()) {
+      content.addView(chatAttachStrip(attachedList, chat));
       gap(content, 4);
-      LinearLayout imageActions = row();
-      imageActions.addView(
-          compactButton(
-              "Повернуть и обрезать",
-              false,
-              () -> {
-                if (ChatRunner.running != 0) {
-                  toast("Дождитесь завершения анализа");
-                  return;
-                }
-                long chatId = chat;
-                showImageEditor(
-                    attached,
-                    edited -> {
-                      String key = "chatImage." + chatId;
-                      if (!attached.equals(prefs.getString(key, ""))) {
-                        releaseImage(edited, "");
-                        return;
-                      }
-                      prefs.edit().putString(key, edited).apply();
-                      releaseImage(attached, edited);
-                      if (page.equals("chat") && chat == chatId) {
-                        stash();
-                        render();
-                      }
-                    });
-              }),
-          new LinearLayout.LayoutParams(0, -2, 1));
-      imageActions.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
-      imageActions.addView(
-          compactButton(
-              "Убрать изображение",
-              false,
-              () -> {
-                // У нового чата chat == 0, как и у ChatRunner.running в покое: без проверки на ноль
-                // кнопка никогда не срабатывала.
-                if (ChatRunner.running != 0 && ChatRunner.running == chat) {
-                  toast("Дождитесь завершения анализа");
-                  return;
-                }
-                stash();
-                prefs.edit().remove("chatImage." + chat).apply();
-                releaseImage(attached, "");
-                render();
-              }),
-          new LinearLayout.LayoutParams(0, -2, 1));
-      content.addView(imageActions);
       chatNote(
           content,
-          "После отправки ИИ создаст отдельную заметку по картинке. Нужна модель с поддержкой"
-              + " изображений.");
+          "Напишите вопрос — ИИ ответит по картинкам. Без текста или с просьбой «создай заметку»"
+              + " ИИ сделает из них заметку. Картинки останутся в чате, присылать их заново не"
+              + " нужно.");
+    } else if (remembered > 0) {
+      chatNote(
+          content,
+          LocalLlm.enabled(this)
+              ? "В чате " + remembered + " картинок, но локальная модель их не видит."
+              : "ИИ помнит картинки этого чата ("
+                  + remembered
+                  + (remembered > ChatImages.MAX_IN_REQUEST
+                      ? ", видит последние " + ChatImages.MAX_IN_REQUEST
+                      : "")
+                  + "). Присылать их заново не нужно.");
     }
     gap(content, 4);
     // Одна строка ввода: изображение, поле и отправка.
@@ -3396,7 +3370,7 @@ public final class MainActivity extends Activity
     String query = chatInput.getText().toString().trim();
     String image = prefs.getString("chatImage." + chat, "");
     if (ChatRunner.running != 0 || (query.isEmpty() && image.isEmpty())) return;
-    if (query.isEmpty()) query = "Создай краткую заметку по изображению";
+    if (query.isEmpty()) query = ChatRunner.NOTE_QUERY;
     boolean local = LocalLlm.enabled(this);
     if (local && !image.isEmpty()) {
       toast(
@@ -3432,8 +3406,8 @@ public final class MainActivity extends Activity
           .setMessage(
               "Ваш вопрос, последние сообщения чата и до 8 найденных фрагментов заметок будут"
                   + " отправлены в Polza.AI и выбранной модели. Запросы оплачиваются с вашего"
-                  + " баланса Polza.AI. Прикреплённое изображение также будет отправлено выбранной"
-                  + " модели.")
+                  + " баланса Polza.AI. Картинки, которые вы присылаете в чат, тоже уходят"
+                  + " модели и остаются в чате: ИИ видит последние из них при каждом ответе.")
           .setNegativeButton("Отмена", null)
           .setPositiveButton(
               "Подключить",
@@ -3460,29 +3434,179 @@ public final class MainActivity extends Activity
         local ? LocalLlm.modelId(this) : prefs.getString("model", ""),
         query,
         prefs.getInt("maxTokens", 600),
-        image);
+        image,
+        imageModel());
     render();
   }
 
-  private View imagePreview(String name, int height) {
-    return imagePreview(name, height, List.of(name));
+  /** Действия с выбранной картинкой заметки одним списком, чтобы не занимать место кнопками. */
+  private void showImageActions() {
+    List<String> labels = new ArrayList<>(), keys = new ArrayList<>();
+    labels.add("Описать и добавить в заметку");
+    keys.add("describe");
+    labels.add("Создать заметку по изображению");
+    keys.add("analyze");
+    labels.add("Повернуть и обрезать");
+    keys.add("edit");
+    if (ImageList.count(noteImage) > 1) {
+      labels.add("Сдвинуть раньше");
+      keys.add("earlier");
+      labels.add("Сдвинуть позже");
+      keys.add("later");
+    }
+    labels.add("Убрать");
+    keys.add("remove");
+    new AlertDialog.Builder(this)
+        .setTitle("Изображение " + (selectedImage + 1))
+        .setItems(
+            labels.toArray(new String[0]),
+            (d, which) -> {
+              switch (keys.get(which)) {
+                case "describe" -> describeNoteImage();
+                case "analyze" -> analyzeNoteImage();
+                case "edit" -> editSelectedImage();
+                case "earlier" -> moveSelectedImage(-1);
+                case "later" -> moveSelectedImage(1);
+                default -> removeSelectedImage();
+              }
+            })
+        .show();
   }
 
-  /** Предпросмотр грузится в фоне; нажатие открывает просмотр на весь экран со всеми картинками. */
-  private View imagePreview(String name, int height, List<String> all) {
-    ImageView preview = new ImageView(this);
-    preview.setAdjustViewBounds(true);
-    preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-    preview.setContentDescription("Прикреплённое изображение. Нажмите, чтобы открыть на весь экран");
-    preview.setBackground(shape(LIME, 10));
-    preview.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(height)));
-    preview.setOnClickListener(
-        v -> {
-          buzz(0);
-          showImageViewer(all, Math.max(0, all.indexOf(name)));
+  private ImageView imageTile(String name, int size, int radius) {
+    ImageView thumb = new ImageView(this);
+    thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    thumb.setBackground(shape(LIME, radius));
+    thumb.setClipToOutline(true);
+    thumb.setOutlineProvider(rounded(radius));
+    ImageThumbs.load(this, thumb, name, size * 2);
+    return thumb;
+  }
+
+  /** Картинки, приложенные к новому сообщению чата: лента с «×» и плиткой «добавить ещё». */
+  private View chatAttachStrip(List<String> names, long chatId) {
+    HorizontalScrollView scroll = new HorizontalScrollView(this);
+    scroll.setHorizontalScrollBarEnabled(false);
+    LinearLayout strip = row();
+    for (String name : names) {
+      FrameLayout cell = new FrameLayout(this);
+      ImageView thumb = imageTile(name, 64, 10);
+      thumb.setContentDescription("Приложенное изображение. Нажмите: открыть, обрезать или убрать");
+      thumb.setOnClickListener(
+          v -> {
+            buzz(0);
+            chatImageMenu(name, names, chatId);
+          });
+      cell.addView(thumb, new FrameLayout.LayoutParams(dp(64), dp(64)));
+      ImageView remove = new ImageView(this);
+      remove.setScaleType(ImageView.ScaleType.CENTER);
+      remove.setImageDrawable(new Glyph("close", WHITE, 12));
+      remove.setBackground(shape(0xCC1E3028, 11));
+      remove.setContentDescription("Убрать изображение");
+      remove.setOnClickListener(
+          v -> {
+            buzz(0);
+            removeChatImage(name, chatId);
+          });
+      FrameLayout.LayoutParams removeParams =
+          new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP | Gravity.END);
+      removeParams.topMargin = dp(3);
+      removeParams.rightMargin = dp(3);
+      cell.addView(remove, removeParams);
+      LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
+      params.rightMargin = dp(6);
+      strip.addView(cell, params);
+    }
+    if (names.size() < ChatImages.MAX_ATTACH) {
+      ImageView more = new ImageView(this);
+      more.setScaleType(ImageView.ScaleType.CENTER);
+      more.setImageDrawable(new Glyph("add", GREEN, 22));
+      more.setBackground(ripple(LIME, 10));
+      more.setContentDescription("Добавить ещё изображения");
+      more.setFocusable(true);
+      more.setOnClickListener(
+          v -> {
+            buzz(0);
+            pickImage(true);
+          });
+      strip.addView(more, new LinearLayout.LayoutParams(dp(64), dp(64)));
+    }
+    scroll.addView(strip);
+    return scroll;
+  }
+
+  private void chatImageMenu(String name, List<String> all, long chatId) {
+    new AlertDialog.Builder(this)
+        .setItems(
+            new String[] {"Открыть", "Повернуть и обрезать", "Убрать"},
+            (d, which) -> {
+              if (which == 0) showImageViewer(all, Math.max(0, all.indexOf(name)));
+              else if (which == 1) editChatImage(name, chatId);
+              else removeChatImage(name, chatId);
+            })
+        .show();
+  }
+
+  private void removeChatImage(String name, long chatId) {
+    if (ChatRunner.running != 0 && ChatRunner.running == chatId) {
+      toast("Дождитесь завершения ответа");
+      return;
+    }
+    String key = "chatImage." + chatId;
+    String before = prefs.getString(key, "");
+    String after = ImageList.remove(before, name);
+    stash();
+    if (after.isEmpty()) prefs.edit().remove(key).apply();
+    else prefs.edit().putString(key, after).apply();
+    releaseImage(before, after);
+    render();
+  }
+
+  private void editChatImage(String name, long chatId) {
+    if (ChatRunner.running != 0) {
+      toast("Дождитесь завершения ответа");
+      return;
+    }
+    showImageEditor(
+        name,
+        edited -> {
+          String key = "chatImage." + chatId;
+          String before = prefs.getString(key, "");
+          if (!ImageList.parse(before).contains(name)) {
+            releaseImage(edited, "");
+            return;
+          }
+          String after = ImageList.replace(before, name, edited);
+          prefs.edit().putString(key, after).apply();
+          releaseImage(before, after);
+          if (page.equals("chat") && chat == chatId) {
+            stash();
+            render();
+          }
         });
-    ImageThumbs.load(this, preview, name, 900);
-    return preview;
+  }
+
+  /** Миниатюры картинок внутри пузыря сообщения; нажатие открывает просмотр на весь экран. */
+  private View messageImages(List<String> names) {
+    HorizontalScrollView scroll = new HorizontalScrollView(this);
+    scroll.setHorizontalScrollBarEnabled(false);
+    LinearLayout strip = row();
+    for (int i = 0; i < names.size(); i++) {
+      int index = i;
+      ImageView thumb = imageTile(names.get(i), 72, 8);
+      thumb.setContentDescription(
+          "Изображение " + (i + 1) + " из " + names.size() + ". Нажмите, чтобы открыть");
+      thumb.setOnClickListener(
+          v -> {
+            buzz(0);
+            showImageViewer(names, index);
+          });
+      LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(72), dp(72));
+      params.rightMargin = dp(5);
+      strip.addView(thumb, params);
+    }
+    scroll.addView(strip);
+    return scroll;
   }
 
   private ViewOutlineProvider rounded(int radius) {
@@ -3519,12 +3643,16 @@ public final class MainActivity extends Activity
       thumb.setClipToOutline(true);
       thumb.setOutlineProvider(rounded(8));
       ImageThumbs.load(this, thumb, images.get(i), 160);
-      cell.addView(thumb, new FrameLayout.LayoutParams(dp(60), dp(60)));
+      cell.addView(thumb, new FrameLayout.LayoutParams(dp(72), dp(72)));
       cell.setContentDescription(
           "Изображение " + (i + 1) + " из " + images.size() + (i == selectedImage ? ", выбрано" : ""));
       cell.setOnClickListener(
           v -> {
             buzz(0);
+            if (index == selectedImage) {
+              showImageViewer(images, index);
+              return;
+            }
             stash();
             selectedImage = index;
             render();
@@ -3651,32 +3779,64 @@ public final class MainActivity extends Activity
     viewer.show();
   }
 
+  /** Сколько картинок ещё можно добавить к новому сообщению чата или к заметке. */
+  private int imageRoom(boolean forChat) {
+    if (forChat) return ChatImages.MAX_ATTACH - ImageList.count(prefs.getString("chatImage." + chat, ""));
+    return ImageList.MAX - ImageList.count(noteImage);
+  }
+
   private void pickImage(boolean forChat) {
     if ((forChat && ChatRunner.running != 0) || ImageRunner.running) {
       toast("Дождитесь завершения анализа");
       return;
     }
-    if (!forChat && ImageList.full(noteImage)) {
-      toast("В заметке не больше " + ImageList.MAX + " изображений. Уберите лишнее.");
+    int room = imageRoom(forChat);
+    if (room <= 0) {
+      toast(
+          forChat
+              ? "К сообщению не больше " + ChatImages.MAX_ATTACH + " картинок. Уберите лишнее."
+              : "В заметке не больше " + ImageList.MAX + " изображений. Уберите лишнее.");
       return;
     }
     stash();
     pickerPage = forChat ? "chat" : "note";
     pickerTarget = forChat ? chat : editing;
+    boolean system = Build.VERSION.SDK_INT >= 33;
+    String limit = room > 1 ? " (до " + room + ")" : "";
     new AlertDialog.Builder(this)
-        .setTitle("Добавить изображение")
+        .setTitle("Добавить изображения")
         .setItems(
-            new String[] {"Выбрать из файлов", "Сделать снимок"},
+            system
+                ? new String[] {"Галерея: несколько фото" + limit, "Файлы", "Сделать снимок"}
+                : new String[] {"Выбрать несколько изображений" + limit, "Сделать снимок"},
             (d, which) -> {
-              if (which == 0)
-                startActivityForResult(
-                    new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                        .addCategory(Intent.CATEGORY_OPENABLE)
-                        .setType("image/*"),
-                    88);
+              int choice = system ? which : which == 0 ? 1 : 2;
+              if (choice == 0) pickFromGallery(room);
+              else if (choice == 1) pickFromFiles();
               else takePhoto();
             })
         .show();
+  }
+
+  /** Системный выбор фото Android 13+: плитка снимков, можно отметить сразу несколько. */
+  private void pickFromGallery(int room) {
+    try {
+      Intent picker = new Intent(android.provider.MediaStore.ACTION_PICK_IMAGES);
+      // Лимит системного выбора — сотни снимков, нам нужно не больше 8; при отказе откроются файлы.
+      if (room > 1) picker.putExtra(android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX, room);
+      startActivityForResult(picker, 91);
+    } catch (Exception e) {
+      pickFromFiles();
+    }
+  }
+
+  private void pickFromFiles() {
+    startActivityForResult(
+        new Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            .setType("image/*"),
+        88);
   }
 
   /** Снимок во временный файл приложения; разрешение на камеру не нужно, снимает системное окно. */
@@ -3894,6 +4054,12 @@ public final class MainActivity extends Activity
         });
   }
 
+  /** Модель для картинок: из настройки; если пусто, Gemini 2.5 Flash (хорошо читает текст на фото). */
+  private String imageModel() {
+    String model = prefs.getString("imageModel", "").trim();
+    return model.isEmpty() ? Vision.DEFAULT_MODEL : model;
+  }
+
   private String videoModel() {
     String model = prefs.getString("videoModel", "").trim();
     return model.isEmpty() ? VideoAnalysis.DEFAULT_MODEL : model;
@@ -4086,9 +4252,9 @@ public final class MainActivity extends Activity
     stash();
     String image = selectedImageName();
     try {
-      String key = Secrets.read(this), model = prefs.getString("model", "");
-      if (key.isEmpty() || model.isEmpty()) {
-        toast("Сначала сохраните API-ключ и модель с поддержкой изображений в настройках");
+      String key = Secrets.read(this), model = imageModel();
+      if (key.isEmpty()) {
+        toast("Сначала сохраните API-ключ в настройках");
         return;
       }
       new AlertDialog.Builder(this)
@@ -4124,9 +4290,9 @@ public final class MainActivity extends Activity
     String image = selectedImageName();
     long noteId = editing;
     try {
-      String key = Secrets.read(this), model = prefs.getString("model", "");
-      if (key.isEmpty() || model.isEmpty()) {
-        toast("Сначала сохраните API-ключ и модель с поддержкой изображений в настройках");
+      String key = Secrets.read(this), model = imageModel();
+      if (key.isEmpty()) {
+        toast("Сначала сохраните API-ключ в настройках");
         return;
       }
       new AlertDialog.Builder(this)
@@ -4754,6 +4920,25 @@ public final class MainActivity extends Activity
     content.addView(load);
     gap(content, 16);
     if (mode == MODE_POLZA) {
+      secondary(content, "Модель для картинок");
+      EditText imageField = input(Vision.DEFAULT_MODEL, false);
+      imageField.setText(prefs.getString("imageModel", ""));
+      watch(
+          imageField,
+          () ->
+              prefs
+                  .edit()
+                  .putString("imageModel", imageField.getText().toString().trim())
+                  .apply());
+      content.addView(imageField);
+      gap(content, 6);
+      secondary(
+          content,
+          "Модель, которая смотрит картинки в чате и в заметках. Нужна с поддержкой изображений и"
+              + " хорошим чтением текста. Если пусто, используется "
+              + Vision.DEFAULT_MODEL
+              + ". Обычная модель выше отвечает на текстовые вопросы.");
+      gap(content, 16);
       secondary(content, "Модель для видео YouTube");
       EditText videoField = input(VideoAnalysis.DEFAULT_MODEL, false);
       videoField.setText(prefs.getString("videoModel", ""));
@@ -5396,14 +5581,19 @@ public final class MainActivity extends Activity
           });
       return;
     }
-    if (request == 88 && result == RESULT_OK && data != null && data.getData() != null) {
-      attachImage(data.getData(), pickerPage, pickerTarget, null);
+    if ((request == 88 || request == 91) && result == RESULT_OK && data != null) {
+      List<Uri> picked = new ArrayList<>();
+      ClipData clip = data.getClipData();
+      if (clip != null)
+        for (int i = 0; i < clip.getItemCount(); i++) picked.add(clip.getItemAt(i).getUri());
+      else if (data.getData() != null) picked.add(data.getData());
+      if (!picked.isEmpty()) attachImages(picked, pickerPage, pickerTarget, null);
       return;
     }
     if (request == 90) {
       java.io.File shot = takeShot();
       if (result == RESULT_OK && shot != null && shot.length() > 0)
-        attachImage(Uri.fromFile(shot), pickerPage, pickerTarget, shot);
+        attachImages(List.of(Uri.fromFile(shot)), pickerPage, pickerTarget, shot);
       else if (shot != null) shot.delete();
       return;
     }
@@ -5412,67 +5602,83 @@ public final class MainActivity extends Activity
     }
   }
 
-  /** Сжимает выбранную или снятую картинку и прикрепляет её к заметке или чату. */
-  private void attachImage(Uri uri, String targetPage, long target, java.io.File temporary) {
-    {
-      toast("Подготавливаю изображение…");
-      io.execute(
-          () -> {
-            try {
-              String imported = ImageFiles.importImage(getApplicationContext(), uri);
-              String combined = imported;
-              if (targetPage.equals("chat")) {
-                // В чате картинка одна: новая заменяет прежнюю.
-                String previous = prefs.getString("chatImage." + target, "");
-                prefs.edit().putString("chatImage." + target, imported).apply();
-                ImageFiles.release(getApplicationContext(), previous);
-              } else {
-                // В заметке картинки добавляются в конец списка. Источник правды — черновик, его
-                // редактор ведёт при каждом изменении; без него берём сохранённую заметку.
-                String base = prefs.getString("draft." + target + ".image", null);
-                if (base == null && target > 0)
-                  try (Store images = new Store(getApplicationContext())) {
-                    Note existing = images.note(target);
-                    base = existing == null ? "" : existing.image;
-                  }
-                if (base == null) base = "";
-                combined = ImageList.add(base, imported);
-                if (ImageList.count(combined) == ImageList.count(base)) {
-                  ImageFiles.release(getApplicationContext(), imported);
-                  runOnUiThread(
-                      () -> {
-                        if (!isDestroyed())
-                          toast("В заметке не больше " + ImageList.MAX + " изображений.");
-                      });
-                  return;
+  /**
+   * Сжимает выбранные или снятые картинки и прикрепляет их к заметке или новому сообщению чата.
+   * Лишние сверх лимита пропускаются, об этом сообщается одним уведомлением.
+   */
+  private void attachImages(
+      List<Uri> uris, String targetPage, long target, java.io.File temporary) {
+    toast(uris.size() > 1 ? "Подготавливаю изображения…" : "Подготавливаю изображение…");
+    io.execute(
+        () -> {
+          int added = 0, failed = 0, skipped = 0;
+          boolean chatTarget = targetPage.equals("chat");
+          String list = "";
+          try {
+            // Источник правды для заметки — черновик, его редактор ведёт при каждом изменении;
+            // без него берём сохранённую заметку. Для чата — список вложений нового сообщения.
+            if (chatTarget) list = prefs.getString("chatImage." + target, "");
+            else {
+              String base = prefs.getString("draft." + target + ".image", null);
+              if (base == null && target > 0)
+                try (Store images = new Store(getApplicationContext())) {
+                  Note existing = images.note(target);
+                  base = existing == null ? "" : existing.image;
                 }
-                prefs.edit().putString("draft." + target + ".image", combined).apply();
-              }
-              String result = combined;
-              runOnUiThread(
-                  () -> {
-                    if (isDestroyed()) return;
-                    if (targetPage.equals("chat") && page.equals("chat") && chat == target) {
-                      stash();
-                      render();
-                    } else if (targetPage.equals("note") && editorActive && editing == target) {
-                      noteImage = result;
-                      selectedImage = ImageList.count(result) - 1;
-                      stash();
-                      render();
-                    }
-                  });
-            } catch (Exception | OutOfMemoryError e) {
-              runOnUiThread(
-                  () -> {
-                    if (!isDestroyed())
-                      toast("Не удалось прикрепить изображение. Выберите картинку до 25 МБ.");
-                  });
-            } finally {
-              if (temporary != null) temporary.delete();
+              list = base == null ? "" : base;
             }
-          });
-    }
+            int max = chatTarget ? ChatImages.MAX_ATTACH : ImageList.MAX;
+            for (Uri uri : uris) {
+              if (ImageList.count(list) >= max) {
+                skipped++;
+                continue;
+              }
+              try {
+                String imported = ImageFiles.importImage(getApplicationContext(), uri);
+                list = ImageList.add(list, imported);
+                added++;
+              } catch (Exception | OutOfMemoryError e) {
+                failed++;
+              }
+            }
+            if (added > 0) {
+              if (chatTarget) prefs.edit().putString("chatImage." + target, list).apply();
+              else prefs.edit().putString("draft." + target + ".image", list).apply();
+            }
+          } catch (Exception | OutOfMemoryError e) {
+            failed = uris.size() - added;
+          } finally {
+            if (temporary != null) temporary.delete();
+          }
+          String result = list;
+          int addedNow = added, failedNow = failed, skippedNow = skipped;
+          runOnUiThread(
+              () -> {
+                if (isDestroyed()) return;
+                if (failedNow > 0)
+                  toast(
+                      addedNow == 0
+                          ? "Не удалось прикрепить изображение. Выберите картинку до 25 МБ."
+                          : "Добавлено " + addedNow + ", не удалось прикрепить " + failedNow + ".");
+                else if (skippedNow > 0)
+                  toast(
+                      "Добавлено "
+                          + addedNow
+                          + ", остальные не поместились: "
+                          + (chatTarget ? ChatImages.MAX_ATTACH : ImageList.MAX)
+                          + " максимум.");
+                if (addedNow == 0) return;
+                if (chatTarget && page.equals("chat") && chat == target) {
+                  stash();
+                  render();
+                } else if (!chatTarget && editorActive && editing == target) {
+                  noteImage = result;
+                  selectedImage = ImageList.count(result) - 1;
+                  stash();
+                  render();
+                }
+              });
+        });
   }
 
   private void exportNotes(Uri uri) {

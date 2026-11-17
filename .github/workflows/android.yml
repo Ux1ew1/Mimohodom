@@ -65,6 +65,7 @@ jobs:
           ./scripts/test-images.ps1
           ./scripts/test-image-input.ps1
           ./scripts/test-image-list.ps1
+          ./scripts/test-chat-images.ps1
           ./scripts/test-folders.ps1
           ./scripts/test-video.ps1
           ./scripts/test-calendar.ps1
