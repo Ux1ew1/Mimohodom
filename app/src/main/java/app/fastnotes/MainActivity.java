@@ -3253,7 +3253,6 @@ public final class MainActivity extends Activity
             + " заметки.");
   }
 
-  /** Заголовок раздела настроек; у всех, кроме первого, сверху тонкая линия. */
   /** Выбран ли «Мимоходом» цифровым ассистентом (роль известна с Android 10). */
   private boolean assistantHeld() {
     if (Build.VERSION.SDK_INT < 29) return false;
@@ -3261,6 +3260,7 @@ public final class MainActivity extends Activity
     return roles != null && roles.isRoleHeld(android.app.role.RoleManager.ROLE_ASSISTANT);
   }
 
+  /** Заголовок раздела настроек; у всех, кроме первого, сверху тонкая линия. */
   private void section(String title, boolean rule) {
     if (rule) {
       gap(content, 22);
