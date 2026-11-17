@@ -15,5 +15,8 @@
     <string name="shortcut_notes_short">Заметки</string>
     <string name="shortcut_notes_long">Все заметки</string>
     <string name="shortcut_search_short">Поиск</string>
+    <string name="assist_label">Мимоходом · голос</string>
+    <string name="shortcut_voice_short">Голосом</string>
+    <string name="shortcut_voice_long">Голосовой ассистент</string>
     <string name="shortcut_search_long">Поиск по заметкам</string>
 </resources>

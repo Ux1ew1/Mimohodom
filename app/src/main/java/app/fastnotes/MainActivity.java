@@ -37,7 +37,10 @@ public final class MainActivity extends Activity
   private int lastDockTab = -2;
   private View dockFade;
   private int navInset;
-  private boolean keyboardUp, searchOpen, focusEditor, focusSearch;
+  private boolean keyboardUp, searchOpen, focusEditor, focusSearch, assistSend;
+
+  /** Текст запроса от {@link AssistActivity} для отправки в новый чат. */
+  static final String ASSIST_QUERY = "assistQuery";
   private Runnable closeSearch;
   private EditText searchField;
   private PopupWindow suggestionsPopup;
@@ -187,6 +190,7 @@ public final class MainActivity extends Activity
     ImageRunner.listen(this);
     BackgroundAnalysis.configure(this);
     render();
+    sendAssistQuery();
     io.execute(
         () -> {
           try (Store reminders = new Store(getApplicationContext())) {
@@ -227,6 +231,13 @@ public final class MainActivity extends Activity
         tab = 2;
         page = "chat";
         chat = 0;
+        // Вопрос, продиктованный голосовому ассистенту, сразу уходит в новый чат.
+        String query = intent.getStringExtra(ASSIST_QUERY);
+        intent.removeExtra(ASSIST_QUERY);
+        if (query != null && !query.trim().isEmpty()) {
+          prefs.edit().putString("chatDraft.0", query.trim()).apply();
+          assistSend = true;
+        }
       }
       case "app.fastnotes.action.OPEN_NOTES" -> {
         tab = 0;
@@ -252,6 +263,18 @@ public final class MainActivity extends Activity
     hideKeyboard();
     routeIntent(intent);
     render();
+    sendAssistQuery();
+  }
+
+  private void sendAssistQuery() {
+    if (!assistSend) return;
+    assistSend = false;
+    getWindow()
+        .getDecorView()
+        .post(
+            () -> {
+              if (chatInput != null && "chat".equals(page)) send();
+            });
   }
 
   @Override
@@ -3156,6 +3179,34 @@ public final class MainActivity extends Activity
                 toast("Не удалось безопасно сохранить ключ");
               }
             }));
+    section("Голосовой ассистент · эксперимент", true);
+    secondary(
+        content,
+        assistantHeld()
+            ? "«Мимоходом» выбран цифровым ассистентом. Удерживайте кнопку питания, скажите"
+                + " мысль — и сохраните её заметкой или спросите ИИ."
+            : "Выберите «Мимоходом» цифровым ассистентом, и долгое удержание кнопки питания будет"
+                + " открывать голосовой ввод. На Samsung также включите в «Боковая клавиша»"
+                + " действие «Цифровой помощник».");
+    gap(content, 10);
+    content.addView(
+        iconButton(
+            "Выбрать ассистента",
+            "spark",
+            () -> {
+              try {
+                startActivity(new Intent(android.provider.Settings.ACTION_VOICE_INPUT_SETTINGS));
+              } catch (Exception e) {
+                startActivity(
+                    new Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS));
+              }
+            }));
+    gap(content, 8);
+    content.addView(
+        iconButton(
+            "Попробовать сейчас",
+            "chat",
+            () -> startActivity(new Intent(this, AssistActivity.class))));
     section("Уведомления", true);
     content.addView(
         iconButton(
@@ -3203,6 +3254,13 @@ public final class MainActivity extends Activity
   }
 
   /** Заголовок раздела настроек; у всех, кроме первого, сверху тонкая линия. */
+  /** Выбран ли «Мимоходом» цифровым ассистентом (роль известна с Android 10). */
+  private boolean assistantHeld() {
+    if (Build.VERSION.SDK_INT < 29) return false;
+    android.app.role.RoleManager roles = getSystemService(android.app.role.RoleManager.class);
+    return roles != null && roles.isRoleHeld(android.app.role.RoleManager.ROLE_ASSISTANT);
+  }
+
   private void section(String title, boolean rule) {
     if (rule) {
       gap(content, 22);
