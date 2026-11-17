@@ -53,6 +53,8 @@ public final class MainActivity extends Activity
   private int repeatMode = 0, leadChoice = -1;
   /** Какая из картинок открытой заметки выбрана в ленте; {@code selectedImageFor} — её заметка. */
   private int selectedImage = 0;
+  /** Положение ленты миниатюр заметки: перерисовка экрана не должна возвращать её в начало. */
+  private int stripScroll = 0;
   private long selectedImageFor = -1;
   private boolean editorActive = false, rendering = false;
   /**
@@ -256,7 +258,6 @@ public final class MainActivity extends Activity
         tab = 2;
         page = "chat";
         chat = 0;
-        prefs.edit().remove("chatImage.0").apply();
       }
       case "app.fastnotes.action.OPEN_NOTES" -> {
         tab = 0;
@@ -1407,6 +1408,7 @@ public final class MainActivity extends Activity
     noteImage = prefs.getString(p + "image", note == null ? "" : note.image);
     if (selectedImageFor != id) {
       selectedImage = 0;
+      stripScroll = 0;
       selectedImageFor = id;
     }
     // Название, текст и значки действий лежат на одном листе с тенью.
@@ -1460,7 +1462,9 @@ public final class MainActivity extends Activity
       imageBar.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
       LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(-2, -2);
       actionParams.leftMargin = dp(8);
-      imageBar.addView(compactButton("Действия", false, this::showImageActions), actionParams);
+      TextView actions = compactButton("Действия", false, this::showImageActions);
+      actions.setMinHeight(dp(44));
+      imageBar.addView(actions, actionParams);
       imageBox.addView(imageBar);
       sheet.addView(imageBox);
     }
@@ -2873,8 +2877,8 @@ public final class MainActivity extends Activity
             "Новый чат",
             true,
             () -> {
-              // Не переносим в новый чат неотправленную картинку из прошлого черновика.
-              prefs.edit().remove("chatImage.0").apply();
+              // Черновик нового чата (текст и приложенные картинки) сохраняется, пока его не
+              // отправят или не уберут вручную: тихо стирать вложения нельзя, их файлы осиротеют.
               chat = 0;
               page = "chat";
               render();
@@ -2977,6 +2981,9 @@ public final class MainActivity extends Activity
                           Set<String> chatPictures = new HashSet<>();
                           for (String body : chatBodies(id))
                             chatPictures.addAll(ChatImages.split(body).images);
+                          // Неотправленные вложения этого чата тоже освобождаем.
+                          chatPictures.addAll(
+                              ImageList.parse(prefs.getString("chatImage." + id, "")));
                           store.deleteChat(id);
                           prefs.edit().remove("chatDraft." + id).remove("chatImage." + id).apply();
                           for (String name : chatPictures)
@@ -3488,10 +3495,12 @@ public final class MainActivity extends Activity
     HorizontalScrollView scroll = new HorizontalScrollView(this);
     scroll.setHorizontalScrollBarEnabled(false);
     LinearLayout strip = row();
-    for (String name : names) {
+    for (int position = 0; position < names.size(); position++) {
+      String name = names.get(position);
+      String label = "изображение " + (position + 1) + " из " + names.size();
       FrameLayout cell = new FrameLayout(this);
       ImageView thumb = imageTile(name, 64, 10);
-      thumb.setContentDescription("Приложенное изображение. Нажмите: открыть, обрезать или убрать");
+      thumb.setContentDescription("Приложено " + label + ". Нажмите: открыть, обрезать или убрать");
       thumb.setOnClickListener(
           v -> {
             buzz(0);
@@ -3501,17 +3510,16 @@ public final class MainActivity extends Activity
       ImageView remove = new ImageView(this);
       remove.setScaleType(ImageView.ScaleType.CENTER);
       remove.setImageDrawable(new Glyph("close", WHITE, 12));
-      remove.setBackground(shape(0xCC1E3028, 11));
-      remove.setContentDescription("Убрать изображение");
+      // Видимый кружок 22 dp, зона касания 36 dp.
+      remove.setBackground(new InsetDrawable(shape(0xCC1E3028, 11), dp(7)));
+      remove.setContentDescription("Убрать " + label);
       remove.setOnClickListener(
           v -> {
             buzz(0);
             removeChatImage(name, chatId);
           });
       FrameLayout.LayoutParams removeParams =
-          new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP | Gravity.END);
-      removeParams.topMargin = dp(3);
-      removeParams.rightMargin = dp(3);
+          new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP | Gravity.END);
       cell.addView(remove, removeParams);
       LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
       params.rightMargin = dp(6);
@@ -3662,6 +3670,20 @@ public final class MainActivity extends Activity
       strip.addView(cell, params);
     }
     scroll.addView(strip);
+    scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> stripScroll = x);
+    // После перерисовки возвращаем прежнее положение и следим, чтобы выбранная плитка была видна
+    // (выбор, добавление и сдвиг перерисовывают экран).
+    scroll.post(
+        () -> {
+          int target = stripScroll;
+          View selected = strip.getChildAt(selectedImage);
+          if (selected != null) {
+            if (selected.getLeft() < target) target = selected.getLeft();
+            else if (selected.getRight() > target + scroll.getWidth())
+              target = selected.getRight() - scroll.getWidth();
+          }
+          scroll.scrollTo(Math.max(0, target), 0);
+        });
     return scroll;
   }
 
