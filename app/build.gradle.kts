@@ -10,7 +10,10 @@ android {
         externalNativeBuild { cmake { cppFlags += "-O3"; arguments += "-DANDROID_STL=c++_shared" } }
     }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
-    buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
+    buildTypes {
+        // Отдельный установщик эксперимента: ставится рядом с основным приложением, со своими данными.
+        create("assist") { initWith(getByName("debug")); applicationIdSuffix = ".assist"; versionNameSuffix = "-separate"; manifestPlaceholders["appLabel"] = "Мимоходом β"; matchingFallbacks += listOf("debug") }
+        release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 dependencies {

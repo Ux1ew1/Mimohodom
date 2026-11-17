@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
+    <!-- Значок отдельной экспериментальной сборки: призма с лучом и спектром. -->
+    <path android:fillColor="#0B1418" android:pathData="M0,0h48v48h-48z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="1.8" android:pathData="M4,29L17,25.5" />
+    <path android:strokeColor="#FF5A5A" android:strokeWidth="1.8" android:pathData="M27,26L46,28" />
+    <path android:strokeColor="#FFB347" android:strokeWidth="1.8" android:pathData="M27,27L46,31" />
+    <path android:strokeColor="#FFE45C" android:strokeWidth="1.8" android:pathData="M27,28L46,34" />
+    <path android:strokeColor="#6EE38A" android:strokeWidth="1.8" android:pathData="M27,29L46,37" />
+    <path android:strokeColor="#5AB4FF" android:strokeWidth="1.8" android:pathData="M27,30L45,40.5" />
+    <path android:strokeColor="#9B7BFF" android:strokeWidth="1.8" android:pathData="M27,31L43,43.5" />
+    <path android:fillColor="#E8F2C9" android:fillAlpha="0.92" android:pathData="M22,11L32,33H12Z" />
+</vector>
