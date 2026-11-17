@@ -170,6 +170,7 @@ impl Store {
 
     pub fn open_memory() -> Result<Store> {
         let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         let s = Store { conn };
         s.migrate()?;
         Ok(s)
@@ -234,6 +235,31 @@ impl Store {
                  CREATE TABLE IF NOT EXISTS cache(
                    cache_key TEXT PRIMARY KEY, body TEXT NOT NULL, created INTEGER NOT NULL);
                  PRAGMA user_version=2;",
+            )?;
+        }
+        if version < 3 {
+            // Этап 2, часть 2: фоновый помощник. Всё это живёт только на этом устройстве:
+            // предложения напоминаний, очередь проверки, предложения менеджера, стопки, история.
+            self.conn.execute_batch(
+                "ALTER TABLE notes ADD COLUMN suggestion INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE notes ADD COLUMN suggestion_reason TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE notes ADD COLUMN ai_failed INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE chats ADD COLUMN kind INTEGER NOT NULL DEFAULT 0;
+                 CREATE TABLE IF NOT EXISTS manager_review(
+                   note INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
+                   revision TEXT NOT NULL, attempted INTEGER NOT NULL, failed INTEGER NOT NULL DEFAULT 1);
+                 CREATE TABLE IF NOT EXISTS manager_proposals(
+                   id INTEGER PRIMARY KEY AUTOINCREMENT, identity TEXT NOT NULL UNIQUE, data TEXT NOT NULL,
+                   state TEXT NOT NULL DEFAULT 'pending', created INTEGER NOT NULL, result INTEGER);
+                 CREATE TABLE IF NOT EXISTS note_groups(
+                   top INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
+                   expanded INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE IF NOT EXISTS note_members(
+                   note INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
+                   top INTEGER NOT NULL REFERENCES note_groups(top) ON DELETE CASCADE);
+                 CREATE TABLE IF NOT EXISTS review_log(
+                   id INTEGER PRIMARY KEY AUTOINCREMENT, time INTEGER NOT NULL, text TEXT NOT NULL);
+                 PRAGMA user_version=3;",
             )?;
         }
         Ok(())
@@ -424,7 +450,7 @@ impl Store {
             }
             Some(o) => {
                 self.conn.execute(
-                    "UPDATE notes SET title=?2,body=?3,updated=?4,reminder=?5,repeat_mode=?6,lead_minutes=?7,image=?8,folder=?9,title_auto=?10,metadata=?11,search_text=?12,sync_ts=?13,sync_seq=?14,sync_from='' WHERE id=?1",
+                    "UPDATE notes SET title=?2,body=?3,updated=?4,reminder=?5,repeat_mode=?6,lead_minutes=?7,image=?8,folder=?9,title_auto=?10,metadata=?11,search_text=?12,sync_ts=?13,sync_seq=?14,sync_from='',suggestion=0,suggestion_reason='',ai_failed=0 WHERE id=?1",
                     params![o.id, title, body, now, reminder, repeat, lead, images, folder, title_auto as i64, meta.to_string(), search, ts, seq],
                 )?;
                 o.id
@@ -446,6 +472,7 @@ impl Store {
             "INSERT OR REPLACE INTO tombstones(kind,uid,ts,seq,from_peer) VALUES('note',?1,?2,?3,'')",
             params![n.uid, ts, seq],
         )?;
+        self.stacks_cleanup()?;
         tx.commit()?;
         Ok(n.images)
     }

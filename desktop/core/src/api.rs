@@ -1,13 +1,14 @@
 //! Единая точка команд для интерфейса (Tauri) и отладочного HTTP-сервера: `dispatch(cmd, args)`.
 
-use crate::ai::{chat, polza};
+use crate::ai::{assistant, chat, checkin, folders, polza, review};
 use crate::app::App;
 use crate::policy;
-use crate::store::{now_ms, random_hex, SaveInput};
+use crate::store::{now_ms, random_hex, Note, SaveInput, Store};
 use crate::sync::{client, pairing, server};
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn s(args: &Value, key: &str) -> String {
@@ -33,6 +34,12 @@ pub fn start_background(app: &Arc<App>) {
         if sync_enabled(&app2) {
             sync_all_async(&app2, false);
         }
+    });
+    // Фоновый помощник: проверка заметок и вопросы о планах по расписанию.
+    let app3 = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        assistant::tick(&app3);
     });
 }
 
@@ -81,11 +88,17 @@ pub fn dispatch(app: &Arc<App>, cmd: &str, args: Value) -> Result<Value> {
             let q = s(&args, "query");
             let folder = args.get("folder").and_then(|v| v.as_i64());
             let st = app.store.lock().unwrap();
-            Ok(serde_json::to_value(st.notes(&q, folder)?)?)
+            list_notes(&st, &q, folder)
         }
         "note" => {
             let st = app.store.lock().unwrap();
-            Ok(serde_json::to_value(st.note(i(&args, "id"))?)?)
+            match st.note(i(&args, "id"))? {
+                Some(n) => {
+                    let stacks = st.stacks()?;
+                    note_json(&st, &n, stacks.get(&n.id), 0)
+                }
+                None => Ok(Value::Null),
+            }
         }
         "save_note" => {
             let input: SaveInput = serde_json::from_value(args)?;
@@ -353,6 +366,187 @@ pub fn dispatch(app: &Arc<App>, cmd: &str, args: Value) -> Result<Value> {
             let made = app.store.lock().unwrap().accept_reminders(i(&args, "message"), &skip)?;
             Ok(json!(made.len()))
         }
+        // ---------- фоновый помощник ----------
+        "assist_state" => assist_state(app),
+        "assist_badge" => Ok(assistant::summary(app)),
+        "assist_review" => {
+            assistant::review_start(app, true)?;
+            Ok(json!(true))
+        }
+        "assist_retry_failed" => {
+            app.store.lock().unwrap().retry_failed()?;
+            assistant::review_start(app, false)?;
+            Ok(json!(true))
+        }
+        "suggestion_accept" => {
+            app.store.lock().unwrap().accept_suggestion(i(&args, "id"))?;
+            Ok(json!(true))
+        }
+        "suggestion_dismiss" => {
+            app.store.lock().unwrap().dismiss_suggestion(i(&args, "id"))?;
+            Ok(json!(true))
+        }
+        "proposal_accept" => {
+            let note = app.store.lock().unwrap().accept_proposal(i(&args, "id"), &s(&args, "title"), &s(&args, "body"))?;
+            Ok(serde_json::to_value(note)?)
+        }
+        "proposal_dismiss" => {
+            app.store.lock().unwrap().set_proposal_state(i(&args, "id"), "dismissed")?;
+            Ok(json!(true))
+        }
+        "proposal_summary" => {
+            assistant::summary_start(app, i(&args, "id"))?;
+            Ok(json!(true))
+        }
+        "stack_toggle" => {
+            app.store.lock().unwrap().toggle_stack(i(&args, "top"))?;
+            Ok(json!(true))
+        }
+        "stack_release" => {
+            app.store.lock().unwrap().unstack(i(&args, "top"))?;
+            Ok(json!(true))
+        }
+        "folder_suggestion_accept" => {
+            let st = app.store.lock().unwrap();
+            let id = st.create_folder(&s(&args, "name"), true)?;
+            if id == 0 {
+                return Err(anyhow!("Недопустимое имя папки"));
+            }
+            let ids: Vec<i64> = args.get("notes").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_i64()).collect()).unwrap_or_default();
+            let mut moved = 0;
+            for note in ids {
+                // Переносим только заметки, которые всё ещё лежат в «Все заметки».
+                if st.note(note)?.map(|n| n.folder == 0).unwrap_or(false) {
+                    st.move_note(note, id)?;
+                    moved += 1;
+                }
+            }
+            Ok(json!({"folder": id, "moved": moved}))
+        }
+        "folder_suggestion_dismiss" => {
+            app.store.lock().unwrap().dismiss_topic(&s(&args, "key"))?;
+            Ok(json!(true))
+        }
+        "checkin_set" => {
+            let st = app.store.lock().unwrap();
+            let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
+            let was = st.setting("checkin.on").as_deref() == Some("1");
+            if let Some(m) = args.get("minutes").and_then(|v| v.as_i64()) {
+                st.set_setting("checkin.minutes", &m.clamp(0, 24 * 60 - 1).to_string())?;
+            }
+            if let Some(e) = args.get("every").and_then(|v| v.as_i64()) {
+                st.set_setting("checkin.every", &checkin::every(e).to_string())?;
+            }
+            st.set_setting("checkin.on", if on { "1" } else { "0" })?;
+            if on && !was {
+                // При включении начинаем с чистого листа: прежнее молчание не учитывается.
+                st.set_setting("checkin.since", &now_ms().to_string())?;
+                st.set_setting("checkin.missed", "0")?;
+                st.set_setting("checkin.chat", "0")?;
+                st.set_setting("checkin.status", "")?;
+            }
+            Ok(json!(true))
+        }
+        "checkin_now" => {
+            assistant::checkin_start(app, true)?;
+            Ok(json!(true))
+        }
         other => Err(anyhow!("Неизвестная команда: {}", other)),
     }
+}
+
+/// Заметка для интерфейса: поля ядра плюс предложение напоминания и сведения о стопке.
+fn note_json(st: &Store, n: &Note, stack: Option<&(Vec<i64>, bool)>, member_of: i64) -> Result<Value> {
+    let mut v = serde_json::to_value(n)?;
+    let (at, reason) = st.suggestion(n.id);
+    let live = at > now_ms() && n.reminder == 0;
+    v["suggestion"] = json!(if live { at } else { 0 });
+    v["suggestion_reason"] = json!(if live { reason } else { String::new() });
+    v["stack"] = match stack {
+        Some((members, open)) => json!({"count": members.len(), "expanded": open}),
+        None => Value::Null,
+    };
+    v["member_of"] = json!(member_of);
+    Ok(v)
+}
+
+/// Список заметок: исходные заметки стопок скрыты, пока стопка свёрнута; при поиске видно всё.
+fn list_notes(st: &Store, query: &str, folder: Option<i64>) -> Result<Value> {
+    let notes = st.notes(query, folder)?;
+    let stacks = st.stacks()?;
+    let flat = !query.trim().is_empty();
+    let mut member_top: HashMap<i64, i64> = HashMap::new();
+    for (top, (members, _)) in &stacks {
+        for m in members {
+            member_top.insert(*m, *top);
+        }
+    }
+    let mut out = Vec::new();
+    for n in &notes {
+        if !flat && member_top.contains_key(&n.id) {
+            continue;
+        }
+        out.push(note_json(st, n, stacks.get(&n.id), if flat { member_top.get(&n.id).copied().unwrap_or(0) } else { 0 })?);
+        if flat {
+            continue;
+        }
+        if let Some((members, true)) = stacks.get(&n.id) {
+            for m in members {
+                if let Some(member) = st.note(*m)? {
+                    out.push(note_json(st, &member, None, n.id)?);
+                }
+            }
+        }
+    }
+    Ok(Value::Array(out))
+}
+
+/// Всё, что нужно экрану помощника, одним ответом.
+fn assist_state(app: &Arc<App>) -> Result<Value> {
+    let now = now_ms();
+    let cfg = chat::settings(app);
+    let run = app.assist.lock().unwrap().clone();
+    let next = assistant::checkin_next(app, now);
+    let st = app.store.lock().unwrap();
+    let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let get = |k: &str, d: i64| st.setting(k).and_then(|v| v.parse::<i64>().ok()).unwrap_or(d);
+    let suggestions: Vec<Value> = st
+        .pending_suggestions(now)?
+        .into_iter()
+        .filter_map(|(id, at, reason)| st.note(id).ok().flatten().map(|n| json!({"id": id, "title": n.title, "at": at, "reason": reason})))
+        .collect();
+    let mut proposals = Vec::new();
+    for mut p in st.pending_proposals()? {
+        let titles: Vec<Value> = p["sources"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|s| s["id"].as_i64()).filter_map(|id| st.note(id).ok().flatten().map(|n| json!({"id": id, "title": n.title}))).collect())
+            .unwrap_or_default();
+        p["source_notes"] = Value::Array(titles);
+        proposals.push(p);
+    }
+    let stacked: std::collections::HashSet<i64> = st.stacks()?.into_iter().flat_map(|(top, (m, _))| m.into_iter().chain(std::iter::once(top))).collect();
+    let visible: Vec<Note> = st.notes("", None)?.into_iter().filter(|n| !stacked.contains(&n.id)).collect();
+    let folder_list = folders::suggest(&visible, &st.folder_keys()?, &st.dismissed_topics());
+    let log: Vec<Value> = st.log_list()?.into_iter().map(|(t, text)| json!({"time": t, "text": text})).collect();
+    Ok(json!({
+        "ready": !cfg.key.is_empty() && !cfg.model.is_empty(),
+        "running": run,
+        "background": st.setting("assistant.background").as_deref() == Some("1"),
+        "unlimited": st.setting("ai.unlimited").as_deref() == Some("1"),
+        "used": st.budget_used(&day),
+        "limit": review::DAILY_LIMIT,
+        "failed": st.failed_count()?,
+        "checkin": {
+            "on": st.setting("checkin.on").as_deref() == Some("1"),
+            "minutes": get("checkin.minutes", checkin::DEFAULT_MINUTES),
+            "every": checkin::every(get("checkin.every", checkin::DEFAULT_EVERY)),
+            "next": next,
+            "status": st.setting("checkin.status").unwrap_or_default(),
+            "paused": get("checkin.missed", 0) >= checkin::MAX_MISSED,
+        },
+        "suggestions": suggestions,
+        "proposals": proposals,
+        "folders": folder_list,
+        "log": log,
+    }))
 }

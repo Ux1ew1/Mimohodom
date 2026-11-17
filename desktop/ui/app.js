@@ -25,7 +25,7 @@ const el = (tag, props = {}, ...kids) => {
 const S = {
   view: "notes", folder: null, query: "", notes: [], folders: [], draft: null, dirty: false,
   grid: false, imgCache: new Map(), sync: null, lastStatus: "", lastPeerSync: 0, code: null,
-  chat: null, chats: [], messages: [], attach: [], ai: null,
+  chat: null, chats: [], messages: [], attach: [], ai: null, assist: null, assistSig: "", assistLog: null,
 };
 
 // ---------- общие помощники ----------
@@ -135,7 +135,7 @@ function renderList() {
     return;
   }
   for (const n of S.notes) {
-    const card = el("button", { class: "card" + (S.draft && S.draft.id === n.id ? " active" : ""), onclick: () => openNote(n.id) });
+    const card = el("button", { class: "card" + (n.member_of ? " member" : "") + (S.draft && S.draft.id === n.id ? " active" : ""), onclick: () => openNote(n.id) });
     if (n.images.length) {
       const img = el("img", { class: "thumb", alt: "" });
       imageUrl(n.images[0]).then((u) => { if (u) img.src = u; else img.remove(); });
@@ -144,6 +144,8 @@ function renderList() {
     const meta = el("div", { class: "m" }, el("span", { text: fmtDate(n.updated) }));
     if (n.reminder) meta.append(el("span", { class: "tag", text: "⏰ " + fmtDate(n.reminder) }));
     if (n.images.length > 1) meta.append(el("span", { text: n.images.length + " фото" }));
+    if (n.suggestion) meta.append(el("span", { class: "tag suggest", title: n.suggestion_reason, text: "💡 напомнить " + fmtDate(n.suggestion) }));
+    if (n.stack) meta.append(el("span", { class: "tag stack", role: "button", title: "Показать или скрыть исходные заметки", text: "Стопка · " + n.stack.count + (n.stack.expanded ? " ▾" : " ▸"), onclick: (e) => { e.stopPropagation(); toggleStack(n.id); } }));
     card.append(el("div", { class: "t", text: n.title }), el("div", { class: "b", text: n.body }), meta);
     box.append(card);
   }
@@ -154,7 +156,7 @@ async function openNote(id) {
   if (!(await leaveEditor())) return;
   const n = await rpc("note", { id });
   if (!n) { await reload(); return; }
-  S.draft = { id: n.id, title: n.title_auto ? "" : n.title, body: n.body, reminder: n.reminder, repeat: n.repeat, lead: n.lead, images: [...n.images], folder: n.folder, updated: n.updated, stamp: n.sync_ts };
+  S.draft = { id: n.id, title: n.title_auto ? "" : n.title, body: n.body, reminder: n.reminder, repeat: n.repeat, lead: n.lead, images: [...n.images], folder: n.folder, updated: n.updated, stamp: n.sync_ts, suggestion: n.suggestion || 0, reason: n.suggestion_reason || "", stack: n.stack };
   S.dirty = false; renderEditor(); renderList();
 }
 async function newNote() {
@@ -251,6 +253,9 @@ function renderEditor() {
   const pick = el("input", { type: "file", accept: "image/*", multiple: true, class: "hidden", onchange: (e) => { addImages([...e.target.files]); e.target.value = ""; } });
   function syncOpts() { const on = !!d.reminder; rep.disabled = !on; lead.disabled = !on; clearRem.classList.toggle("hidden", !on); }
   const foot = el("div", { class: "foot" }, el("div", { class: "grow", id: "e-state" }),
+    d.stack ? el("button", { class: "secondary", text: "Разобрать стопку", title: "Исходные заметки снова появятся в списке", onclick: async () => {
+      if (await confirmBox("Разобрать стопку?", "Исходные заметки вернутся в список, итоговая заметка останется.", "Разобрать")) { try { await rpc("stack_release", { top: d.id }); d.stack = null; renderEditor(); await reload(); } catch (e) { fail(e); } }
+    } }) : null,
     d.id ? el("button", { class: "danger", text: "Удалить", onclick: async () => {
       if (await confirmBox("Удалить заметку?", "Заметка исчезнет и на синхронизированных устройствах.")) {
         try { await rpc("delete_note", { id: d.id }); closeEditor(); await reload(); } catch (e) { fail(e); }
@@ -258,7 +263,10 @@ function renderEditor() {
     } }) : null,
     el("button", { class: "secondary", text: "Закрыть", onclick: async () => { if (await leaveEditor()) closeEditor(); } }),
     el("button", { class: "save", text: "Сохранить", onclick: () => saveDraft().catch(fail) }));
-  host.replaceChildren(title, el("hr"), body, el("div", { class: "strip", id: "e-strip" }),
+  const banner = el("div", { class: "banner" + (d.suggestion ? "" : " hidden") }, el("span", { class: "txt", text: d.suggestion ? "Помощник нашёл дату: " + fmtDate(d.suggestion) + (d.reason ? " — " + d.reason : "") : "" }),
+    el("button", { class: "compact main", text: "Поставить напоминание", onclick: () => { d.reminder = d.suggestion; rem.value = toLocalInput(d.reminder); d.suggestion = 0; banner.classList.add("hidden"); markDirty(); syncOpts(); } }),
+    el("button", { class: "compact", text: "Скрыть", onclick: async () => { try { await rpc("suggestion_dismiss", { id: d.id }); d.suggestion = 0; banner.classList.add("hidden"); await reload(); } catch (e) { fail(e); } } }));
+  host.replaceChildren(title, el("hr"), banner, body, el("div", { class: "strip", id: "e-strip" }),
     el("div", { class: "opts" },
       el("button", { class: "secondary", text: "+ Картинка", onclick: () => pick.click() }), pick,
       el("label", {}, "Напомнить", rem, clearRem), el("label", {}, rep), el("label", {}, lead),
@@ -394,6 +402,8 @@ function bubble(m) {
   } else {
     const clean = m.body.replace(/\[\[memo]][\s\S]*?(\[\[\/memo]]|$)/g, "").replace(/\[\[recap]]/g, "").trim();
     b.append(el("div", { class: "txt" }, answerNodes(clean, m.sources)));
+    const memo = /\[\[memo]]([\s\S]*?)(\[\[\/memo]]|$)/.exec(m.body);
+    if (memo) for (const line of memo[1].split("\n").map((x) => x.trim()).filter(Boolean)) b.append(el("div", { class: "memo", text: "✓ Запомнил: " + line }));
     for (const s of m.sources || []) {
       b.append(el("button", { class: "src", title: "Открыть заметку", onclick: () => goNote(s.id) },
         el("span", { "aria-hidden": "true", text: "▤" }), el("span", { class: "n", text: s.title }), el("span", { class: "arrow", text: "›" })));
@@ -500,6 +510,142 @@ function watchChat() {
   }, 700);
 }
 
+// ---------- фоновый помощник ----------
+const KINDS = { merge: "Объединение", link: "Стопка по теме", task: "Возможное дело", question: "Уточнение" };
+const EVERY = [[1, "Каждый день"], [2, "Раз в 2 дня"], [3, "Раз в 3 дня"], [7, "Раз в неделю"]];
+const hhmm = (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+
+async function toggleStack(top) { try { await rpc("stack_toggle", { top }); await reload(); } catch (e) { fail(e); } }
+async function afterAssistChange() { await reload(); await renderAssist(true); }
+
+async function renderAssist(force = false) {
+  const root = $("#assistant"); if (!root) return;
+  const a = await rpc("assist_state");
+  S.assist = a;
+  const sig = JSON.stringify(a);
+  if (!force && sig === S.assistSig) return;
+  // Не перерисовываем, пока пользователь правит текст предложения.
+  const active = document.activeElement;
+  if (!force && root.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
+  S.assistSig = sig;
+  root.replaceChildren();
+  const run = a.running;
+  root.append(el("h1", { text: "Помощник" }));
+  root.append(el("div", { class: "note", text: "Помощник читает заметки через Polza.AI, чтобы подобрать названия, подсказки для поиска, найти даты для напоминаний и предложить объединения. Запросы платные (с вашего баланса); ничего не меняется без вашего подтверждения, кроме названий и подсказок для поиска. Результаты хранятся только на этом компьютере." }));
+  if (!a.ready) root.append(el("div", { class: "chat-error", style: "margin:10px 0" }, "Нет ключа Polza.AI или модели.", el("button", { class: "compact", text: "Настройки ИИ", onclick: () => { S.view = "settings"; showView(); } })));
+
+  // Проверка
+  root.append(el("h2", { text: "Проверка заметок" }));
+  const status = a.log.length ? a.log[0].text : "Проверок ещё не было.";
+  root.append(el("div", { class: "status-line" }, run.review_running ? el("div", { class: "spinner", role: "status", "aria-label": "Идёт проверка" }) : null, el("span", { text: status })));
+  root.append(el("div", { class: "row" },
+    el("button", { class: "primary", text: "Проверить сейчас", disabled: !a.ready || !!run.review_running, onclick: async () => { try { await rpc("assist_review"); await renderAssist(true); } catch (e) { fail(e); } } }),
+    a.failed > 0 ? el("button", { class: "secondary", text: "Повторить после ошибок (" + a.failed + ")", disabled: !a.ready || !!run.review_running, onclick: async () => { try { await rpc("assist_retry_failed"); await renderAssist(true); } catch (e) { fail(e); } } }) : null,
+    el("span", { class: "note", text: a.unlimited ? "Запросов сегодня: " + a.used + " (лимит снят)" : "Запросов сегодня: " + a.used + " из " + a.limit })));
+  const bg = el("input", { type: "checkbox", onchange: async (e) => { try { await rpc("setting_set", { key: "assistant.background", value: e.target.checked ? "1" : "0" }); toast(e.target.checked ? "Фоновая проверка включена" : "Фоновая проверка выключена"); } catch (er) { fail(er); } } });
+  bg.checked = a.background;
+  const unl = el("input", { type: "checkbox", onchange: async (e) => {
+    if (e.target.checked && !(await confirmBox("Снять дневной лимит?", "Без лимита помощник может отправлять сколько угодно платных запросов проверки и выжимки.", "Снять"))) { e.target.checked = false; return; }
+    try { await rpc("setting_set", { key: "ai.unlimited", value: e.target.checked ? "1" : "0" }); await renderAssist(true); } catch (er) { fail(er); }
+  } });
+  unl.checked = a.unlimited;
+  root.append(el("div", { class: "row" }, el("label", { class: "toggle" }, bg, "Проверять новые и изменённые заметки в фоне (раз в 6 часов, пока приложение открыто)")),
+    el("div", { class: "row" }, el("label", { class: "toggle" }, unl, "Снять дневной лимит (" + a.limit + " запроса)")));
+
+  // Вопросы о планах
+  root.append(el("h2", { text: "Вопросы о планах" }));
+  root.append(el("div", { class: "note", text: "Помощник сам пишет в ИИ-чат: спрашивает, что у вас запланировано, и записывает итог заметкой. Если не отвечать на три вопроса подряд, он замолчит, пока вы не ответите." }));
+  const ci = a.checkin;
+  const on = el("input", { type: "checkbox", onchange: async (e) => { try { await rpc("checkin_set", { on: e.target.checked }); await renderAssist(true); } catch (er) { fail(er); } } });
+  on.checked = ci.on;
+  const time = el("input", { type: "time", class: "field", style: "min-width:0", value: hhmm(ci.minutes), onchange: async (e) => {
+    const [h, m] = (e.target.value || "18:00").split(":").map(Number);
+    try { await rpc("checkin_set", { on: ci.on, minutes: h * 60 + m }); await renderAssist(true); } catch (er) { fail(er); }
+  } });
+  const every = el("select", { class: "field", style: "min-width:0", onchange: async (e) => { try { await rpc("checkin_set", { on: ci.on, every: +e.target.value }); await renderAssist(true); } catch (er) { fail(er); } } },
+    EVERY.map(([v, t]) => el("option", { value: String(v), text: t })));
+  every.value = String(ci.every);
+  root.append(el("div", { class: "row" }, el("label", { class: "toggle" }, on, "Задавать вопросы"), ci.on ? [el("span", { text: "в" }), time, every] : null,
+    el("button", { class: "secondary", text: "Спросить сейчас", disabled: !a.ready || !!run.checkin_running, onclick: async () => { try { await rpc("checkin_now"); toast("Помощник готовит вопрос…"); await renderAssist(true); } catch (e) { fail(e); } } })));
+  const ciNote = ci.paused ? "Помощник замолчал: вы не отвечали на последние вопросы. Ответьте на любой из них в чате или нажмите «Спросить сейчас»."
+    : ci.on && ci.next > 0 ? "Следующий вопрос: " + fmtDate(ci.next) + (ci.status ? ". " + ci.status : "") : ci.status;
+  if (ciNote) root.append(el("div", { class: "note", text: ciNote }));
+  if (run.checkin_running) root.append(el("div", { class: "status-line" }, el("div", { class: "spinner" }), "Помощник составляет вопрос…"));
+
+  // Напоминания, найденные в заметках
+  if (a.suggestions.length) {
+    root.append(el("h2", { text: "Напоминания из заметок (" + a.suggestions.length + ")" }));
+    for (const s of a.suggestions) {
+      root.append(el("div", { class: "offer assist-card" },
+        el("div", { class: "kind plain", text: "Поставить напоминание на " + fmtDate(s.at) + "?" }),
+        el("div", { class: "why", text: s.reason }),
+        el("div", { class: "chips" }, el("button", { class: "chip", text: s.title, onclick: () => goNote(s.id) })),
+        el("div", { class: "btns" },
+          el("button", { class: "compact main", text: "Поставить", onclick: async () => { try { await rpc("suggestion_accept", { id: s.id }); toast("Напоминание поставлено"); await afterAssistChange(); } catch (e) { fail(e); await renderAssist(true); } } }),
+          el("button", { class: "compact", text: "Скрыть", onclick: async () => { try { await rpc("suggestion_dismiss", { id: s.id }); await afterAssistChange(); } catch (e) { fail(e); } } }))));
+    }
+  }
+
+  // Предложения менеджера
+  if (a.proposals.length) {
+    root.append(el("h2", { text: "Предложения по заметкам (" + a.proposals.length + ")" }));
+    for (const p of a.proposals) root.append(proposalCard(p, a));
+  }
+
+  // Папки по темам
+  if (a.folders.length) {
+    root.append(el("h2", { text: "Папки по темам" }));
+    root.append(el("div", { class: "note", text: "Темы взяты из подсказок помощника. Папка создаётся только после вашего согласия." }));
+    for (const f of a.folders) {
+      root.append(el("div", { class: "offer assist-card" },
+        el("div", { class: "kind plain", text: (f.existing ? "Перенести в папку «" : "Создать папку «") + f.name + "»" }),
+        el("div", { class: "why", text: "Заметок: " + f.notes.length }),
+        el("div", { class: "btns" },
+          el("button", { class: "compact main", text: f.existing ? "Перенести" : "Создать и перенести", onclick: async () => {
+            try { const r = await rpc("folder_suggestion_accept", { name: f.name, notes: f.notes }); toast("Перенесено заметок: " + r.moved); await afterAssistChange(); } catch (e) { fail(e); }
+          } }),
+          el("button", { class: "compact", text: "Скрыть тему", onclick: async () => { try { await rpc("folder_suggestion_dismiss", { key: f.key }); await renderAssist(true); } catch (e) { fail(e); } } }))));
+    }
+  }
+
+  // История
+  if (a.log.length) {
+    root.append(el("h2", { text: "История" }));
+    const det = el("details", {}, el("summary", { class: "note", text: "Последние записи (" + a.log.length + ")" }));
+    for (const l of a.log) det.append(el("div", { class: "assist-log" }, el("b", { text: fmtDate(l.time) + " · " }), l.text));
+    root.append(det);
+  }
+}
+
+function proposalCard(p, a) {
+  const card = el("div", { class: "offer assist-card" });
+  card.append(el("div", { class: "kind" + (p.type === "task" || p.type === "question" ? " plain" : ""), text: KINDS[p.type] || p.type }), el("div", { class: "why", text: p.reason }));
+  card.append(el("div", { class: "chips" }, (p.source_notes || []).map((s) => el("button", { class: "chip", title: s.title, text: s.title, onclick: () => goNote(s.id) }))));
+  const dismiss = el("button", { class: "compact", text: "Скрыть", onclick: async () => { try { await rpc("proposal_dismiss", { id: p.id }); await renderAssist(true); } catch (e) { fail(e); } } });
+  const running = a.running.summary_running === p.id;
+  const sum = p._summary;
+  let draftTitle = p.title, draftBody = p.body, canCreate = p.type !== "link";
+  if (p.type === "link") {
+    if (sum && sum.ready) { draftTitle = sum.title; draftBody = sum.body; canCreate = true; }
+    else {
+      card.append(el("div", { class: "chat-note", text: running ? "Готовим выжимку… обработано фрагментов: " + ((sum && sum.cursor) || 0) : sum ? "Выжимка не закончена: обработано фрагментов " + sum.cursor + ". Готовая часть сохранена." : "Выжимка стоит платных запросов (по одному на несколько тысяч знаков). Из исходных заметок получится одна стопка." }));
+      if (a.running.summary_error_id === p.id) card.append(el("div", { class: "chat-error", text: a.running.summary_error }));
+      card.append(el("div", { class: "btns" },
+        el("button", { class: "compact main", disabled: running || !a.ready, text: running ? "Готовим…" : sum ? "Продолжить выжимку" : "Подготовить выжимку", onclick: async () => { try { await rpc("proposal_summary", { id: p.id }); await renderAssist(true); } catch (e) { fail(e); } } }), dismiss));
+      return card;
+    }
+  }
+  const title = el("input", { value: draftTitle || "", "aria-label": "Название заметки" });
+  const body = el("textarea", { "aria-label": "Текст заметки" }); body.value = draftBody || "";
+  const stackNote = p.type === "merge" || p.type === "link" ? "Исходные заметки уйдут в стопку под новой; в списке останется итог." : "";
+  card.append(title, body, stackNote ? el("div", { class: "chat-note", style: "margin-top:4px", text: stackNote }) : null,
+    el("div", { class: "btns" },
+      el("button", { class: "compact main", text: p.type === "merge" || p.type === "link" ? "Создать стопку" : "Сохранить заметку", disabled: !canCreate, onclick: async () => {
+        try { await rpc("proposal_accept", { id: p.id, title: title.value, body: body.value }); toast("Заметка создана"); await afterAssistChange(); } catch (e) { fail(e); await renderAssist(true); }
+      } }), dismiss));
+  return card;
+}
+
 // ---------- настройки ИИ ----------
 function renderAiSettings(root) {
   const ai = S.ai;
@@ -593,7 +739,7 @@ async function renderSettings() {
   root.append(el("h2", { text: "Данные" }));
   root.append(el("div", { class: "row" }, el("button", { class: "secondary", text: "Экспорт заметок в JSON", onclick: exportJson }),
     el("span", { class: "note", text: "Ключ ИИ и настройки в экспорт не попадают." })));
-  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.11.0 для компьютера. Фоновый помощник, видео YouTube и синхронизация чатов появятся позже." }));
+  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.12.0 для компьютера. Видео YouTube и синхронизация чатов и стопок появятся позже." }));
 }
 async function showCode() {
   try { S.code = await rpc("sync_pair_code"); paintCode($("#code-box")); } catch (e) { fail(e); }
@@ -642,22 +788,32 @@ async function pollSync() {
       }
     }
   } catch (_) { /* окно закрывается или ядро занято */ }
+  try {
+    const b = await rpc("assist_badge");
+    const count = b.suggestions + b.proposals, badge = $("#assist-badge");
+    badge.textContent = String(count); badge.classList.toggle("hidden", !count);
+    // Помощник мог переименовать заметки или найти даты: обновляем список, когда в истории появилась новая запись.
+    if (S.assistLog !== null && b.status !== S.assistLog && !S.dirty) await reload();
+    S.assistLog = b.status;
+    if (S.view === "assistant") await renderAssist();
+  } catch (_) { /* то же */ }
 }
 async function refreshOpen() {
   const n = await rpc("note", { id: S.draft.id });
   if (!n) { closeEditor(); return; }
   if (!S.dirty && n.sync_ts !== S.draft.stamp) {
-    S.draft = { id: n.id, title: n.title_auto ? "" : n.title, body: n.body, reminder: n.reminder, repeat: n.repeat, lead: n.lead, images: [...n.images], folder: n.folder, updated: n.updated, stamp: n.sync_ts };
+    S.draft = { id: n.id, title: n.title_auto ? "" : n.title, body: n.body, reminder: n.reminder, repeat: n.repeat, lead: n.lead, images: [...n.images], folder: n.folder, updated: n.updated, stamp: n.sync_ts, suggestion: n.suggestion || 0, reason: n.suggestion_reason || "", stack: n.stack };
     renderEditor();
   }
 }
 
 // ---------- запуск ----------
 function showView() {
-  for (const v of ["notes", "chat", "settings"]) $("#view-" + v).classList.toggle("hidden", S.view !== v);
+  for (const v of ["notes", "chat", "assistant", "settings"]) $("#view-" + v).classList.toggle("hidden", S.view !== v);
   renderSide();
   if (S.view === "settings") renderSettings().catch(fail);
   if (S.view === "chat") renderChatView().catch(fail);
+  if (S.view === "assistant") renderAssist(true).catch(fail);
 }
 async function init() {
   applyTheme((await rpc("setting_get", { key: "theme" }).catch(() => null)) || "system");

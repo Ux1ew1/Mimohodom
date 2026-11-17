@@ -13,6 +13,7 @@
     <nav>
       <button class="nav" data-view="notes" id="nav-notes">Заметки</button>
       <button class="nav" data-view="chat" id="nav-chat">ИИ-чат</button>
+      <button class="nav" data-view="assistant" id="nav-assistant"><span>Помощник</span><span class="badge hidden" id="assist-badge"></span></button>
       <button class="nav" data-view="settings" id="nav-settings">Настройки</button>
     </nav>
     <div class="section-title">Папки</div>
@@ -43,6 +44,10 @@
         </div>
         <div class="chat-main" id="chat-main"></div>
       </div>
+    </section>
+
+    <section id="view-assistant" class="view hidden">
+      <div class="settings" id="assistant"></div>
     </section>
 
     <section id="view-settings" class="view hidden">

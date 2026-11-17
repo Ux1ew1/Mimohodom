@@ -2152,7 +2152,7 @@ checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
 
 [[package]]
 name = "mimo-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2175,7 +2175,7 @@ dependencies = [
 
 [[package]]
 name = "mimohodom"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "mimo-core",
  "serde_json",

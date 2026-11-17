@@ -2,7 +2,8 @@
 //   node tests/fake-polza.cjs [порт]
 //   MIMO_AI_BASE=http://127.0.0.1:<порт>/api cargo run -p mimo-core --example dev
 // Отвечает как модель: ссылкой на первую заметку из данных, черновиком заметки, пачкой
-// напоминаний или разбором картинки — в зависимости от вопроса.
+// напоминаний или разбором картинки — в зависимости от вопроса. Для помощника: проверка заметок,
+// выжимка, вопрос о планах и диалог после него.
 "use strict";
 const http = require("http");
 const port = Number(process.argv[2] || 5199);
@@ -14,6 +15,34 @@ function answer(payload) {
   const parts = Array.isArray(last.content) ? last.content : [{ type: "text", text: String(last.content || "") }];
   const text = parts.filter((p) => p.type === "text").map((p) => p.text).join("\n").toLowerCase();
   const images = parts.filter((p) => p.type === "image_url").length;
+  // Фоновый помощник: проверка заметок, выжимка, вопрос о планах, диалог, начатый помощником.
+  if (system.includes("Ты менеджер заметок")) {
+    let data = [];
+    try { data = JSON.parse(String(last.content || "[]")); } catch (_) { /* пусто */ }
+    const stop = new Set(["после", "перед", "нужно", "очень", "когда", "будет", "этого"]);
+    const notes = data.map((n) => {
+      const word = (String(n.text || n.title).toLowerCase().match(/[а-яё]{5,}/g) || []).find((w) => !stop.has(w)) || "заметка";
+      const row = { id: n.id, title: n.needs_title ? "Заметка про " + word : "", reminder_at: null, reason: "", metadata: { topics: [word], summary: String(n.text || "").slice(0, 80) } };
+      if (!n.has_reminder && /завтра/i.test(n.text || "")) {
+        const d = new Date(Date.now() + 86400000), p = (k) => String(k).padStart(2, "0"), off = -d.getTimezoneOffset(), sign = off >= 0 ? "+" : "-";
+        row.reminder_at = d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T10:00:00" + sign + p(Math.floor(Math.abs(off) / 60)) + ":" + p(Math.abs(off) % 60);
+        row.reason = "завтра";
+      }
+      return row;
+    });
+    const suggestions = [];
+    if (data.length >= 2 && data[0].complete && data[1].complete) {
+      suggestions.push({ type: "merge", sources: [data[0].id, data[1].id], reason: "Похожие записи: можно собрать вместе.", title: "Общая заметка", body: data[0].text + "\n\n" + data[1].text });
+    }
+    return JSON.stringify({ notes, suggestions });
+  }
+  if (system.includes("Составь одну краткую содержательную выжимку")) {
+    return JSON.stringify({ title: "Выжимка по теме", body: "Короткая выжимка заглушки по заметкам." });
+  }
+  if (system.includes("ОДНО короткое сообщение")) return "Что у вас запланировано на ближайшие дни?";
+  if (system.includes("Этот диалог начал ты сам")) {
+    return "Записываю.\n[[memo]]Планы на неделю записаны[[/memo]]\n[[draft]]" + JSON.stringify({ title: "Планы на неделю", body: "Со слов пользователя: " + text }) + "[[/draft]]";
+  }
   if (system.includes("Ответ только JSON")) {
     return JSON.stringify({ title: "Заметка по картинке", summary: "На картинке " + images + " изображение(я). Это ответ заглушки.", reminder_at: null, reason: "", metadata: { topics: ["картинка"] } });
   }

@@ -187,9 +187,10 @@ pub fn finish(p: &Prepared, response: &Value, cached: bool, now: i64) -> Result<
     let mut t = text::strip_block(&raw, "index");
     t = text::strip_block(&t, "draft");
     t = text::strip_block(&t, "reminders");
-    t = text::strip_block(&t, "memo");
-    if t.is_empty() {
-        t = if a.reminders.is_some() {
+    // Блок [[memo]] остаётся в тексте: интерфейс показывает его серыми строками «Запомнил», а модель
+    // видит его в истории чата (память диалога, начатого помощником).
+    if text::strip_block(&t, "memo").is_empty() {
+        let default: String = if a.reminders.is_some() {
             "Предлагаю создать напоминания."
         } else if a.draft.is_some() {
             "Предлагаю сохранить информацию в заметку."
@@ -199,6 +200,7 @@ pub fn finish(p: &Prepared, response: &Value, cached: bool, now: i64) -> Result<
             "Не удалось подготовить заметку. Уточните, что нужно сохранить."
         }
         .into();
+        t = if t.is_empty() { default } else { format!("{}\n{}", default, t) };
     }
     a.sources = text::sources(&t, &p.selected);
     a.usage = if cached { "Из кеша · без нового запроса".into() } else { format!("Использовано заметок: {} из {}", p.selected.len(), p.total) };
@@ -450,6 +452,9 @@ fn run(app: &Arc<App>, chat: i64, query: &str, images: &[String], cfg: &Settings
         parts.push(image_part(&read_b64(app, name)?));
     }
     let guidance = if picked.is_empty() { String::new() } else { text::images_guidance(picked.len(), chat_images.len()) };
+    // Чат, который начал помощник вопросом о планах: ведёт его как собеседник и сам записывает итог.
+    let assistant_chat = app.store.lock().unwrap().chat_kind(chat) == 1;
+    let guidance = if assistant_chat { format!("{}\n{}", super::checkin::follow_up(), guidance) } else { guidance };
     let visible: HashSet<String> = picked.iter().cloned().collect();
     let clean: Vec<(String, String)> = history.iter().map(|m| (m.role.clone(), text::for_model(&m.body, &chat_images, &visible))).collect();
     let model = if picked.is_empty() { cfg.model.clone() } else { vision_model };
@@ -484,7 +489,7 @@ fn run(app: &Arc<App>, chat: i64, query: &str, images: &[String], cfg: &Settings
         st.apply_metadata(*id, *revision, meta)?;
     }
     let mut created = 0;
-    if let (Some(draft), true) = (answer.draft.clone(), text::wants_note(query)) {
+    if let (Some(draft), true) = (answer.draft.clone(), assistant_chat || text::wants_note(query)) {
         let title = draft["title"].as_str().unwrap_or("").to_string();
         let note = st.save_note(&SaveInput { title: title.clone(), body: draft["body"].as_str().unwrap_or("").to_string(), lead: -1, ..Default::default() })?;
         st.apply_metadata(note.id, note.updated, &draft["metadata"])?;

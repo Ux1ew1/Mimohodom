@@ -1,5 +1,6 @@
 //! Общее состояние приложения: база, папка данных, состояние синхронизации и ИИ-чата.
 
+use crate::ai::assistant::AssistState;
 use crate::ai::chat::ChatState;
 use crate::ai::keys::{KeyStore, MemoryKeys, SystemKeys};
 use crate::store::Store;
@@ -33,6 +34,8 @@ pub struct App {
     /// Ключ Polza.AI: системное хранилище или память (тесты, отладочный сервер).
     pub keys: Box<dyn KeyStore>,
     pub chat: Mutex<ChatState>,
+    /// Состояние фонового помощника: проверка, выжимка, вопрос.
+    pub assist: Mutex<AssistState>,
     /// Адрес API Polza.AI; в тестах — локальная заглушка.
     pub ai_base: Mutex<String>,
 }
@@ -49,6 +52,7 @@ impl App {
             sync: SyncRuntime::default(),
             keys,
             chat: Mutex::new(ChatState::default()),
+            assist: Mutex::new(AssistState::default()),
             ai_base: Mutex::new(crate::ai::polza::DEFAULT_BASE.to_string()),
         })
     }
