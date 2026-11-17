@@ -25,6 +25,7 @@ const el = (tag, props = {}, ...kids) => {
 const S = {
   view: "notes", folder: null, query: "", notes: [], folders: [], draft: null, dirty: false,
   grid: false, imgCache: new Map(), sync: null, lastStatus: "", lastPeerSync: 0, code: null,
+  chat: null, chats: [], messages: [], attach: [], ai: null,
 };
 
 // ---------- общие помощники ----------
@@ -269,12 +270,283 @@ function renderEditor() {
   host.ondrop = (e) => { e.preventDefault(); addImages([...e.dataTransfer.files]); };
 }
 
+// ---------- ИИ-чат ----------
+const HINTS = ["Что у меня запланировано на неделю?", "Найди рецепт в моих заметках", "Создай заметку со списком покупок"];
+const MAX_ATTACH = 6;
+
+async function loadAi() { S.ai = await rpc("ai_state"); return S.ai; }
+function aiReady() { return S.ai && S.ai.hasKey && S.ai.model; }
+
+async function renderChatView() {
+  await loadAi();
+  S.chats = await rpc("chats");
+  if (S.chat !== null && !S.chats.some((c) => c.id === S.chat)) S.chat = null;
+  renderChatList();
+  if (S.chat !== null) S.messages = await rpc("chat_messages", { chat: S.chat });
+  renderChat();
+  if (S.ai.state.running) watchChat();
+}
+function renderChatList() {
+  const box = $("#chats"); box.replaceChildren();
+  $(".chat-split").classList.toggle("open", S.chat !== null);
+  if (!S.chats.length) box.append(el("div", { class: "chat-note", style: "padding:6px 10px", text: "Чатов пока нет" }));
+  for (const c of S.chats) {
+    box.append(el("button", { class: "chat-item" + (c.id === S.chat ? " active" : ""), onclick: () => openChat(c.id) },
+      el("div", { class: "t", text: c.title }), el("div", { class: "d", text: fmtDate(c.last) })));
+  }
+}
+async function openChat(id) {
+  S.chat = id; S.attach = []; S.messages = await rpc("chat_messages", { chat: id });
+  renderChatList(); renderChat();
+  setTimeout(() => { const t = $("#chat-text"); if (t) t.focus(); }, 0);
+}
+async function newChat(text) {
+  try {
+    const id = await rpc("chat_new", {});
+    S.chats = await rpc("chats");
+    await openChat(id);
+    if (typeof text === "string" && text) { $("#chat-text").value = text; sendChat(); }
+  } catch (e) { fail(e); }
+}
+async function chatMenu() {
+  const c = S.chats.find((x) => x.id === S.chat); if (!c) return;
+  const act = await modal((close) => [el("h3", { text: c.title }),
+    el("div", { class: "btns", style: "justify-content:flex-start;flex-wrap:wrap" },
+      el("button", { class: "secondary", text: "Переименовать", onclick: () => close("rename") }),
+      el("button", { class: "danger", text: "Удалить чат", onclick: () => close("delete") }),
+      el("button", { class: "secondary", text: "Закрыть", onclick: () => close(null) }))]);
+  try {
+    if (act === "rename") {
+      const t = await askText("Название чата", c.title, "Переименовать");
+      if (t) { await rpc("chat_rename", { id: c.id, title: t }); await renderChatView(); }
+    } else if (act === "delete") {
+      if (await confirmBox("Удалить чат?", "Переписка и картинки этого чата удалятся. Заметки, созданные из чата, останутся.")) {
+        await rpc("chat_delete", { id: c.id }); S.chat = null; await renderChatView();
+      }
+    }
+  } catch (e) { fail(e); }
+}
+
+// Текст ответа: ссылки [[note:ID]] на показанные заметки — кликабельные «названия».
+function answerNodes(body, sources) {
+  const titles = new Map((sources || []).map((s) => [s.id, s.title]));
+  const out = []; const re = /\[\[note:(\d+)]]/g; let last = 0, m;
+  while ((m = re.exec(body))) {
+    out.push(body.slice(last, m.index)); last = re.lastIndex;
+    const id = +m[1];
+    if (titles.has(id)) {
+      let t = titles.get(id) || "Заметка"; if (t.length > 44) t = t.slice(0, 44) + "…";
+      out.push(el("a", { class: "ref", href: "#", onclick: (e) => { e.preventDefault(); goNote(id); } }, "«" + t + "»"));
+    }
+  }
+  out.push(body.slice(last));
+  return out;
+}
+function splitImages(body) {
+  const names = []; const text = body.replace(/\n?\[\[img:([A-Za-z0-9_.,\-]*)]]/g, (_, list) => { for (const n of list.split(",")) if (n && !names.includes(n)) names.push(n); return ""; }).trim();
+  return { text, names };
+}
+async function goNote(id) {
+  S.view = "notes"; showView(); await reload(); openNote(id);
+}
+function thumbs(names) {
+  const box = el("div", { class: "imgs" });
+  for (const name of names) {
+    const img = el("img", { alt: "Картинка", onclick: async () => { const u = await imageUrl(name); if (u) modal((close) => [el("img", { class: "big", src: u, onclick: () => close(null) })]); } });
+    imageUrl(name).then((u) => { if (u) img.src = u; else img.alt = "Картинка не найдена"; });
+    box.append(img);
+  }
+  return box;
+}
+function draftOffer(m) {
+  const title = el("input", { value: m.draft.title || "", "aria-label": "Название заметки" });
+  const body = el("textarea", { "aria-label": "Текст заметки" }); body.value = m.draft.body || "";
+  return el("div", { class: "offer" }, el("div", { class: "chat-note", style: "margin-bottom:6px", text: "Предложение заметки — проверьте и сохраните" }), title, body,
+    el("div", { class: "btns" },
+      el("button", { class: "compact main", text: "Сохранить заметку", onclick: async () => {
+        try { await rpc("draft_accept", { message: m.id, title: title.value, body: body.value }); toast("Заметка сохранена"); await refreshChat(); await reload(); } catch (e) { fail(e); }
+      } }),
+      el("button", { class: "compact", text: "Не сохранять", onclick: async () => { try { await rpc("draft_dismiss", { message: m.id }); await refreshChat(); } catch (e) { fail(e); } } })));
+}
+function remindersOffer(m) {
+  const items = m.draft.items || []; const skip = new Set();
+  const count = el("span");
+  const create = el("button", { class: "compact main", onclick: async () => {
+    try { const n = await rpc("reminders_accept", { message: m.id, skip: [...skip] }); toast("Создано напоминаний: " + n); await refreshChat(); await reload(); } catch (e) { fail(e); }
+  } }, count);
+  const upd = () => { count.textContent = "Создать: " + (items.length - skip.size); create.disabled = skip.size === items.length; };
+  const list = items.map((it, i) => {
+    const box = el("input", { type: "checkbox", checked: true, "aria-label": fmtDate(it.at) + ", " + it.title, onchange: (e) => { if (e.target.checked) skip.delete(i); else skip.add(i); upd(); } });
+    return el("label", {}, box, el("span", {}, el("b", { text: fmtDate(it.at) + " · " + it.title }), it.body ? el("div", { class: "chat-note", text: it.body }) : null));
+  });
+  upd();
+  return el("div", { class: "offer" }, el("div", { class: "chat-note", style: "margin-bottom:4px", text: "Напоминания по датам: снимите лишние" + (m.draft.skipped ? " · пропущено строк: " + m.draft.skipped : "") }), ...list,
+    el("div", { class: "btns" }, create,
+      el("button", { class: "compact", text: "Не создавать", onclick: async () => { try { await rpc("draft_dismiss", { message: m.id }); await refreshChat(); } catch (e) { fail(e); } } })));
+}
+function bubble(m) {
+  const b = el("div", { class: "bubble " + (m.role === "user" ? "user" : "assistant") });
+  b.append(el("div", { class: "who", text: m.role === "user" ? "Вы" : "Помощник" }));
+  if (m.role === "user") {
+    const { text, names } = splitImages(m.body);
+    if (text) b.append(el("div", { class: "txt", text }));
+    if (names.length) b.append(thumbs(names));
+  } else {
+    const clean = m.body.replace(/\[\[memo]][\s\S]*?(\[\[\/memo]]|$)/g, "").replace(/\[\[recap]]/g, "").trim();
+    b.append(el("div", { class: "txt" }, answerNodes(clean, m.sources)));
+    for (const s of m.sources || []) {
+      b.append(el("button", { class: "src", title: "Открыть заметку", onclick: () => goNote(s.id) },
+        el("span", { "aria-hidden": "true", text: "▤" }), el("span", { class: "n", text: s.title }), el("span", { class: "arrow", text: "›" })));
+    }
+    if (m.draft && m.draft.kind === "reminders") b.append(remindersOffer(m));
+    else if (m.draft && m.draft.title) b.append(draftOffer(m));
+  }
+  return b;
+}
+function renderAttach() {
+  const box = $("#chat-attach"); if (!box) return;
+  box.replaceChildren();
+  S.attach.forEach((name, i) => {
+    const img = el("img", { alt: "Вложение " + (i + 1) });
+    imageUrl(name).then((u) => { if (u) img.src = u; });
+    box.append(el("div", { class: "img" }, img, el("button", { class: "x", title: "Убрать", "aria-label": "Убрать картинку", onclick: () => { S.attach.splice(i, 1); renderAttach(); } }, "×")));
+  });
+}
+async function attachFiles(files) {
+  for (const f of files) {
+    if (!f.type.startsWith("image/")) continue;
+    if (S.attach.length >= MAX_ATTACH) { toast("К сообщению — не больше " + MAX_ATTACH + " картинок", true); break; }
+    try { S.attach.push(await rpc("image_add", { data: await blobToBase64(await shrinkToJpeg(f)) })); } catch (e) { fail(e); }
+  }
+  renderAttach();
+}
+function renderChat() {
+  const host = $("#chat-main"); host.replaceChildren();
+  if (S.chat === null) {
+    host.append(el("div", { class: "chat-empty" }, el("h2", { text: "Спросите о своих заметках" }),
+      el("div", { class: "chat-note", style: "margin-bottom:12px", text: aiReady() ? "Помощник отвечает по вашим заметкам и может создать новую. Запросы идут в Polza.AI и оплачиваются с вашего баланса." : "Чтобы начать, укажите ключ Polza.AI и модель в настройках." }),
+      aiReady() ? el("div", { class: "hints" }, el("button", { class: "compact main", text: "Новый чат", onclick: () => newChat() }), HINTS.map((h) => el("button", { class: "compact", text: h, onclick: () => newChat(h) })))
+        : el("button", { class: "compact main", text: "Открыть настройки ИИ", onclick: () => { S.view = "settings"; showView(); } })));
+    return;
+  }
+  const c = S.chats.find((x) => x.id === S.chat);
+  const st = S.ai.state;
+  host.append(el("div", { class: "chat-head" },
+    el("button", { class: "more back", title: "К списку чатов", "aria-label": "К списку чатов", onclick: () => { S.chat = null; renderChatList(); renderChat(); } }, "‹"),
+    el("div", { class: "t", text: c ? c.title : "Чат" }),
+    el("button", { class: "more", title: "Меню чата", "aria-label": "Меню чата", onclick: chatMenu }, "⋮")));
+  const list = el("div", { class: "msgs", id: "chat-msgs" });
+  if (!S.messages.length) {
+    list.append(el("div", { class: "chat-empty" }, el("h2", { text: "Новый чат" }),
+      el("div", { class: "hints" }, HINTS.map((h) => el("button", { class: "compact", text: h, onclick: () => { $("#chat-text").value = h; sendChat(); } })))));
+  }
+  for (const m of S.messages) list.append(bubble(m));
+  if (st.running === S.chat) list.append(el("div", { class: "waiting" }, el("div", { class: "spinner", role: "status", "aria-label": "Ждём ответ" }), "Помощник думает… Запрос с картинками может идти до трёх минут."));
+  else if (st.error && st.error_chat === S.chat) {
+    const lastUser = [...S.messages].reverse().find((m) => m.role === "user");
+    list.append(el("div", { class: "chat-error" }, el("span", { text: st.error }),
+      lastUser ? el("button", { class: "compact", text: "Повторить", onclick: () => { const p = splitImages(lastUser.body); sendChat(p.text, p.names); } }) : null));
+  } else if (st.usage && st.usage_chat === S.chat && S.messages.length) list.append(el("div", { class: "chat-note", text: st.usage }));
+  if (!aiReady()) list.append(el("div", { class: "chat-error" }, "Нет ключа Polza.AI или модели.", el("button", { class: "compact", text: "Настройки ИИ", onclick: () => { S.view = "settings"; showView(); } })));
+  host.append(list);
+  const text = el("textarea", { id: "chat-text", rows: 1, placeholder: "Сообщение", "aria-label": "Сообщение",
+    oninput: (e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(180, e.target.scrollHeight) + "px"; },
+    onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); } } });
+  const pick = el("input", { type: "file", accept: "image/*", multiple: true, class: "hidden", onchange: (e) => { attachFiles([...e.target.files]); e.target.value = ""; } });
+  const busy = !!st.running;
+  host.append(el("div", { class: "chat-input" },
+    el("div", { class: "strip", id: "chat-attach", style: "padding:0 0 8px" }),
+    el("div", { class: "row2" },
+      el("button", { class: "round attach", title: "Приложить картинки", "aria-label": "Приложить картинки", onclick: () => pick.click() }, "+"), pick,
+      text,
+      el("button", { class: "round send", id: "chat-send", title: "Отправить", "aria-label": "Отправить", disabled: busy, onclick: () => sendChat() }, "➤")),
+    el("div", { class: "chat-note", style: "margin-top:4px", text: "Enter — отправить, Shift+Enter — новая строка. Картинки можно вставить или перетащить." })));
+  host.onpaste = (e) => { const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/")); if (files.length) { e.preventDefault(); attachFiles(files); } };
+  host.ondragover = (e) => e.preventDefault();
+  host.ondrop = (e) => { e.preventDefault(); attachFiles([...e.dataTransfer.files]); };
+  renderAttach();
+  list.scrollTop = list.scrollHeight;
+}
+async function refreshChat() {
+  if (S.chat === null) return;
+  S.messages = await rpc("chat_messages", { chat: S.chat });
+  const keep = $("#chat-text") ? $("#chat-text").value : "";
+  renderChat();
+  if (keep && $("#chat-text")) $("#chat-text").value = keep;
+}
+async function sendChat(textOverride, imagesOverride) {
+  const box = $("#chat-text");
+  const text = typeof textOverride === "string" ? textOverride : (box ? box.value : "");
+  const images = imagesOverride || S.attach;
+  if (!text.trim() && !images.length) return;
+  try {
+    await rpc("chat_send", { chat: S.chat, text, images });
+    if (!imagesOverride) S.attach = [];
+    if (box && typeof textOverride !== "string") box.value = "";
+    await loadAi(); S.chats = await rpc("chats"); renderChatList(); await refreshChat();
+    watchChat();
+  } catch (e) { fail(e); }
+}
+function watchChat() {
+  clearTimeout(watchChat.timer);
+  watchChat.timer = setTimeout(async () => {
+    try {
+      const before = S.ai.state.created_note;
+      await loadAi();
+      if (S.ai.state.running) { watchChat(); return; }
+      if (S.view === "chat") await refreshChat();
+      if (S.ai.state.created_note !== before) await reload();
+    } catch (_) { watchChat(); }
+  }, 700);
+}
+
+// ---------- настройки ИИ ----------
+function renderAiSettings(root) {
+  const ai = S.ai;
+  root.append(el("h2", { text: "ИИ (Polza.AI)" }));
+  root.append(el("div", { class: "note", text: "Чат отвечает по вашим заметкам через облако Polza.AI; запросы оплачиваются с вашего баланса. Ключ хранится в системном хранилище (Диспетчер учётных данных Windows или Связка ключей macOS), не попадает в экспорт и не передаётся на телефон." }));
+  const key = el("input", { class: "field grow", type: "password", autocomplete: "off", placeholder: ai.hasKey ? "Ключ сохранён · введите новый, чтобы заменить" : "Ключ API Polza.AI" });
+  root.append(el("div", { class: "row" }, key,
+    el("button", { class: "secondary", text: "Сохранить ключ", onclick: async () => {
+      if (!key.value.trim()) { toast("Введите ключ", true); return; }
+      try { await rpc("ai_key_set", { key: key.value }); key.value = ""; toast("Ключ сохранён"); await loadAi(); renderSettings(); } catch (e) { fail(e); }
+    } }),
+    ai.hasKey ? el("button", { class: "danger", text: "Удалить ключ", onclick: async () => {
+      if (await confirmBox("Удалить ключ?", "Чат перестанет работать, пока вы не введёте ключ снова.", "Удалить")) { await rpc("ai_key_set", { key: "" }); await loadAi(); renderSettings(); }
+    } }) : null));
+  const balance = el("span", { class: "note" });
+  if (ai.hasKey) root.append(el("div", { class: "row" }, el("button", { class: "secondary", text: "Проверить баланс", onclick: async () => {
+    balance.textContent = "Проверяю…";
+    try { const b = await rpc("ai_balance"); balance.textContent = "Доступно " + b.available + " ₽ из " + b.amount + " ₽"; } catch (e) { balance.textContent = ""; fail(e); }
+  } }), balance));
+  const list = el("datalist", { id: "ai-models" });
+  const model = el("input", { class: "field grow", list: "ai-models", value: ai.model, placeholder: "Например, openai/gpt-4o-mini" });
+  const image = el("input", { class: "field grow", list: "ai-models", value: ai.imageModel, placeholder: ai.defaultImageModel });
+  const save = async (k, v) => { try { await rpc("setting_set", { key: k, value: v.trim() }); await loadAi(); toast("Сохранено"); } catch (e) { fail(e); } };
+  model.addEventListener("change", () => save("ai.model", model.value));
+  image.addEventListener("change", () => save("ai.imageModel", image.value));
+  root.append(list,
+    el("div", { class: "row" }, el("span", { text: "Модель чата" }), model,
+      ai.hasKey ? el("button", { class: "secondary", text: "Загрузить список", onclick: async () => {
+        try { const ids = await rpc("ai_models"); list.replaceChildren(...ids.map((id) => el("option", { value: id }))); toast("Моделей: " + ids.length + ". Начните вводить название."); } catch (e) { fail(e); }
+      } }) : null),
+    el("div", { class: "row" }, el("span", { text: "Модель для картинок" }), image),
+    el("div", { class: "note", text: "Если поле пустое — " + ai.defaultImageModel + ". Запросы с картинками идут этой моделью весь остаток чата, они дороже обычных." }));
+  const tokens = el("select", { class: "field", onchange: (e) => save("ai.maxTokens", e.target.value) },
+    [["300", "Короткие (300 токенов)"], ["600", "Обычные (600)"], ["1000", "Подробные (1000)"], ["2000", "Длинные (2000)"], ["4000", "Очень длинные (4000)"]].map(([v, t]) => el("option", { value: v, text: t })));
+  tokens.value = String(ai.maxTokens);
+  if (tokens.value !== String(ai.maxTokens)) tokens.append(el("option", { value: String(ai.maxTokens), text: ai.maxTokens + " токенов" })), tokens.value = String(ai.maxTokens);
+  root.append(el("div", { class: "row" }, el("span", { text: "Длина ответа" }), tokens));
+}
+
 // ---------- настройки и синхронизация ----------
 async function renderSettings() {
   const st = await rpc("sync_state"); S.sync = st;
+  await loadAi();
   const theme = (await rpc("setting_get", { key: "theme" })) || "system";
   const root = $("#settings"); root.replaceChildren();
   root.append(el("h1", { text: "Настройки" }));
+  renderAiSettings(root);
 
   root.append(el("h2", { text: "Синхронизация" }));
   root.append(el("div", { class: "note", text: "Заметки, папки и картинки обмениваются с телефоном и другими компьютерами напрямую по Wi-Fi, без сервера. Устройства должны быть в одной сети." }));
@@ -321,7 +593,7 @@ async function renderSettings() {
   root.append(el("h2", { text: "Данные" }));
   root.append(el("div", { class: "row" }, el("button", { class: "secondary", text: "Экспорт заметок в JSON", onclick: exportJson }),
     el("span", { class: "note", text: "Ключ ИИ и настройки в экспорт не попадают." })));
-  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.10.0 для компьютера. ИИ-чат и фоновый помощник появятся в следующем этапе." }));
+  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.11.0 для компьютера. Фоновый помощник, видео YouTube и синхронизация чатов появятся позже." }));
 }
 async function showCode() {
   try { S.code = await rpc("sync_pair_code"); paintCode($("#code-box")); } catch (e) { fail(e); }
@@ -385,6 +657,7 @@ function showView() {
   for (const v of ["notes", "chat", "settings"]) $("#view-" + v).classList.toggle("hidden", S.view !== v);
   renderSide();
   if (S.view === "settings") renderSettings().catch(fail);
+  if (S.view === "chat") renderChatView().catch(fail);
 }
 async function init() {
   applyTheme((await rpc("setting_get", { key: "theme" }).catch(() => null)) || "system");
@@ -394,6 +667,7 @@ async function init() {
     S.view = b.dataset.view; showView();
   });
   $("#new-note").addEventListener("click", newNote);
+  $("#new-chat").addEventListener("click", () => newChat());
   $("#new-folder").addEventListener("click", async () => {
     const name = await askText("Новая папка", "", "Создать");
     if (!name) return;

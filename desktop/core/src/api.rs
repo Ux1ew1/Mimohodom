@@ -1,5 +1,6 @@
 //! Единая точка команд для интерфейса (Tauri) и отладочного HTTP-сервера: `dispatch(cmd, args)`.
 
+use crate::ai::{chat, polza};
 use crate::app::App;
 use crate::policy;
 use crate::store::{now_ms, random_hex, SaveInput};
@@ -269,6 +270,89 @@ pub fn dispatch(app: &Arc<App>, cmd: &str, args: Value) -> Result<Value> {
             Ok(json!(true))
         }
         "folder_valid" => Ok(json!(policy::folder_valid(&s(&args, "name")))),
+        // ---------- ИИ: ключ и модели ----------
+        "ai_state" => {
+            let cfg = chat::settings(app);
+            let state = app.chat.lock().unwrap().clone();
+            Ok(json!({
+                "hasKey": !cfg.key.is_empty(),
+                "model": cfg.model,
+                "imageModel": cfg.image_model,
+                "defaultImageModel": chat::DEFAULT_IMAGE_MODEL,
+                "maxTokens": cfg.max_tokens,
+                "state": state,
+            }))
+        }
+        "ai_key_set" => {
+            app.keys.write(&s(&args, "key"))?;
+            Ok(json!(!app.keys.read().is_empty()))
+        }
+        "ai_balance" => {
+            let key = app.keys.read();
+            if key.is_empty() {
+                return Err(anyhow!("Сначала сохраните ключ Polza.AI"));
+            }
+            let (amount, available) = polza::balance(&app.ai_base(), &key)?;
+            Ok(json!({"amount": amount, "available": available}))
+        }
+        "ai_models" => {
+            let key = app.keys.read();
+            if key.is_empty() {
+                return Err(anyhow!("Сначала сохраните ключ Polza.AI"));
+            }
+            Ok(json!(polza::models(&app.ai_base(), &key)?))
+        }
+        // ---------- ИИ-чат ----------
+        "chats" => Ok(serde_json::to_value(app.store.lock().unwrap().chats()?)?),
+        "chat_new" => {
+            let title = s(&args, "title");
+            let title = if title.trim().is_empty() { "Новый чат".to_string() } else { policy::auto_title("", &title) };
+            Ok(json!(app.store.lock().unwrap().new_chat(&title)?))
+        }
+        "chat_rename" => {
+            app.store.lock().unwrap().rename_chat(i(&args, "id"), &s(&args, "title"))?;
+            Ok(json!(true))
+        }
+        "chat_delete" => {
+            app.store.lock().unwrap().delete_chat(i(&args, "id"))?;
+            app.cleanup_images();
+            Ok(json!(true))
+        }
+        "chat_messages" => Ok(serde_json::to_value(app.store.lock().unwrap().messages(i(&args, "chat"))?)?),
+        "chat_send" => {
+            let chat_id = i(&args, "chat");
+            let text = s(&args, "text");
+            let images: Vec<String> = args
+                .get("images")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            // Первое сообщение даёт чату название, как на телефоне (только если отправка началась).
+            let first = app.store.lock().unwrap().messages(chat_id)?.is_empty() && !text.trim().is_empty();
+            let title = policy::auto_title("", &text);
+            chat::send(app, chat_id, text, images)?;
+            if first {
+                app.store.lock().unwrap().rename_chat(chat_id, &title)?;
+            }
+            Ok(json!(true))
+        }
+        "draft_accept" => {
+            let note = app.store.lock().unwrap().accept_draft(i(&args, "message"), &s(&args, "title"), &s(&args, "body"))?;
+            Ok(serde_json::to_value(note)?)
+        }
+        "draft_dismiss" => {
+            app.store.lock().unwrap().dismiss_draft(i(&args, "message"))?;
+            Ok(json!(true))
+        }
+        "reminders_accept" => {
+            let skip: Vec<usize> = args
+                .get("skip")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect())
+                .unwrap_or_default();
+            let made = app.store.lock().unwrap().accept_reminders(i(&args, "message"), &skip)?;
+            Ok(json!(made.len()))
+        }
         other => Err(anyhow!("Неизвестная команда: {}", other)),
     }
 }

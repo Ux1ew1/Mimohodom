@@ -4,7 +4,6 @@
 //!   cargo run -p mimo-core --example dev -- [папка данных] [порт]
 
 use mimo_core::{api, app::App};
-use std::io::Read;
 use std::path::PathBuf;
 
 fn main() {
@@ -12,7 +11,11 @@ fn main() {
     let dir = PathBuf::from(args.get(1).cloned().unwrap_or_else(|| "target/dev-data".into()));
     let port: u16 = args.get(2).and_then(|p| p.parse().ok()).unwrap_or(5173);
     let ui = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ui");
-    let app = App::open(&dir).expect("не удалось открыть данные");
+    let app = App::open_dev(&dir).expect("не удалось открыть данные");
+    // Заглушка Polza.AI для проверки чата без платных запросов (tests/fake-polza.cjs).
+    if let Ok(base) = std::env::var("MIMO_AI_BASE") {
+        *app.ai_base.lock().unwrap() = base;
+    }
     api::start_background(&app);
     let server = tiny_http::Server::http(("127.0.0.1", port)).expect("порт занят");
     eprintln!("http://127.0.0.1:{}/  (данные: {})", port, dir.display());

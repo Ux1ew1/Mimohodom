@@ -99,6 +99,27 @@ pub struct Store {
     pub conn: Connection,
 }
 
+/// Сообщение ИИ-чата. `draft` — черновик заметки или пачка напоминаний (JSON), `null` — нет.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Message {
+    pub id: i64,
+    pub chat: i64,
+    pub role: String,
+    pub body: String,
+    pub sources: serde_json::Value,
+    pub draft: serde_json::Value,
+    pub created: i64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct Chat {
+    pub id: i64,
+    pub title: String,
+    pub created: i64,
+    pub last: i64,
+}
+
+
 const NOTE_COLS: &str = "id,uid,title,body,created,updated,reminder,repeat_mode,lead_minutes,image,folder,title_auto,ai_checked,metadata,sync_ts,sync_seq";
 
 fn read_note(r: &Row) -> rusqlite::Result<Note> {
@@ -197,6 +218,22 @@ impl Store {
             self.conn.execute(
                 "INSERT INTO sync_meta(id,hlc,seq,device,name) VALUES(1,?1,0,?2,?3)",
                 params![now_ms(), random_hex(16), default_device_name()],
+            )?;
+        }
+        if version < 2 {
+            // Этап 2: ИИ-чат. Чаты пока живут только на этом устройстве и не синхронизируются.
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS chats(
+                   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, created INTEGER NOT NULL);
+                 CREATE TABLE IF NOT EXISTS messages(
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   chat INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                   role TEXT NOT NULL, body TEXT NOT NULL, sources TEXT NOT NULL DEFAULT '[]',
+                   draft TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL);
+                 CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat, id);
+                 CREATE TABLE IF NOT EXISTS cache(
+                   cache_key TEXT PRIMARY KEY, body TEXT NOT NULL, created INTEGER NOT NULL);
+                 PRAGMA user_version=2;",
             )?;
         }
         Ok(())
@@ -426,6 +463,213 @@ impl Store {
         Ok(out)
     }
 
+    /// Картинки, на которые ссылаются сообщения чатов (блок `[[img:…]]`).
+    pub fn chat_image_names(&self) -> Result<std::collections::HashSet<String>> {
+        let mut out = std::collections::HashSet::new();
+        let mut st = self.conn.prepare("SELECT body FROM messages WHERE instr(body,'[[img:')>0")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        for r in rows {
+            out.extend(crate::ai::text::split(&r?).1);
+        }
+        Ok(out)
+    }
+
+    /// Подсказки ИИ к заметке без смены версии и меток синхронизации (порт `Store.applyMetadata`):
+    /// пишутся, только если заметку не правили после `revision`.
+    pub fn apply_metadata(&self, id: i64, revision: i64, incoming: &serde_json::Value) -> Result<bool> {
+        let Some(n) = self.note(id)? else { return Ok(false) };
+        if n.updated != revision {
+            return Ok(false);
+        }
+        let merged = crate::ai::text::metadata_with_ai(&policy::metadata_read(&n.metadata), incoming, revision);
+        let text = merged.to_string();
+        if text == n.metadata {
+            return Ok(true);
+        }
+        let search = policy::search_text(&merged);
+        let changed = self.conn.execute(
+            "UPDATE notes SET metadata=?2,search_text=?3 WHERE id=?1 AND updated=?4",
+            params![id, text, search, revision],
+        )?;
+        if changed == 1 {
+            self.fts_put(id, &n.title, &n.body, &search)?;
+        }
+        Ok(changed == 1)
+    }
+
+    /// Заметки-кандидаты для ответа ИИ (порт `Store.candidates`).
+    pub fn candidates(&self, query: &str, now: i64) -> Result<Vec<Note>> {
+        let mut result = self.notes(query, None)?;
+        let mut ids: std::collections::HashSet<i64> = result.iter().map(|n| n.id).collect();
+        let q = policy::normalize(query);
+        if q.contains("ближайш") || q.contains("напомин") || q.contains("сегодня") || q.contains("завтра") {
+            let mut st = self.conn.prepare(&format!("SELECT {} FROM notes WHERE reminder>=?1 ORDER BY reminder LIMIT 16", NOTE_COLS))?;
+            for n in st.query_map(params![now], read_note)? {
+                let n = n?;
+                if ids.insert(n.id) {
+                    result.push(n);
+                }
+            }
+        }
+        if result.is_empty() {
+            let mut st = self.conn.prepare(&format!("SELECT {} FROM notes ORDER BY updated DESC LIMIT 24", NOTE_COLS))?;
+            for n in st.query_map([], read_note)? {
+                result.push(n?);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Отпечаток всех заметок для ключа кеша ответов: любая правка делает старый ответ негодным.
+    pub fn revision(&self) -> Result<String> {
+        let mut h = Sha256::new();
+        let mut st = self.conn.prepare("SELECT id,updated,metadata FROM notes ORDER BY id")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        for r in rows {
+            let (id, updated, meta) = r?;
+            h.update(format!("{}:{}:{};", id, updated, meta).as_bytes());
+        }
+        Ok(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
+    }
+
+    pub fn cached(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT body FROM cache WHERE cache_key=?1 AND created>?2", params![key, now_ms() - 86_400_000], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn cache(&self, key: &str, body: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM cache WHERE created<?1", params![now_ms() - 86_400_000])?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cache(cache_key,body,created) VALUES(?1,?2,?3)",
+            params![key, body, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    // ---------- чаты ----------
+
+    pub fn new_chat(&self, title: &str) -> Result<i64> {
+        self.conn.execute("INSERT INTO chats(title,created) VALUES(?1,?2)", params![title, now_ms()])?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn chats(&self) -> Result<Vec<Chat>> {
+        let mut st = self.conn.prepare(
+            "SELECT c.id,c.title,c.created,coalesce((SELECT max(created) FROM messages m WHERE m.chat=c.id),c.created) AS last
+             FROM chats c ORDER BY last DESC, c.id DESC",
+        )?;
+        let rows = st.query_map([], |r| Ok(Chat { id: r.get(0)?, title: r.get(1)?, created: r.get(2)?, last: r.get(3)? }))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn rename_chat(&self, id: i64, title: &str) -> Result<()> {
+        let t = title.trim();
+        if !t.is_empty() {
+            self.conn.execute("UPDATE chats SET title=?2 WHERE id=?1", params![id, t])?;
+        }
+        Ok(())
+    }
+
+    pub fn delete_chat(&self, id: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.conn.execute("DELETE FROM messages WHERE chat=?1", params![id])?;
+        self.conn.execute("DELETE FROM chats WHERE id=?1", params![id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn chat_exists(&self, id: i64) -> Result<bool> {
+        Ok(self.conn.query_row("SELECT count(*) FROM chats WHERE id=?1", params![id], |r| r.get::<_, i64>(0))? > 0)
+    }
+
+    pub fn add_message(&self, chat: i64, role: &str, body: &str, sources: &[serde_json::Value], draft: Option<&serde_json::Value>) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO messages(chat,role,body,sources,draft,created) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![chat, role, body, serde_json::Value::Array(sources.to_vec()).to_string(), draft.map(|d| d.to_string()).unwrap_or_default(), now_ms()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn messages(&self, chat: i64) -> Result<Vec<Message>> {
+        let mut st = self.conn.prepare("SELECT id,chat,role,body,sources,draft,created FROM messages WHERE chat=?1 ORDER BY id")?;
+        let rows = st.query_map(params![chat], read_message)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn message(&self, id: i64) -> Result<Option<Message>> {
+        Ok(self
+            .conn
+            .query_row("SELECT id,chat,role,body,sources,draft,created FROM messages WHERE id=?1", params![id], read_message)
+            .optional()?)
+    }
+
+    /// Сохраняет предложенную заметку (с правками пользователя) и снимает предложение.
+    pub fn accept_draft(&self, message: i64, title: &str, body: &str) -> Result<Note> {
+        let m = self.message(message)?.filter(|m| m.draft.is_object()).ok_or_else(|| anyhow!("Предложение уже обработано"))?;
+        if m.draft.get("kind").and_then(|k| k.as_str()) == Some("reminders") {
+            return Err(anyhow!("Это предложение напоминаний"));
+        }
+        if body.trim().is_empty() && title.trim().is_empty() {
+            return Err(anyhow!("Заметка пустая"));
+        }
+        let note = self.save_note(&SaveInput { title: title.to_string(), body: body.to_string(), lead: -1, ..Default::default() })?;
+        let same = title.trim() == m.draft["title"].as_str().unwrap_or("") && body.trim() == m.draft["body"].as_str().unwrap_or("");
+        if same {
+            self.apply_metadata(note.id, note.updated, &m.draft["metadata"])?;
+        }
+        let mut sources = m.sources.as_array().cloned().unwrap_or_default();
+        sources.push(serde_json::json!({"id": note.id, "title": note.title}));
+        self.conn.execute(
+            "UPDATE messages SET draft='',sources=?2 WHERE id=?1",
+            params![message, serde_json::Value::Array(sources).to_string()],
+        )?;
+        Ok(note)
+    }
+
+    /// Создаёт по заметке с напоминанием на каждую дату, кроме номеров из `skip` (порт `acceptReminders`).
+    pub fn accept_reminders(&self, message: i64, skip: &[usize]) -> Result<Vec<Note>> {
+        let m = self.message(message)?.filter(|m| m.draft.is_object()).ok_or_else(|| anyhow!("Предложение уже обработано"))?;
+        if m.draft.get("kind").and_then(|k| k.as_str()) != Some("reminders") {
+            return Err(anyhow!("Это не предложение напоминаний"));
+        }
+        let now = now_ms();
+        let items = m.draft["items"].as_array().cloned().unwrap_or_default();
+        let mut sources = m.sources.as_array().cloned().unwrap_or_default();
+        let mut created = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            let at = item["at"].as_i64().unwrap_or(0);
+            let title = item["title"].as_str().unwrap_or("");
+            if skip.contains(&i) || at <= now || title.is_empty() {
+                continue;
+            }
+            let body = item["body"].as_str().unwrap_or("");
+            let n = self.save_note(&SaveInput {
+                title: title.into(),
+                body: if body.is_empty() { title.into() } else { body.into() },
+                reminder: at,
+                lead: -1,
+                ..Default::default()
+            })?;
+            sources.push(serde_json::json!({"id": n.id, "title": n.title}));
+            created.push(n);
+        }
+        if created.is_empty() {
+            return Err(anyhow!("Нет напоминаний с будущим временем"));
+        }
+        self.conn.execute(
+            "UPDATE messages SET draft='',sources=?2,body=?3 WHERE id=?1",
+            params![message, serde_json::Value::Array(sources).to_string(), format!("{}\n\nСоздано напоминаний: {}.", m.body, created.len())],
+        )?;
+        Ok(created)
+    }
+
+    pub fn dismiss_draft(&self, message: i64) -> Result<()> {
+        self.conn.execute("UPDATE messages SET draft='' WHERE id=?1", params![message])?;
+        Ok(())
+    }
+
     // ---------- папки ----------
 
     pub fn folders(&self) -> Result<Vec<Folder>> {
@@ -604,6 +848,20 @@ impl Store {
     }
 }
 
+fn read_message(r: &Row) -> rusqlite::Result<Message> {
+    let sources: String = r.get(4)?;
+    let draft: String = r.get(5)?;
+    Ok(Message {
+        id: r.get(0)?,
+        chat: r.get(1)?,
+        role: r.get(2)?,
+        body: r.get(3)?,
+        sources: serde_json::from_str(&sources).unwrap_or_else(|_| serde_json::json!([])),
+        draft: if draft.is_empty() { serde_json::Value::Null } else { serde_json::from_str(&draft).unwrap_or(serde_json::Value::Null) },
+        created: r.get(6)?,
+    })
+}
+
 fn read_peer(r: &Row) -> rusqlite::Result<Peer> {
     let hosts: String = r.get(4)?;
     Ok(Peer {
@@ -689,6 +947,38 @@ mod tests {
         assert_eq!(after.folder, 0);
         assert_eq!(after.updated, before.updated);
         assert!(after.sync_seq > before.sync_seq);
+    }
+
+    #[test]
+    fn chats_and_drafts() {
+        let s = Store::open_memory().unwrap();
+        let c = s.new_chat("Тест").unwrap();
+        s.add_message(c, "user", "привет\n[[img:a.jpg]]", &[], None).unwrap();
+        let d = serde_json::json!({"title": "Идея", "body": "Текст", "metadata": {"topics": ["план"]}});
+        let m = s.add_message(c, "assistant", "Предлагаю", &[], Some(&d)).unwrap();
+        assert_eq!(s.messages(c).unwrap()[1].draft["title"], "Идея");
+        assert!(s.chat_image_names().unwrap().contains("a.jpg"));
+        let n = s.accept_draft(m, "Идея", "Текст").unwrap();
+        let meta = policy::metadata_read(&s.note(n.id).unwrap().unwrap().metadata);
+        assert_eq!(meta["ai"]["topics"], serde_json::json!(["план"]));
+        assert_eq!(s.notes("план", None).unwrap().len(), 1, "подсказки ИИ попали в поиск");
+        assert!(s.accept_draft(m, "Идея", "Текст").is_err(), "второй раз не сохраняется");
+        let r = serde_json::json!({"kind": "reminders", "items": [
+            {"at": now_ms() + 3_600_000, "title": "Первое", "body": ""},
+            {"at": now_ms() + 7_200_000, "title": "Второе", "body": "б"}]});
+        let m2 = s.add_message(c, "assistant", "Напомню", &[], Some(&r)).unwrap();
+        let made = s.accept_reminders(m2, &[1]).unwrap();
+        assert_eq!(made.len(), 1);
+        assert!(made[0].reminder > 0);
+        assert!(s.messages(c).unwrap()[2].body.ends_with("Создано напоминаний: 1."));
+        // Подсказки ИИ к уже изменённой заметке не пишутся.
+        assert!(!s.apply_metadata(n.id, n.updated - 1, &serde_json::json!({"topics": ["x"]})).unwrap());
+        let seq = s.note(n.id).unwrap().unwrap().sync_seq;
+        assert!(s.apply_metadata(n.id, n.updated, &serde_json::json!({"topics": ["ещё"]})).unwrap());
+        assert_eq!(s.note(n.id).unwrap().unwrap().sync_seq, seq, "подсказки ИИ не меняют метки синхронизации");
+        s.delete_chat(c).unwrap();
+        assert!(!s.chat_exists(c).unwrap());
+        assert!(s.messages(c).unwrap().is_empty());
     }
 
     #[test]

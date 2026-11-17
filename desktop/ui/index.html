@@ -12,7 +12,7 @@
     <div class="brand">Мимоходом</div>
     <nav>
       <button class="nav" data-view="notes" id="nav-notes">Заметки</button>
-      <button class="nav" data-view="chat" id="nav-chat">ИИ-чат <span class="soon">скоро</span></button>
+      <button class="nav" data-view="chat" id="nav-chat">ИИ-чат</button>
       <button class="nav" data-view="settings" id="nav-settings">Настройки</button>
     </nav>
     <div class="section-title">Папки</div>
@@ -36,9 +36,12 @@
     </section>
 
     <section id="view-chat" class="view hidden">
-      <div class="empty big">
-        <h2>ИИ-чат</h2>
-        <p>Разговор по вашим заметкам, помощник и фоновые функции появятся на компьютере в следующем этапе. Заметки и папки уже синхронизируются с телефоном.</p>
+      <div class="chat-split">
+        <div class="chat-list">
+          <button class="compact" id="new-chat">Новый чат</button>
+          <div id="chats"></div>
+        </div>
+        <div class="chat-main" id="chat-main"></div>
       </div>
     </section>
 

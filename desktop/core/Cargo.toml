@@ -1,6 +1,6 @@
 [package]
 name = "mimo-core"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 description = "Ядро «Мимоходом» для компьютера: заметки, папки, поиск, синхронизация"
 
@@ -18,3 +18,7 @@ ureq = "2"
 local-ip-address = "0.6"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 anyhow = "1"
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+iana-time-zone = "0.1"
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
