@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 8);
+    super(context, name, null, 9);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -76,6 +76,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     ManagerStore.create(db);
     addReminderOptions(db);
     addFolders(db);
+    addSync(db);
   }
 
   @Override
@@ -89,6 +90,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 6) ManagerStore.create(db);
     if (oldV < 7) addReminderOptions(db);
     if (oldV < 8) addFolders(db);
+    if (oldV < 9) addSync(db);
   }
 
   /** Папки: таблица и номер папки у заметки (0 — «Все заметки»). Безопасно вызывается повторно. */
@@ -100,6 +102,120 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
             + " NULL,key TEXT NOT NULL UNIQUE,created INTEGER NOT NULL,auto INTEGER NOT NULL"
             + " DEFAULT 0)");
     db.execSQL("CREATE INDEX IF NOT EXISTS notes_folder ON notes(folder,updated DESC)");
+  }
+
+  /**
+   * Синхронизация с компьютерами (docs/SYNC.md): у заметок и папок есть постоянный uid, время и
+   * номер изменения; удаления остаются надгробиями. Всё ведут триггеры, поэтому любой путь записи в
+   * приложении (редактор, чат, помощник) учитывается без правок кода. Новая заметка остаётся без
+   * uid (sync_seq = 0), пока её не пронумеруют при первой отправке или правке: триггер на вставку
+   * здесь невозможен, он дважды вставил бы строку в индекс поиска. Метки меняют только
+   * изменения содержимого — фоновый разбор ИИ и предложения напоминаний ts не двигают, чтобы не
+   * перебивать свежую правку с другого устройства. Безопасно вызывается повторно.
+   */
+  private void addSync(SQLiteDatabase db) {
+    for (String table : new String[] {"notes", "folders"}) {
+      if (!hasColumn(db, table, "uid"))
+        db.execSQL("ALTER TABLE " + table + " ADD COLUMN uid TEXT NOT NULL DEFAULT ''");
+      if (!hasColumn(db, table, "sync_ts"))
+        db.execSQL("ALTER TABLE " + table + " ADD COLUMN sync_ts INTEGER NOT NULL DEFAULT 0");
+      if (!hasColumn(db, table, "sync_seq"))
+        db.execSQL("ALTER TABLE " + table + " ADD COLUMN sync_seq INTEGER NOT NULL DEFAULT 0");
+      if (!hasColumn(db, table, "sync_from"))
+        db.execSQL("ALTER TABLE " + table + " ADD COLUMN sync_from TEXT NOT NULL DEFAULT ''");
+    }
+    db.execSQL(
+        "CREATE TABLE IF NOT EXISTS tombstones(kind TEXT NOT NULL,uid TEXT NOT NULL,ts INTEGER NOT"
+            + " NULL,seq INTEGER NOT NULL,from_peer TEXT NOT NULL DEFAULT '',PRIMARY KEY(kind,uid))");
+    db.execSQL("CREATE INDEX IF NOT EXISTS tombstones_seq ON tombstones(seq)");
+    db.execSQL(
+        "CREATE TABLE IF NOT EXISTS sync_meta(id INTEGER PRIMARY KEY,hlc INTEGER NOT NULL,seq"
+            + " INTEGER NOT NULL,device TEXT NOT NULL,name TEXT NOT NULL)");
+    byte[] id = new byte[16];
+    new java.security.SecureRandom().nextBytes(id);
+    StringBuilder device = new StringBuilder();
+    for (byte b : id) device.append(String.format(Locale.ROOT, "%02x", b & 0xff));
+    db.execSQL(
+        "INSERT OR IGNORE INTO sync_meta(id,hlc,seq,device,name) VALUES(1,?,0,?,?)",
+        new Object[] {System.currentTimeMillis(), device.toString(), deviceLabel()});
+    db.execSQL(
+        "CREATE TABLE IF NOT EXISTS sync_peers(device TEXT PRIMARY KEY,name TEXT NOT NULL,platform"
+            + " TEXT NOT NULL DEFAULT '',secret BLOB NOT NULL,hosts TEXT NOT NULL DEFAULT"
+            + " '[]',sent_seq INTEGER NOT NULL DEFAULT 0,got_seq INTEGER NOT NULL DEFAULT"
+            + " 0,last_sync INTEGER NOT NULL DEFAULT 0)");
+    // Уже существующие записи получают uid и номера: первый обмен отправит всё.
+    db.execSQL(
+        "UPDATE notes SET uid=lower(hex(randomblob(16))),sync_ts=updated,sync_seq=id WHERE"
+            + " uid=''");
+    List<Object[]> folders = new ArrayList<>();
+    try (Cursor c = db.rawQuery("SELECT id,key,created FROM folders WHERE uid=''", null)) {
+      while (c.moveToNext())
+        folders.add(new Object[] {c.getLong(0), c.getString(1), c.getLong(2)});
+    }
+    for (Object[] f : folders)
+      db.execSQL(
+          "UPDATE folders SET uid=?,sync_ts=?,sync_seq=? WHERE id=?",
+          new Object[] {FolderPolicy.uid((String) f[1]), f[2], f[0], f[0]});
+    db.execSQL(
+        "UPDATE sync_meta SET seq=max(seq,(SELECT ifnull(max(sync_seq),0) FROM notes),(SELECT"
+            + " ifnull(max(sync_seq),0) FROM folders)),hlc=max(hlc,(SELECT ifnull(max(sync_ts),0)"
+            + " FROM notes),(SELECT ifnull(max(sync_ts),0) FROM folders)) WHERE id=1");
+    db.execSQL("CREATE INDEX IF NOT EXISTS notes_sync_seq ON notes(sync_seq)");
+    String stamp =
+        "UPDATE sync_meta SET seq=seq+1,hlc=max(hlc+1,CAST((julianday('now')-2440587.5)*86400000"
+            + " AS INTEGER)) WHERE id=1;";
+    String now = "(SELECT hlc FROM sync_meta WHERE id=1),(SELECT seq FROM sync_meta WHERE id=1)";
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS notes_sync_upd AFTER UPDATE OF"
+            + " title,body,created,updated,reminder,repeat_mode,lead_minutes,image,folder ON notes"
+            + " WHEN new.sync_seq=old.sync_seq AND (new.title<>old.title OR new.body<>old.body OR"
+            + " new.created<>old.created OR new.updated<>old.updated OR new.reminder<>old.reminder"
+            + " OR new.repeat_mode<>old.repeat_mode OR new.lead_minutes<>old.lead_minutes OR"
+            + " new.image<>old.image OR new.folder<>old.folder) BEGIN "
+            + stamp
+            + "UPDATE notes SET uid=CASE WHEN new.uid='' THEN lower(hex(randomblob(16))) ELSE"
+            + " new.uid END,sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq"
+            + " FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS notes_sync_del AFTER DELETE ON notes WHEN old.uid<>''"
+            + " BEGIN "
+            + stamp
+            + "INSERT OR REPLACE INTO tombstones(kind,uid,ts,seq,from_peer) VALUES('note',old.uid,"
+            + now
+            + ",'');END");
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS folders_sync_ins AFTER INSERT ON folders WHEN"
+            + " new.sync_seq=0 BEGIN "
+            + stamp
+            + "UPDATE folders SET uid=CASE WHEN new.uid='' THEN 'f'||lower(hex(randomblob(15))) ELSE"
+            + " new.uid END,sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq FROM"
+            + " sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS folders_sync_upd AFTER UPDATE OF name,key,auto,created ON"
+            + " folders WHEN new.sync_seq=old.sync_seq AND (new.name<>old.name OR new.key<>old.key"
+            + " OR new.auto<>old.auto OR new.created<>old.created) BEGIN "
+            + stamp
+            + "UPDATE folders SET sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT"
+            + " seq FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS folders_sync_del AFTER DELETE ON folders WHEN"
+            + " old.uid<>'' BEGIN "
+            + stamp
+            + "INSERT OR REPLACE INTO tombstones(kind,uid,ts,seq,from_peer) VALUES('folder',old.uid,"
+            + now
+            + ",'');END");
+  }
+
+  private static String deviceLabel() {
+    String model = android.os.Build.MODEL == null ? "" : android.os.Build.MODEL.trim();
+    return model.isEmpty() ? "Телефон" : model;
+  }
+
+  private boolean hasColumn(SQLiteDatabase db, String table, String column) {
+    try (Cursor c = db.rawQuery("PRAGMA table_info(" + table + ")", null)) {
+      while (c.moveToNext()) if (column.equals(c.getString(1))) return true;
+    }
+    return false;
   }
 
   /** Повтор и свой интервал напоминания. Безопасно вызывается повторно, если столбцы уже есть. */

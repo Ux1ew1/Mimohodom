@@ -22,14 +22,103 @@ import org.json.*;
 
 public final class MainActivity extends Activity
     implements ChatRunner.Listener, ImageRunner.Listener, VideoRunner.Listener {
-  private static final int PAPER = 0xFFF7F8F2,
+  /** Белый для текста и значков на цветной заливке: одинаковый в обеих темах. */
+  private static final int WHITE = 0xFFFFFFFF;
+  /**
+   * Палитра текущей темы. Задаётся {@link #applyPalette} до построения экрана; GREEN — цвет
+   * текста и значков акцента, FILL — заливка главных кнопок (на ней лежит белый), SURFACE —
+   * карточки, листы и поля (в светлой теме белые).
+   */
+  private static int PAPER = 0xFFF7F8F2,
       INK = 0xFF1E3028,
       MUTED = 0xFF6C786F,
       GREEN = 0xFF28634B,
+      FILL = 0xFF28634B,
       LIME = 0xFFE9F1D6,
       LINE = 0xFFDFE4DA,
-      WHITE = 0xFFFFFFFF,
+      SURFACE = 0xFFFFFFFF,
+      RED = 0xFFA74335,
+      STROKE = 0xFFAEBBA8,
+      DOCK = 0xF2FFFFFF,
+      STACK_BG = 0xFFF0E8FA,
+      STACK_FG = 0xFF75449B,
+      STACK_LAYER = 0xFFE1CEEF,
+      STACK_LINE = 0xFFAD83CA,
+      REMINDER_BG = 0xFFEDF0E2,
+      RECAP_BG = 0xFFEEF0EA;
+  private boolean dark;
+
+  /** Режим темы из настроек: auto (как в системе, по умолчанию), light, dark. */
+  private boolean wantsDark() {
+    String mode = getSharedPreferences("settings", 0).getString("theme", "auto");
+    if ("dark".equals(mode)) return true;
+    if ("light".equals(mode)) return false;
+    return (getResources().getConfiguration().uiMode
+            & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+        == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+  }
+
+  private static void applyPalette(boolean night) {
+    if (night) {
+      PAPER = 0xFF111815;
+      INK = 0xFFE4EBE4;
+      MUTED = 0xFF93A298;
+      GREEN = 0xFF6FCB9F;
+      FILL = 0xFF2F7D5D;
+      LIME = 0xFF21302A;
+      LINE = 0xFF2A3731;
+      SURFACE = 0xFF1A2420;
+      RED = 0xFFE5877A;
+      STROKE = 0xFF3A4A41;
+      DOCK = 0xF21A2420;
+      STACK_BG = 0xFF2C2338;
+      STACK_FG = 0xFFCDA9E8;
+      STACK_LAYER = 0xFF3A2D49;
+      STACK_LINE = 0xFF6D4F86;
+      REMINDER_BG = 0xFF222B1E;
+      RECAP_BG = 0xFF222B26;
+    } else {
+      PAPER = 0xFFF7F8F2;
+      INK = 0xFF1E3028;
+      MUTED = 0xFF6C786F;
+      GREEN = 0xFF28634B;
+      FILL = 0xFF28634B;
+      LIME = 0xFFE9F1D6;
+      LINE = 0xFFDFE4DA;
+      SURFACE = 0xFFFFFFFF;
       RED = 0xFFA74335;
+      STROKE = 0xFFAEBBA8;
+      DOCK = 0xF2FFFFFF;
+      STACK_BG = 0xFFF0E8FA;
+      STACK_FG = 0xFF75449B;
+      STACK_LAYER = 0xFFE1CEEF;
+      STACK_LINE = 0xFFAD83CA;
+      REMINDER_BG = 0xFFEDF0E2;
+      RECAP_BG = 0xFFEEF0EA;
+    }
+  }
+
+  /** Тема окна и системных панелей под выбранную палитру (значки панелей светлые на тёмном). */
+  private void applySystemBars() {
+    getWindow().setBackgroundDrawable(new ColorDrawable(PAPER));
+    if (Build.VERSION.SDK_INT >= 30) {
+      WindowInsetsController controller = getWindow().getInsetsController();
+      if (controller != null) {
+        int mask =
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+        controller.setSystemBarsAppearance(dark ? 0 : mask, mask);
+      }
+    } else {
+      View decor = getWindow().getDecorView();
+      int flags = decor.getSystemUiVisibility();
+      int light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+      if (Build.VERSION.SDK_INT >= 26) light |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+      decor.setSystemUiVisibility(dark ? flags & ~light : flags | light);
+      getWindow().setStatusBarColor(PAPER);
+      getWindow().setNavigationBarColor(PAPER);
+    }
+  }
   private final ExecutorService io = Executors.newSingleThreadExecutor();
   /** Долгое копирование GGUF идёт отдельно, чтобы не задерживать «Поделиться», картинки и экспорт. */
   private final ExecutorService heavy = Executors.newSingleThreadExecutor();
@@ -184,6 +273,11 @@ public final class MainActivity extends Activity
 
   @Override
   public void onCreate(Bundle state) {
+    // Тема и палитра выбираются до построения экрана; при смене системной темы активность
+    // пересоздаётся и попадает сюда снова.
+    dark = wantsDark();
+    applyPalette(dark);
+    setTheme(dark ? R.style.AppThemeDark : R.style.AppThemeLight);
     super.onCreate(state);
     store = new Store(this);
     prefs = getSharedPreferences("settings", 0);
@@ -301,6 +395,18 @@ public final class MainActivity extends Activity
       render();
     }
     showPendingCreation();
+    PeerSync.listen(
+        () ->
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed() || rendering) return;
+                  if ("settings.sync".equals(page)
+                      || (PeerSync.changedLastRun() && "notes".equals(page))) {
+                    stash();
+                    render();
+                  }
+                }));
+    PeerSync.runAsync(this, false);
   }
 
   @Override
@@ -310,6 +416,8 @@ public final class MainActivity extends Activity
     persistEditedNote();
     // Ловит всё, что изменилось не через редактор: чат, помощник, удаление.
     CalendarSync.runAsync(this);
+    PeerSync.listen(null);
+    PeerSync.runAsync(this, false);
     super.onPause();
   }
 
@@ -415,7 +523,7 @@ public final class MainActivity extends Activity
           LinearLayout card = column();
           card.setGravity(Gravity.CENTER);
           pad(card, 22);
-          GradientDrawable background = shape(WHITE, 14);
+          GradientDrawable background = shape(SURFACE, 14);
           background.setStroke(dp(1), LINE);
           card.setBackground(background);
           card.setElevation(dp(12));
@@ -558,7 +666,7 @@ public final class MainActivity extends Activity
     b.setGravity(Gravity.CENTER);
     b.setMinHeight(dp(50));
     b.setPadding(dp(16), dp(10), dp(16), dp(10));
-    b.setBackground(ripple(primary ? GREEN : LIME, 12));
+    b.setBackground(ripple(primary ? FILL : LIME, 12));
     b.setFocusable(true);
     b.setOnClickListener(
         v -> {
@@ -589,7 +697,7 @@ public final class MainActivity extends Activity
     b.setTextSize(12);
     b.setMinHeight(dp(34));
     b.setPadding(dp(10), dp(6), dp(10), dp(6));
-    b.setBackground(ripple(primary ? GREEN : LIME, 10));
+    b.setBackground(ripple(primary ? FILL : LIME, 10));
     return b;
   }
 
@@ -625,7 +733,7 @@ public final class MainActivity extends Activity
     e.setHint(hint);
     e.setContentDescription(hint);
     e.setPadding(dp(16), dp(14), dp(16), dp(14));
-    e.setBackground(shape(WHITE, 10));
+    e.setBackground(shape(SURFACE, 10));
     e.setInputType(
         android.text.InputType.TYPE_CLASS_TEXT
             | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -735,6 +843,7 @@ public final class MainActivity extends Activity
     frame.setBackgroundColor(PAPER);
     frame.addView(root, new FrameLayout.LayoutParams(-1, -1));
     setContentView(frame);
+    applySystemBars();
     if (Build.VERSION.SDK_INT >= 30) {
       getWindow().setDecorFitsSystemWindows(false);
       root.setOnApplyWindowInsetsListener(
@@ -780,6 +889,7 @@ public final class MainActivity extends Activity
       case "settings.ai" -> settingsAi();
       case "settings.reminders" -> settingsReminders();
       case "settings.assistant" -> settingsAssistant();
+      case "settings.sync" -> settingsSync();
       case "settings.app" -> settingsApp();
     }
     bottomNav();
@@ -870,10 +980,10 @@ public final class MainActivity extends Activity
     dockFade = new View(this);
     dockFade.setBackground(
         new GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0x00F7F8F2, PAPER}));
+            GradientDrawable.Orientation.TOP_BOTTOM, new int[] {PAPER & 0x00FFFFFF, PAPER}));
     frame.addView(dockFade, new FrameLayout.LayoutParams(-1, dp(110), Gravity.BOTTOM));
     dock = new FrameLayout(this);
-    GradientDrawable background = shape(0xF2FFFFFF, 20);
+    GradientDrawable background = shape(DOCK, 20);
     background.setStroke(dp(1), LINE);
     dock.setBackground(background);
     dock.setElevation(dp(8));
@@ -908,7 +1018,7 @@ public final class MainActivity extends Activity
       item.setScaleType(ImageView.ScaleType.CENTER);
       item.setImageDrawable(new Glyph(icons[i], add ? WHITE : MUTED, 24));
       if (!add) item.setColorFilter(i == (animate ? from : to) ? GREEN : MUTED);
-      item.setBackground(ripple(add ? GREEN : android.graphics.Color.TRANSPARENT, 14));
+      item.setBackground(ripple(add ? FILL : android.graphics.Color.TRANSPARENT, 14));
       item.setContentDescription(labels[i]);
       item.setFocusable(true);
       item.setClickable(true);
@@ -1018,7 +1128,7 @@ public final class MainActivity extends Activity
         badge.setIncludeFontPadding(false);
         badge.setMinWidth(dp(16));
         badge.setPadding(dp(4), 0, dp(4), 0);
-        badge.setBackground(shape(GREEN, 6));
+        badge.setBackground(shape(FILL, 6));
         badge.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         FrameLayout.LayoutParams badgeParams =
             new FrameLayout.LayoutParams(-2, dp(16), Gravity.TOP | Gravity.END);
@@ -1057,7 +1167,7 @@ public final class MainActivity extends Activity
     field.setText(barText);
     LinearLayout box = row();
     box.setPadding(dp(14), 0, dp(6), 0);
-    GradientDrawable boxBackground = shape(WHITE, 14);
+    GradientDrawable boxBackground = shape(SURFACE, 14);
     boxBackground.setStroke(dp(1), LINE);
     box.setBackground(boxBackground);
     ImageView glass = new ImageView(this);
@@ -1181,7 +1291,7 @@ public final class MainActivity extends Activity
     List<JSONObject> proposals = manager.pending();
     int width = Math.min(dp(344), getResources().getDisplayMetrics().widthPixels - dp(44));
     LinearLayout panel = column();
-    GradientDrawable background = shape(WHITE, 14);
+    GradientDrawable background = shape(SURFACE, 14);
     background.setStroke(dp(1), LINE);
     panel.setBackground(background);
     LinearLayout head = row();
@@ -1212,8 +1322,8 @@ public final class MainActivity extends Activity
       top.setGravity(Gravity.TOP);
       ImageView mark = new ImageView(this);
       mark.setScaleType(ImageView.ScaleType.CENTER);
-      mark.setBackground(shape(stack ? 0xFFF0E8FA : LIME, 10));
-      mark.setImageDrawable(new Glyph(stack ? "notes" : "spark", stack ? 0xFF75449B : GREEN, 20));
+      mark.setBackground(shape(stack ? STACK_BG : LIME, 10));
+      mark.setImageDrawable(new Glyph(stack ? "notes" : "spark", stack ? STACK_FG : GREEN, 20));
       top.addView(mark, new LinearLayout.LayoutParams(dp(36), dp(36)));
       LinearLayout words = column();
       words.setPadding(dp(12), 0, 0, 0);
@@ -1413,8 +1523,8 @@ public final class MainActivity extends Activity
     }
     // Название, текст и значки действий лежат на одном листе с тенью.
     LinearLayout sheet = column();
-    GradientDrawable sheetBackground = shape(WHITE, 14);
-    sheetBackground.setStroke(dp(1), 0xFFAEBBA8);
+    GradientDrawable sheetBackground = shape(SURFACE, 14);
+    sheetBackground.setStroke(dp(1), STROKE);
     sheet.setBackground(sheetBackground);
     sheet.setElevation(dp(6));
     titleField = input("Название — необязательно", false);
@@ -1553,7 +1663,7 @@ public final class MainActivity extends Activity
       save.setTypeface(null, Typeface.BOLD);
       save.setGravity(Gravity.CENTER);
       save.setPadding(dp(18), 0, dp(18), 0);
-      save.setBackground(ripple(GREEN, 10));
+      save.setBackground(ripple(FILL, 10));
       save.setFocusable(true);
       save.setContentDescription("Сохранить заметку");
       save.setOnClickListener(
@@ -2306,7 +2416,7 @@ public final class MainActivity extends Activity
     chip.setGravity(Gravity.CENTER);
     chip.setSingleLine(true);
     chip.setPadding(dp(14), dp(8), dp(14), dp(8));
-    chip.setBackground(ripple(selected ? GREEN : WHITE, 18));
+    chip.setBackground(ripple(selected ? FILL : SURFACE, 18));
     chip.setFocusable(true);
     chip.setSelected(selected);
     chip.setContentDescription(f == null ? "Все заметки" : "Папка " + f.name);
@@ -2423,8 +2533,8 @@ public final class MainActivity extends Activity
     card.setBackground(
         ripple(
             new ManagerStore(store).top(n.id) != 0
-                ? 0xFFF0E8FA
-                : n.reminder > 0 ? 0xFFEDF0E2 : WHITE,
+                ? STACK_BG
+                : n.reminder > 0 ? REMINDER_BG : SURFACE,
             12));
     card.setOnClickListener(
         v -> {
@@ -2488,7 +2598,7 @@ public final class MainActivity extends Activity
     card.addView(titleRow);
     List<Long> sources = membersOf(n.id);
     if (!sources.isEmpty())
-      card.addView(text("Исходных: " + sources.size(), 11, 0xFF75449B));
+      card.addView(text("Исходных: " + sources.size(), 11, STACK_FG));
     gap(card, 8);
     TextView body =
         text(n.body.isEmpty() ? "Без текста" : Retrieval.excerpt(n.body, "", 320), 14, MUTED);
@@ -2551,8 +2661,8 @@ public final class MainActivity extends Activity
     stack.setLayoutParams(new LinearLayout.LayoutParams(-1, height + dp(layers * 5)));
     for (int i = layers; i > 0; i--) {
       View layer = new View(this);
-      GradientDrawable shape = shape(0xFFE1CEEF, 12);
-      shape.setStroke(dp(1), 0xFFAD83CA);
+      GradientDrawable shape = shape(STACK_LAYER, 12);
+      shape.setStroke(dp(1), STACK_LINE);
       layer.setBackground(shape);
       FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, height);
       lp.topMargin = dp(i * 5);
@@ -2681,7 +2791,7 @@ public final class MainActivity extends Activity
       gap(content, 12);
       LinearLayout card = column();
       pad(card, 16);
-      card.setBackground(shape(WHITE, 12));
+      card.setBackground(shape(SURFACE, 12));
       String type = p.optString("type");
       TextView label = text(proposalLabel(type), 18, INK);
       label.setTypeface(null, Typeface.BOLD);
@@ -2900,7 +3010,7 @@ public final class MainActivity extends Activity
             long id = Long.parseLong(c[0]);
             LinearLayout item = row();
             item.setPadding(dp(12), dp(6), dp(4), dp(6));
-            item.setBackground(shape(WHITE, 10));
+            item.setBackground(shape(SURFACE, 10));
             LinearLayout words = column();
             TextView title = text(c[1], 14, INK);
             title.setMaxLines(2);
@@ -3066,7 +3176,7 @@ public final class MainActivity extends Activity
         ChatMemo.Split part = ChatMemo.split(pictures.text);
         LinearLayout bubble = column();
         bubble.setPadding(dp(11), dp(7), dp(11), dp(8));
-        bubble.setBackground(shape(user ? LIME : part.recap ? 0xFFEEF0EA : WHITE, 10));
+        bubble.setBackground(shape(user ? LIME : part.recap ? RECAP_BG : SURFACE, 10));
         TextView who =
             text(user ? "Вы" : part.recap ? "Итог" : "Помощник", 10, part.recap ? GREEN : MUTED);
         who.setTypeface(null, part.recap ? Typeface.BOLD : Typeface.NORMAL);
@@ -3234,7 +3344,7 @@ public final class MainActivity extends Activity
     ImageView attach = new ImageView(this);
     attach.setScaleType(ImageView.ScaleType.CENTER);
     attach.setImageDrawable(new Glyph("image", GREEN, 18));
-    attach.setBackground(ripple(WHITE, 10));
+    attach.setBackground(ripple(SURFACE, 10));
     attach.setContentDescription("Прикрепить изображение");
     attach.setFocusable(true);
     attach.setOnClickListener(
@@ -3250,7 +3360,7 @@ public final class MainActivity extends Activity
     ImageView sendButton = new ImageView(this);
     sendButton.setScaleType(ImageView.ScaleType.CENTER);
     sendButton.setImageDrawable(new Glyph("send", WHITE, 18));
-    sendButton.setBackground(ripple(GREEN, 10));
+    sendButton.setBackground(ripple(FILL, 10));
     sendButton.setContentDescription(ChatRunner.running == 0 ? "Отправить" : "Ожидаем ответ");
     sendButton.setFocusable(true);
     sendButton.setEnabled(ChatRunner.running == 0);
@@ -3899,7 +4009,7 @@ public final class MainActivity extends Activity
     b.setGravity(Gravity.CENTER);
     b.setMinHeight(dp(48));
     b.setPadding(dp(12), dp(8), dp(12), dp(8));
-    b.setBackground(ripple(primary ? GREEN : 0x33FFFFFF, 10));
+    b.setBackground(ripple(primary ? FILL : 0x33FFFFFF, 10));
     b.setFocusable(true);
     if (description != null) b.setContentDescription(description);
     b.setOnClickListener(
@@ -4736,6 +4846,7 @@ public final class MainActivity extends Activity
     settingsRow("ИИ", aiSummary(), "settings.ai");
     settingsRow("Напоминания и уведомления", reminderSummary(), "settings.reminders");
     settingsRow("Помощник заметок", assistantSummary(), "settings.assistant");
+    settingsRow("Синхронизация", PeerSync.summary(this), "settings.sync");
     settingsRow(
         "Приложение",
         "Внешний вид, данные · версия " + appVersion(),
@@ -4749,7 +4860,7 @@ public final class MainActivity extends Activity
     LinearLayout row = row();
     row.setGravity(Gravity.CENTER_VERTICAL);
     pad(row, 14);
-    row.setBackground(ripple(on ? LIME : WHITE, 12));
+    row.setBackground(ripple(on ? LIME : SURFACE, 12));
     row.setClickable(true);
     row.setFocusable(true);
     TextView mark = text(on ? "●" : "○", 20, on ? GREEN : MUTED);
@@ -5405,11 +5516,214 @@ public final class MainActivity extends Activity
     refresh.run();
   }
 
+  // ---- Синхронизация ----
+
+  private void settingsSync() {
+    subHeader("Синхронизация");
+    secondary(
+        content,
+        "Заметки, папки и картинки обмениваются с компьютером (Windows, macOS) напрямую по Wi-Fi,"
+            + " без сервера. Телефон и компьютер должны быть в одной сети, а на компьютере открыто"
+            + " «Мимоходом» с включённой синхронизацией.");
+    gap(content, 12);
+    List<SyncStore.Peer> peers;
+    try {
+      peers = PeerSync.peers(this);
+    } catch (RuntimeException e) {
+      peers = new ArrayList<>();
+    }
+    for (SyncStore.Peer peer : peers) syncPeerCard(peer);
+    content.addView(button("Подключить компьютер", peers.isEmpty(), this::connectComputer));
+    gap(content, 10);
+    if (!peers.isEmpty()) {
+      content.addView(
+          button(
+              PeerSync.running() ? "Идёт обмен…" : "Обменяться сейчас",
+              true,
+              () -> {
+                if (PeerSync.running()) return;
+                PeerSync.runAsync(this, true);
+                toast("Обмен запущен");
+                render();
+              }));
+      gap(content, 10);
+    }
+    String status = PeerSync.status(this);
+    if (!status.isEmpty()) secondary(content, status);
+    gap(content, 10);
+    content.addView(
+        infoLink(
+            "Как это работает",
+            "Обмен идёт напрямую между устройствами и шифруется общим ключом из кода"
+                + " сопряжения (AES-256-GCM). Облака и аккаунта нет. Обмен происходит, когда вы"
+                + " открываете приложение и когда выходите из него; кнопка «Обменяться сейчас»"
+                + " запускает его сразу.\n\n"
+                + "Если одну заметку изменили на двух устройствах до обмена, остаётся более поздняя"
+                + " версия, а другая сохраняется отдельной заметкой «… (копия при конфликте)».\n\n"
+                + "Код сопряжения действует 10 минут и срабатывает один раз. Кто его увидел, получает"
+                + " доступ к заметкам, пока вы не нажмёте «Забыть» у устройства. ИИ-чат пока не"
+                + " синхронизируется."));
+  }
+
+  private void syncPeerCard(SyncStore.Peer peer) {
+    LinearLayout card = column();
+    pad(card, 14);
+    card.setBackground(shape(SURFACE, 12));
+    TextView name = text(peer.name, 16, INK);
+    name.setTypeface(null, Typeface.BOLD);
+    card.addView(name);
+    card.addView(
+        text(
+            peer.lastSync == 0 ? "Обмена ещё не было" : "Последний обмен: " + PeerSync.time(peer.lastSync),
+            13,
+            MUTED));
+    gap(card, 8);
+    LinearLayout actions = row();
+    actions.addView(
+        compactButton(
+            "Обменяться",
+            false,
+            () -> {
+              if (PeerSync.running()) return;
+              PeerSync.runAsync(this, true);
+              toast("Обмен запущен");
+              render();
+            }));
+    TextView forget =
+        compactButton(
+            "Забыть",
+            false,
+            () ->
+                new AlertDialog.Builder(this)
+                    .setTitle("Забыть «" + peer.name + "»?")
+                    .setMessage(
+                        "Заметки на обоих устройствах останутся. Чтобы подключить компьютер снова,"
+                            + " понадобится новый код сопряжения.")
+                    .setPositiveButton(
+                        "Забыть",
+                        (d, w) -> {
+                          PeerSync.forget(this, peer.device);
+                          page = "settings.sync";
+                          render();
+                        })
+                    .setNegativeButton("Отмена", null)
+                    .show());
+    LinearLayout.LayoutParams gapParams = new LinearLayout.LayoutParams(-2, -2);
+    gapParams.setMarginStart(dp(8));
+    actions.addView(forget, gapParams);
+    card.addView(actions);
+    content.addView(card, new LinearLayout.LayoutParams(-1, -2));
+    gap(content, 10);
+  }
+
+  private void connectComputer() {
+    new AlertDialog.Builder(this)
+        .setTitle("Подключить компьютер")
+        .setMessage(
+            "На компьютере откройте «Мимоходом»: Настройки → Синхронизация → «Показать код"
+                + " сопряжения».")
+        .setPositiveButton("Сканировать QR", (d, w) -> scanPairCode())
+        .setNegativeButton("Ввести код", (d, w) -> typePairCode())
+        .setNeutralButton("Отмена", null)
+        .show();
+  }
+
+  private void scanPairCode() {
+    try {
+      com.google.mlkit.vision.codescanner.GmsBarcodeScanning.getClient(this)
+          .startScan()
+          .addOnSuccessListener(
+              barcode -> {
+                String value = barcode.getRawValue();
+                if (value != null) pairWith(value);
+              })
+          .addOnFailureListener(
+              e -> {
+                // Закрытие сканера пользователем ошибкой не считаем.
+                if (e instanceof com.google.mlkit.common.MlKitException
+                    && ((com.google.mlkit.common.MlKitException) e).getErrorCode() == 201) return;
+                toast("Сканер недоступен. Введите код вручную.");
+                typePairCode();
+              });
+    } catch (Throwable e) {
+      toast("Сканер недоступен. Введите код вручную.");
+      typePairCode();
+    }
+  }
+
+  private void typePairCode() {
+    EditText field = new EditText(this);
+    field.setHint("mimohodom://pair?…");
+    field.setSingleLine(false);
+    field.setMinLines(3);
+    field.setTextColor(INK);
+    try {
+      android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+      if (clipboard != null && clipboard.hasPrimaryClip() && clipboard.getPrimaryClip().getItemCount() > 0) {
+        CharSequence clip = clipboard.getPrimaryClip().getItemAt(0).coerceToText(this);
+        if (clip != null && clip.toString().contains("mimohodom://pair")) field.setText(clip);
+      }
+    } catch (RuntimeException ignored) {
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Код сопряжения")
+        .setMessage("Вставьте строку, которую показывает компьютер.")
+        .setView(field)
+        .setPositiveButton("Подключить", (d, w) -> pairWith(field.getText().toString()))
+        .setNegativeButton("Отмена", null)
+        .show();
+  }
+
+  private void pairWith(String code) {
+    toast("Подключаюсь к компьютеру…");
+    PeerSync.pair(
+        this,
+        code,
+        message ->
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  toast(message.length() > 120 ? message.substring(0, 120) + "…" : message);
+                  if ("settings.sync".equals(page)) {
+                    stash();
+                    render();
+                  }
+                }));
+  }
+
   // ---- Приложение ----
 
   private void settingsApp() {
     subHeader("Приложение");
     section("Внешний вид", false);
+    secondary(content, "Тема");
+    gap(content, 6);
+    String themeMode = prefs.getString("theme", "auto");
+    LinearLayout themes = row();
+    String[][] themeChoices = {{"auto", "Как в системе"}, {"light", "Светлая"}, {"dark", "Тёмная"}};
+    for (int i = 0; i < themeChoices.length; i++) {
+      String value = themeChoices[i][0];
+      TextView choice =
+          compactButton(
+              themeChoices[i][1],
+              value.equals(themeMode),
+              () -> {
+                if (value.equals(prefs.getString("theme", "auto"))) return;
+                prefs.edit().putString("theme", value).apply();
+                // Палитра выбирается при создании экрана, поэтому окно пересоздаётся.
+                recreate();
+              });
+      choice.setContentDescription("Тема: " + themeChoices[i][1]);
+      LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
+      if (i > 0) params.setMarginStart(dp(6));
+      themes.addView(choice, params);
+    }
+    content.addView(themes);
+    gap(content, 4);
+    secondary(
+        content,
+        "«Как в системе» следует за светлой или тёмной темой телефона и переключается сама.");
+    gap(content, 8);
     Switch large = toggle("Крупный текст заметок", prefs.getBoolean("large", false));
     large.setOnCheckedChangeListener(
         (v, checked) -> {

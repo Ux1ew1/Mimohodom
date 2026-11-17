@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мимоходом</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <div class="brand">Мимоходом</div>
+    <nav>
+      <button class="nav" data-view="notes" id="nav-notes">Заметки</button>
+      <button class="nav" data-view="chat" id="nav-chat">ИИ-чат <span class="soon">скоро</span></button>
+      <button class="nav" data-view="settings" id="nav-settings">Настройки</button>
+    </nav>
+    <div class="section-title">Папки</div>
+    <div id="folders"></div>
+    <button class="link" id="new-folder">+ Новая папка</button>
+    <div class="spacer"></div>
+    <div id="sync-pill" class="pill" title="Состояние синхронизации"></div>
+  </aside>
+
+  <main id="main">
+    <section id="view-notes" class="view">
+      <header class="bar">
+        <input id="search" type="search" placeholder="Поиск по заметкам" autocomplete="off">
+        <button class="icon-btn" id="toggle-layout" title="Список или плитка" aria-label="Список или плитка">▦</button>
+        <button class="primary" id="new-note">Новая заметка</button>
+      </header>
+      <div class="split">
+        <div id="notes" class="list"></div>
+        <div id="editor" class="sheet hidden"></div>
+      </div>
+    </section>
+
+    <section id="view-chat" class="view hidden">
+      <div class="empty big">
+        <h2>ИИ-чат</h2>
+        <p>Разговор по вашим заметкам, помощник и фоновые функции появятся на компьютере в следующем этапе. Заметки и папки уже синхронизируются с телефоном.</p>
+      </div>
+    </section>
+
+    <section id="view-settings" class="view hidden">
+      <div class="settings" id="settings"></div>
+    </section>
+  </main>
+</div>
+<div id="toast" class="toast hidden"></div>
+<div id="modal" class="modal hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

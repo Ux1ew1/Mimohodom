@@ -1,0 +1,14 @@
+{
+  "name": "mimohodom-desktop",
+  "private": true,
+  "version": "0.10.0",
+  "description": "Мимоходом для Windows и macOS",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "dev:web": "cargo run -p mimo-core --example dev -- target/dev-data 5173"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

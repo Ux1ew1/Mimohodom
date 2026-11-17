@@ -1,4 +1,7 @@
 <resources>
+    <!-- Светлая тема. Тёмная — AppThemeDark; MainActivity выбирает одну из двух по настройке
+         «Тема» (авто = как в системе) до построения экрана. AppTheme — тема из манифеста,
+         её видно только пока окно открывается: в values-night она тёмная. -->
     <style name="BaseTheme" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:colorAccent">#28634B</item>
@@ -8,5 +11,22 @@
         <item name="android:statusBarColor">#F7F8F2</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
-    <style name="AppTheme" parent="BaseTheme" />
+    <style name="AppThemeLight" parent="BaseTheme" />
+    <style name="AppTheme" parent="AppThemeLight" />
+
+    <style name="DarkAlert" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorBackground">#1A2420</item>
+        <item name="android:colorAccent">#6FCB9F</item>
+    </style>
+    <style name="AppThemeDark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#6FCB9F</item>
+        <item name="android:colorBackground">#111815</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#111815</item>
+        <item name="android:navigationBarColor">#111815</item>
+        <item name="android:statusBarColor">#111815</item>
+        <item name="android:alertDialogTheme">@style/DarkAlert</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
 </resources>

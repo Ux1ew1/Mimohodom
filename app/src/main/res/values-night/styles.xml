@@ -1,0 +1,4 @@
+<resources>
+    <!-- Системная тёмная тема: окно открывается сразу тёмным, без белой вспышки. -->
+    <style name="AppTheme" parent="AppThemeDark" />
+</resources>

@@ -68,6 +68,7 @@ public final class FolderStore {
     ContentValues v = new ContentValues();
     v.put("name", FolderPolicy.clean(name));
     v.put("key", key);
+    v.put("uid", FolderPolicy.uid(key));
     v.put("created", System.currentTimeMillis());
     v.put("auto", auto ? 1 : 0);
     return db.insertOrThrow("folders", null, v);

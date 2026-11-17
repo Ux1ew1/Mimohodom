@@ -1,0 +1,20 @@
+[package]
+name = "mimo-core"
+version = "0.10.0"
+edition = "2021"
+description = "Ядро «Мимоходом» для компьютера: заметки, папки, поиск, синхронизация"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+tiny_http = "0.12"
+ureq = "2"
+local-ip-address = "0.6"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+anyhow = "1"
