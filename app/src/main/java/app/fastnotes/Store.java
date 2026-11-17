@@ -799,6 +799,49 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  /**
+   * Создаёт по заметке с напоминанием на каждую предложенную дату из сообщения, кроме отмеченных
+   * как лишние (номера в {@code skip}). Одна транзакция: либо все заметки, либо ничего. Возвращает
+   * созданные заметки; будильники ставит вызывающий.
+   */
+  public List<Note> acceptReminders(long message, java.util.Set<Integer> skip) {
+    SQLiteDatabase db = getWritableDatabase();
+    db.beginTransaction();
+    try (Cursor c =
+        db.rawQuery(
+            "SELECT sources,draft,body FROM messages WHERE id=?", new String[] {"" + message})) {
+      if (!c.moveToFirst() || c.getString(1).isEmpty())
+        throw new IllegalStateException("Предложение уже обработано");
+      JSONObject draft = new JSONObject(c.getString(1));
+      if (!ReminderBatch.isBatch(draft))
+        throw new IllegalStateException("Это не предложение напоминаний");
+      List<ReminderBatch.Item> items = ReminderBatch.items(draft);
+      JSONArray sources = new JSONArray(c.getString(0));
+      List<Note> created = new ArrayList<>();
+      long now = System.currentTimeMillis();
+      for (int i = 0; i < items.size(); i++) {
+        ReminderBatch.Item item = items.get(i);
+        if (skip.contains(i) || item.at <= now) continue;
+        long id = save(0, item.title, item.body.isEmpty() ? item.title : item.body, item.at);
+        Note note = note(id);
+        created.add(note);
+        sources.put(new JSONObject().put("id", id).put("title", note.title));
+      }
+      if (created.isEmpty()) throw new IllegalStateException("Нет напоминаний с будущим временем");
+      ContentValues v = new ContentValues();
+      v.put("draft", "");
+      v.put("sources", sources.toString());
+      v.put("body", c.getString(2) + "\n\nСоздано напоминаний: " + created.size() + ".");
+      db.update("messages", v, "id=?", new String[] {"" + message});
+      db.setTransactionSuccessful();
+      return created;
+    } catch (JSONException e) {
+      throw new IllegalStateException(e);
+    } finally {
+      db.endTransaction();
+    }
+  }
+
   public void dismissDraft(long message) {
     ContentValues v = new ContentValues();
     v.put("draft", "");

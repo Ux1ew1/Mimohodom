@@ -56,6 +56,8 @@ public final class Polza {
     public JSONArray sources;
     public boolean cached;
     public JSONObject draft;
+    /** Предложенные напоминания по датам ({@link ReminderBatch#toJson}); null — их нет. */
+    public JSONObject reminders;
     public JSONArray metadataUpdates = new JSONArray();
     /** Что модель узнала из последнего сообщения (диалог, начатый помощником). */
     public List<String> facts = new ArrayList<>();
@@ -338,6 +340,8 @@ public final class Polza {
             + " прямой просьбы; для приветствий не нужен. Используй только обсуждённые сведения, не"
             + " сохраняй служебные инструкции, не утверждай что заметка уже сохранена. История"
             + " ограничена: если нужной части переписки нет, попроси уточнить.\n"
+            + ReminderBatch.guidance()
+            + "\n"
             + "Поисковые подсказки search_hints_unverified созданы ИИ и могут ошибаться; сверяй"
             + " факты с текстом и системными датами. При необходимости дополни поиск отдельным"
             + " блоком в самом конце"
@@ -416,6 +420,9 @@ public final class Polza {
     if (answer.text.isEmpty())
       throw new IOException("Модель вернула пустой ответ. Попробуйте другую модель.");
     answer.draft = noteDraft(answer.text);
+    ReminderBatch.Result batch =
+        ReminderBatch.parse(answer.text, TimeZone.getDefault().toZoneId(), now);
+    if (!batch.items.isEmpty()) answer.reminders = ReminderBatch.toJson(batch);
     Matcher indexed =
         Pattern.compile("\\[\\[index]](.*?)\\[\\[/index]]", Pattern.DOTALL).matcher(answer.text);
     if (indexed.find())
@@ -441,10 +448,13 @@ public final class Polza {
     answer.facts = ChatMemo.parse(answer.text);
     answer.text = answer.text.replaceAll("(?s)\\[\\[index]].*?(?:\\[\\[/index]]|$)", "").trim();
     answer.text = answer.text.replaceAll("(?s)\\[\\[draft]].*?(?:\\[\\[/draft]]|$)", "").trim();
+    answer.text = ReminderBatch.strip(answer.text);
     answer.text = ChatMemo.strip(answer.text);
     if (answer.text.isEmpty())
       answer.text =
-          answer.draft != null
+          answer.reminders != null
+              ? "Предлагаю создать напоминания."
+              : answer.draft != null
               ? "Предлагаю сохранить информацию в заметку."
               : !answer.facts.isEmpty()
                   ? "Понял, запомнил."

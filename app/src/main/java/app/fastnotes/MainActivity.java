@@ -1849,7 +1849,66 @@ public final class MainActivity extends Activity
                 + (repeatMode != 0 ? ". " + ReminderPolicy.repeatLabel(repeatMode) : ""));
   }
 
+  /**
+   * Заметка с несколькими датами (расписание, план): готовит в чате запрос «создай напоминания по
+   * датам», на который ИИ ответит пачкой напоминаний. Запрос виден и правится перед отправкой.
+   */
+  private void remindersFromText() {
+    String text = bodyField == null ? "" : bodyField.getText().toString().trim();
+    String name = titleField == null ? "" : titleField.getText().toString().trim();
+    if (text.isEmpty()) return;
+    String query = ReminderBatch.requestFor(name, text);
+    stash();
+    if (!persistEditedNote()) return;
+    hideKeyboard();
+    String old = prefs.getString("chatDraft.0", "");
+    prefs
+        .edit()
+        .putString("chatDraft.0", old.trim().isEmpty() ? query : old.trim() + "\n\n" + query)
+        .apply();
+    chat = 0;
+    tab = 2;
+    page = "chat";
+    editing = 0;
+    render();
+    toast("Проверьте текст и отправьте. ИИ предложит напоминания по датам");
+  }
+
   private void pickReminder() {
+    if (bodyField != null && ReminderBatch.manyDates(bodyField.getText().toString())) {
+      String[] labels =
+          reminder != 0
+              ? new String[] {
+                "Изменить дату и время",
+                "Повтор: " + ReminderPolicy.repeatLabel(repeatMode).toLowerCase(new Locale("ru")),
+                "Напомнить за: " + leadChoiceLabel(),
+                "Добавить в календарь",
+                "Убрать напоминание",
+                "Напоминания по всем датам в тексте"
+              }
+              : new String[] {"Выбрать дату и время", "Напоминания по всем датам в тексте"};
+      new AlertDialog.Builder(this)
+          .setTitle("Напоминание")
+          .setItems(
+              labels,
+              (d, w) -> {
+                if (w == labels.length - 1) remindersFromText();
+                else if (reminder == 0) datePicker();
+                else if (w == 0) datePicker();
+                else if (w == 1) pickRepeat();
+                else if (w == 2) pickLead();
+                else if (w == 3) addToCalendar();
+                else {
+                  reminder = 0;
+                  repeatMode = 0;
+                  leadChoice = -1;
+                  refreshReminder();
+                  stash();
+                }
+              })
+          .show();
+      return;
+    }
     if (reminder != 0) {
       new AlertDialog.Builder(this)
           .setTitle("Напоминание")
@@ -3203,7 +3262,9 @@ public final class MainActivity extends Activity
           }
         }
         String draftJson = m.optString("draft", "");
-        if (!user && !draftJson.isEmpty()) {
+        if (!user && !draftJson.isEmpty() && ReminderBatch.isBatch(new JSONObject(draftJson))) {
+          reminderBatchView(bubble, m.getLong("id"), new JSONObject(draftJson));
+        } else if (!user && !draftJson.isEmpty()) {
           JSONObject draft = new JSONObject(draftJson);
           long message = m.getLong("id");
           gap(bubble, 6);
@@ -3385,6 +3446,92 @@ public final class MainActivity extends Activity
     }
     watch(chatInput, this::stash);
     scroller.post(() -> scroller.fullScroll(View.FOCUS_DOWN));
+  }
+
+  /**
+   * Предложение ИИ: по напоминанию на каждую дату из ответа. Строку можно исключить нажатием (так
+   * убирают опечатку в дате); создаётся отдельная заметка с напоминанием на каждую оставшуюся.
+   */
+  private void reminderBatchView(LinearLayout bubble, long message, JSONObject draft) {
+    List<ReminderBatch.Item> items = ReminderBatch.items(draft);
+    java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+    Set<Integer> skip = new HashSet<>();
+    gap(bubble, 6);
+    chatNote(bubble, "Можно создать напоминания. Нажмите на строку, чтобы исключить её");
+    gap(bubble, 4);
+    TextView create = compactButton("", true, () -> {});
+    Runnable refresh =
+        () -> {
+          int n = items.size() - skip.size();
+          create.setText(n == 0 ? "Ничего не выбрано" : "Создать: " + n);
+          create.setAlpha(n == 0 ? 0.5f : 1f);
+        };
+    for (int i = 0; i < items.size(); i++) {
+      ReminderBatch.Item item = items.get(i);
+      final int index = i;
+      TextView line =
+          text(ReminderBatch.label(item.at, zone) + " · " + item.title, 12, INK);
+      line.setPadding(dp(8), dp(6), dp(8), dp(6));
+      line.setMinHeight(dp(34));
+      line.setGravity(Gravity.CENTER_VERTICAL);
+      line.setBackground(ripple(LIME, 8));
+      line.setContentDescription(ReminderBatch.label(item.at, zone) + ", " + item.title);
+      line.setOnClickListener(
+          v -> {
+            buzz(0);
+            boolean off = skip.add(index);
+            if (!off) skip.remove(index);
+            line.setTextColor(off ? MUTED : INK);
+            line.setPaintFlags(
+                off
+                    ? line.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG
+                    : line.getPaintFlags() & ~Paint.STRIKE_THRU_TEXT_FLAG);
+            refresh.run();
+          });
+      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+      lp.bottomMargin = dp(2);
+      bubble.addView(line, lp);
+    }
+    if (draft.optInt("skipped") > 0)
+      chatNote(
+          bubble,
+          "Пропущено строк: "
+              + draft.optInt("skipped")
+              + " (время уже прошло, повтор или неразборчиво)");
+    gap(bubble, 6);
+    create.setOnClickListener(
+        v -> {
+          if (skip.size() >= items.size()) return;
+          buzz(1);
+          try {
+            List<Note> made = store.acceptReminders(message, skip);
+            for (Note n : made) Reminders.schedule(getApplicationContext(), n);
+            CalendarSync.runAsync(getApplicationContext());
+            BackgroundAnalysis.enqueue(this);
+            stash();
+            render();
+            toast("Создано напоминаний: " + made.size());
+            if (!Reminders.notificationsAllowed(this))
+              toast("Уведомления выключены — напоминания не придут");
+          } catch (Exception e) {
+            toast("Не удалось создать напоминания или предложение уже обработано");
+          }
+        });
+    refresh.run();
+    LinearLayout actions = row();
+    actions.addView(create, new LinearLayout.LayoutParams(0, -2, 1));
+    actions.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+    actions.addView(
+        compactButton(
+            "Не создавать",
+            false,
+            () -> {
+              store.dismissDraft(message);
+              stash();
+              render();
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    bubble.addView(actions);
   }
 
   private void reviewChatDraft(long message, JSONObject draft) {

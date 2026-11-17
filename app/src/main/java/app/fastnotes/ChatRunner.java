@@ -180,7 +180,10 @@ public final class ChatRunner {
                       picked.isEmpty() ? model : visionModel,
                       query,
                       clean,
-                      picked.isEmpty() ? maxTokens : ChatImages.answerTokens(maxTokens),
+                      picked.isEmpty()
+                          // Пачка напоминаний длиннее обычного ответа: блок не должен оборваться.
+                          ? (ReminderBatch.wants(query) ? Math.max(maxTokens, 3000) : maxTokens)
+                          : ChatImages.answerTokens(maxTokens),
                       guidance,
                       parts,
                       picked.isEmpty() ? "" : ChatImages.questionHint());
@@ -253,7 +256,8 @@ public final class ChatRunner {
                     "assistant",
                     checkin ? ChatMemo.attach(answer.text, answer.facts) : answer.text,
                     answer.sources,
-                    answer.draft);
+                    // Предложение создать напоминания по датам хранится там же, где черновик.
+                    answer.reminders != null ? answer.reminders : answer.draft);
                 if (memoNote > 0) {
                   List<String> bodies = new ArrayList<>();
                   for (int i = 0; i < history.length(); i++)

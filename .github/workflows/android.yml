@@ -62,6 +62,7 @@ jobs:
           ./scripts/test-manager.ps1
           ./scripts/test-aicore.ps1
           ./scripts/test-reminders.ps1
+          ./scripts/test-reminder-batch.ps1
           ./scripts/test-images.ps1
           ./scripts/test-image-input.ps1
           ./scripts/test-image-list.ps1
