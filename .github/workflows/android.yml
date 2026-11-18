@@ -114,6 +114,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, macos-14]
+    env:
+      SIGN_WIN: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+      SIGN_MAC: ${{ secrets.APPLE_CERTIFICATE != '' }}
     defaults:
       run:
         working-directory: desktop
@@ -131,7 +134,37 @@ jobs:
         run: cargo test -p mimo-core
       - name: Install Tauri CLI
         run: npm ci
-      - name: Build installer
+      # Подпись включается секретами репозитория; без них собирается неподписанный установщик.
+      # Windows: WINDOWS_CERTIFICATE (файл .pfx в base64) и WINDOWS_CERTIFICATE_PASSWORD.
+      # macOS: APPLE_CERTIFICATE (.p12 в base64), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+      # APPLE_ID, APPLE_PASSWORD (пароль приложения), APPLE_TEAM_ID — Tauri сам подписывает и нотаризует.
+      - name: Build installer (unsigned)
+        if: ${{ (matrix.os == 'windows-2022' && env.SIGN_WIN != 'true') || (matrix.os == 'macos-14' && env.SIGN_MAC != 'true') }}
+        run: npx tauri build
+      - name: Build installer (signed, Windows)
+        if: ${{ matrix.os == 'windows-2022' && env.SIGN_WIN == 'true' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'sign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $pass = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pass
+          Remove-Item $pfx
+          $cfg = Join-Path $env:RUNNER_TEMP 'sign.json'
+          @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = 'http://timestamp.digicert.com' } } } | ConvertTo-Json -Depth 5 | Set-Content -Path $cfg -Encoding utf8
+          npx tauri build --config $cfg
+      - name: Build installer (signed and notarized, macOS)
+        if: ${{ matrix.os == 'macos-14' && env.SIGN_MAC == 'true' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx tauri build
       - name: Upload installers
         uses: actions/upload-artifact@v4

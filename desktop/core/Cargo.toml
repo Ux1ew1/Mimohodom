@@ -1,6 +1,6 @@
 [package]
 name = "mimo-core"
-version = "0.10.3-5"
+version = "0.10.3-6"
 edition = "2021"
 description = "Ядро «Мимоходом» для компьютера: заметки, папки, поиск, синхронизация"
 

@@ -12,6 +12,7 @@
     <div class="brand">Мимоходом</div>
     <nav>
       <button class="nav" data-view="notes" id="nav-notes">Заметки</button>
+      <button class="nav" data-view="calendar" id="nav-calendar"><span>Календарь</span><span class="badge hidden" id="cal-badge" title="Сработавшие напоминания"></span></button>
       <button class="nav" data-view="chat" id="nav-chat">ИИ-чат</button>
       <button class="nav" data-view="assistant" id="nav-assistant"><span>Помощник</span><span class="badge hidden" id="assist-badge"></span></button>
       <button class="nav" data-view="settings" id="nav-settings">Настройки</button>
@@ -35,6 +36,10 @@
         <div id="notes" class="list"></div>
         <div id="editor" class="sheet hidden"></div>
       </div>
+    </section>
+
+    <section id="view-calendar" class="view hidden">
+      <div class="cal-wrap" id="calendar"></div>
     </section>
 
     <section id="view-chat" class="view hidden">

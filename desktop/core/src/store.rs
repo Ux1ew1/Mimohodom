@@ -392,6 +392,49 @@ impl Store {
         Ok(())
     }
 
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM settings WHERE k=?1", params![key])?;
+        Ok(())
+    }
+
+    /// Все настройки, чьё имя начинается с `prefix` (для напоминаний: по одной записи на заметку).
+    pub fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let mut st = self.conn.prepare("SELECT k,v FROM settings WHERE substr(k,1,?2)=?1 ORDER BY k")?;
+        let rows = st.query_map(params![prefix, prefix.chars().count() as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    // ---------- напоминания ----------
+
+    /// Заметки, у которых напоминание ещё может сработать: время не раньше `min` либо серия (её время
+    /// всегда передвигается вперёд).
+    pub fn reminder_notes(&self, min: i64) -> Result<Vec<Note>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {} FROM notes WHERE reminder>0 AND (reminder>=?1 OR repeat_mode<>0) ORDER BY reminder",
+            NOTE_COLS
+        ))?;
+        let rows = st.query_map(params![min], read_note)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Заметки с напоминанием, которые могут попасть в окно `[from, to)` календаря: одиночные по времени,
+    /// серии — все, чьё ближайшее время не позже конца окна.
+    pub fn calendar_notes(&self, from: i64, to: i64) -> Result<Vec<Note>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {} FROM notes WHERE reminder>0 AND ((reminder>=?1 AND reminder<?2) OR (repeat_mode<>0 AND reminder<?2)) ORDER BY reminder",
+            NOTE_COLS
+        ))?;
+        let rows = st.query_map(params![from, to], read_note)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Передвигает время напоминания серии, не считая это правкой для синхронизации (как на телефоне:
+    /// каждое устройство само переносит серию, поэтому конфликтов правок не возникает).
+    pub fn advance_reminder(&self, id: i64, expected: i64, next: i64) -> Result<bool> {
+        let n = self.conn.execute("UPDATE notes SET reminder=?3 WHERE id=?1 AND reminder=?2", params![id, expected, next])?;
+        Ok(n == 1)
+    }
+
     // ---------- индекс поиска ----------
 
     pub(crate) fn fts_put(&self, id: i64, title: &str, body: &str, search_text: &str) -> Result<()> {

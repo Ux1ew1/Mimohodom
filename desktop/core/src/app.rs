@@ -41,6 +41,8 @@ pub struct App {
     pub video: Mutex<VideoState>,
     /// Адрес API Polza.AI; в тестах — локальная заглушка.
     pub ai_base: Mutex<String>,
+    /// Уведомления о напоминаниях, которые оболочка ещё не показала.
+    pub notices: Mutex<Vec<crate::reminders::Notice>>,
 }
 
 /// Файл картинки моложе этого срока не удаляется, даже если на него ещё никто не ссылается:
@@ -58,6 +60,7 @@ impl App {
             assist: Mutex::new(AssistState::default()),
             video: Mutex::new(VideoState::default()),
             ai_base: Mutex::new(crate::ai::polza::DEFAULT_BASE.to_string()),
+            notices: Mutex::new(Vec::new()),
         })
     }
 

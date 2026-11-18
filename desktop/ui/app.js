@@ -26,6 +26,7 @@ const S = {
   view: "notes", folder: null, query: "", notes: [], folders: [], draft: null, dirty: false,
   grid: false, imgCache: new Map(), sync: null, lastStatus: "", lastPeerSync: 0, code: null,
   chat: null, chats: [], messages: [], attach: [], ai: null, assist: null, assistSig: "", assistLog: null, videoWatching: false, modalClose: null,
+  cal: null, fired: [], firedSig: "", shown: 200,
 };
 
 // ---------- общие помощники ----------
@@ -118,8 +119,10 @@ async function selectFolder(id) {
 }
 
 // ---------- список заметок ----------
+const SHOW_STEP = 200;
 async function loadNotes() {
   S.notes = await rpc("notes", { query: S.query, folder: S.folder });
+  S.shown = SHOW_STEP;
 }
 async function reload() {
   S.folders = await rpc("folders");
@@ -135,7 +138,9 @@ function renderList() {
     box.append(el("div", { class: "empty", text: S.query ? "Ничего не найдено" : "Здесь пока нет заметок. Нажмите «Новая заметка»." }));
     return;
   }
-  for (const n of S.notes) {
+  // Рисуем по частям: на десятках тысяч заметок сразу все карточки подвесили бы окно.
+  const shown = S.notes.slice(0, S.shown);
+  for (const n of shown) {
     const card = el("button", { class: "card" + (n.member_of ? " member" : "") + (S.draft && S.draft.id === n.id ? " active" : ""), onclick: () => openNote(n.id) });
     if (n.images.length) {
       const img = el("img", { class: "thumb", alt: "" });
@@ -149,6 +154,9 @@ function renderList() {
     if (n.stack) meta.append(el("span", { class: "tag stack", role: "button", title: "Показать или скрыть исходные заметки", text: "Стопка · " + n.stack.count + (n.stack.expanded ? " ▾" : " ▸"), onclick: (e) => { e.stopPropagation(); toggleStack(n.id); } }));
     card.append(el("div", { class: "t", text: n.title }), el("div", { class: "b", text: n.body }), meta);
     box.append(card);
+  }
+  if (S.notes.length > shown.length) {
+    box.append(el("button", { class: "secondary", style: "grid-column:1/-1", text: "Показать ещё (" + (S.notes.length - shown.length) + ")", onclick: () => { S.shown += SHOW_STEP; renderList(); } }));
   }
 }
 
@@ -798,6 +806,94 @@ function renderAiSettings(root) {
   root.append(el("div", { class: "row" }, el("span", { text: "Длина ответа" }), tokens));
 }
 
+// ---------- календарь и сработавшие напоминания ----------
+// Календарь показывает напоминания заметок по дням (серии развёрнуты на видимый месяц). Уведомления
+// показывает система (оболочка), а здесь список сработавших: открыть, отложить, закрыть.
+const DOW = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const dayKey = (d) => d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+const fmtTime = (ms) => new Date(ms).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+function updateCalBadge() {
+  const b = $("#cal-badge"); if (!b) return;
+  b.textContent = String(S.fired.length); b.classList.toggle("hidden", !S.fired.length);
+}
+async function snoozeFired(id, kind) {
+  try { await rpc("reminder_snooze", { id, kind }); toast("Отложено"); await refreshFired(true); } catch (e) { fail(e); }
+}
+async function dismissFired(id) {
+  try { await rpc("reminder_dismiss", { id }); await refreshFired(true); } catch (e) { fail(e); }
+}
+/** Забирает список сработавших; обновляет значок и, если открыт календарь, перерисовывает его. */
+async function refreshFired(force = false) {
+  const list = await rpc("reminders_active");
+  const sig = JSON.stringify(list.map((f) => [f.id, f.reminder]));
+  const changed = sig !== S.firedSig;
+  S.fired = list; S.firedSig = sig; updateCalBadge();
+  if ((changed || force) && S.view === "calendar") await renderCalendar();
+}
+function firedPanel() {
+  if (!S.fired.length) return null;
+  const box = el("div", { class: "fired" }, el("h2", { text: "Сработало: " + S.fired.length }));
+  for (const f of S.fired) {
+    box.append(el("div", { class: "fired-item" },
+      el("div", { class: "what" }, el("b", { text: f.title }), el("span", { text: f.line })),
+      el("button", { class: "compact main", text: "Открыть", onclick: () => goNote(f.id) }),
+      el("button", { class: "compact", text: "Через 10 мин", onclick: () => snoozeFired(f.id, 0) }),
+      el("button", { class: "compact", text: "Через час", onclick: () => snoozeFired(f.id, 1) }),
+      el("button", { class: "compact", text: "Завтра", onclick: () => snoozeFired(f.id, 2) }),
+      el("button", { class: "compact", text: "Готово", onclick: () => dismissFired(f.id) })));
+  }
+  return box;
+}
+async function newReminderOn(day) {
+  S.view = "notes"; showView();
+  await newNote();
+  if (!S.draft) return;
+  const now = new Date(), d = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0);
+  // На сегодня после девяти: ближайший час, чтобы напоминание не оказалось в прошлом.
+  S.draft.reminder = (d.getTime() > now.getTime() ? d : new Date(now.getTime() + 3600000 - (now.getTime() % 3600000))).getTime();
+  markDirty(); renderEditor();
+}
+async function renderCalendar() {
+  const root = $("#calendar");
+  const today = dayStart(new Date());
+  if (!S.cal) S.cal = { month: new Date(today.getFullYear(), today.getMonth(), 1), day: today };
+  const first = S.cal.month;
+  const gridStart = new Date(first.getFullYear(), first.getMonth(), 1 - ((first.getDay() + 6) % 7));
+  const gridEnd = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + 42);
+  const events = await rpc("calendar", { from: gridStart.getTime(), to: gridEnd.getTime() });
+  if (S.view !== "calendar") return;
+  const byDay = new Map();
+  for (const e of events) { const k = dayKey(new Date(e.at)); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(e); }
+  const go = (delta) => { S.cal.month = new Date(first.getFullYear(), first.getMonth() + delta, 1); renderCalendar().catch(fail); };
+  const head = el("div", { class: "cal-head" },
+    el("h1", { text: first.toLocaleString("ru-RU", { month: "long", year: "numeric" }) }),
+    el("button", { class: "icon-btn", title: "Прошлый месяц", "aria-label": "Прошлый месяц", onclick: () => go(-1) }, "‹"),
+    el("button", { class: "icon-btn", title: "Следующий месяц", "aria-label": "Следующий месяц", onclick: () => go(1) }, "›"),
+    el("button", { class: "secondary", text: "Сегодня", onclick: () => { S.cal = null; renderCalendar().catch(fail); } }));
+  const grid = el("div", { class: "cal-grid" }, DOW.map((d) => el("div", { class: "cal-dow", text: d })));
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
+    const list = byDay.get(dayKey(d)) || [];
+    const cell = el("button", { class: "cal-day" + (d.getMonth() !== first.getMonth() ? " other" : "") + (dayKey(d) === dayKey(today) ? " today" : "") + (dayKey(d) === dayKey(S.cal.day) ? " sel" : ""),
+      onclick: () => { S.cal.day = d; renderCalendar().catch(fail); }, ondblclick: () => newReminderOn(d) }, el("span", { class: "n", text: String(d.getDate()) }));
+    for (const e of list.slice(0, 3)) cell.append(el("span", { class: "ev" + (e.repeat ? " series" : ""), title: e.title, text: fmtTime(e.at) + " " + e.title }));
+    if (list.length > 3) cell.append(el("span", { class: "more", text: "и ещё " + (list.length - 3) }));
+    grid.append(cell);
+  }
+  const sel = S.cal.day, items = byDay.get(dayKey(sel)) || [];
+  const side = el("div", { class: "cal-side" }, el("h2", { text: sel.toLocaleString("ru-RU", { weekday: "long", day: "numeric", month: "long" }) }));
+  if (!items.length) side.append(el("div", { class: "note", text: "На этот день напоминаний нет." }));
+  for (const e of items) {
+    side.append(el("button", { class: "cal-item", onclick: () => goNote(e.id) },
+      el("span", { class: "time", text: fmtTime(e.at) }), el("span", { class: "t", text: e.title }),
+      e.repeat ? el("span", { class: "tag", text: REPEATS.find(([v]) => v === String(e.repeat))?.[1] || "Повтор" }) : null));
+  }
+  side.append(el("div", { class: "row" }, el("button", { class: "primary", text: "Добавить напоминание", onclick: () => newReminderOn(sel) })),
+    el("div", { class: "note", text: "Двойной щелчок по дню тоже создаёт заметку с напоминанием. Повторяющиеся события развёрнуты вперёд от ближайшего срока." }));
+  root.replaceChildren(...[firedPanel(), head, el("div", { class: "cal-body" }, grid, side)].filter(Boolean));
+}
+
 // ---------- настройки и синхронизация ----------
 async function renderSettings() {
   const st = await rpc("sync_state"); S.sync = st;
@@ -843,6 +939,8 @@ async function renderSettings() {
   if (st.peers.some((p) => p.hosts.length)) root.append(el("div", { class: "row" }, el("button", { class: "primary", text: "Обменяться со всеми", onclick: () => rpc("sync_now", {}).then(() => toast("Обмен запущен")).catch(fail) })));
   if (st.status) root.append(el("div", { class: "note", style: "white-space:pre-line", text: st.status }));
 
+  await renderReminderSettings(root);
+
   root.append(el("h2", { text: "Оформление" }));
   const sel = el("select", { class: "field", onchange: async (e) => { await rpc("setting_set", { key: "theme", value: e.target.value }); applyTheme(e.target.value); } },
     el("option", { value: "system", text: "Как в системе" }), el("option", { value: "light", text: "Светлая" }), el("option", { value: "dark", text: "Тёмная" }));
@@ -853,7 +951,31 @@ async function renderSettings() {
   root.append(el("div", { class: "row" }, el("button", { class: "secondary", text: "Экспорт заметок в JSON", onclick: exportJson }),
     el("span", { class: "note", text: "Ключ ИИ и настройки в экспорт не попадают." })));
   root.append(el("h2", { text: "Горячие клавиши" }), el("div", { class: "keys" }, HOTKEYS.map(([k, t]) => el("div", { class: "key-row" }, el("kbd", { text: k }), el("span", { text: t })))));
-  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.10.3.5 для компьютера (Android — 0.10.3). Заметки, папки, картинки, чаты и стопки обмениваются с телефоном." }));
+  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.10.3.6 для компьютера (Android — 0.10.3). Заметки, папки, картинки, чаты и стопки обмениваются с телефоном." }));
+}
+async function renderReminderSettings(root) {
+  const get = async (k) => rpc("setting_get", { key: k }).catch(() => null);
+  const popup = (await get("reminder.popup")) !== "0", tray = (await get("app.tray")) !== "0", lead = (await get("reminder.lead")) || "0";
+  root.append(el("h2", { text: "Напоминания" }));
+  root.append(el("div", { class: "note", text: "Уведомления приходят, пока приложение запущено; при закрытии окно уходит в трей, и напоминания продолжают работать. Время срабатывания и «за N минут» считает этот компьютер; сработавшие и отложенные напоминания на телефон не передаются." }));
+  const mk = (label, on, apply) => {
+    const c = el("input", { type: "checkbox", onchange: async (e) => { try { await apply(e.target.checked); } catch (er) { fail(er); e.target.checked = !e.target.checked; } } });
+    c.checked = on; return el("div", { class: "row" }, el("label", { class: "toggle" }, c, label));
+  };
+  root.append(mk("Показывать уведомления о напоминаниях", popup, (v) => rpc("setting_set", { key: "reminder.popup", value: v ? "1" : "0" })));
+  const sel = el("select", { class: "field", onchange: (e) => rpc("setting_set", { key: "reminder.lead", value: e.target.value }).catch(fail) },
+    LEADS.filter(([v]) => v !== "-1").map(([v, t]) => el("option", { value: v, text: t })));
+  sel.value = lead; if (sel.value !== lead) sel.value = "0";
+  root.append(el("div", { class: "row" }, el("span", { text: "Напоминать (если у заметки не задано своё)" }), sel));
+  root.append(mk("Закрытие окна сворачивает в трей (иначе приложение закрывается)", tray, (v) => rpc("setting_set", { key: "app.tray", value: v ? "1" : "0" })));
+  if (tauri && tauri.core) {
+    let auto = false;
+    try { auto = await tauri.core.invoke("autostart_get"); } catch (_) { /* не поддерживается */ }
+    root.append(mk("Запускать при входе в систему (сразу в трей)", auto, (v) => tauri.core.invoke("autostart_set", { on: v })));
+  }
+  const popupError = await get("reminder.popup_error");
+  if (popupError) root.append(el("div", { class: "chat-error", style: "margin:6px 0" }, "Система не показала последнее уведомление: " + popupError));
+  root.append(el("div", { class: "row" }, el("button", { class: "secondary", text: "Проверочное уведомление", onclick: () => rpc("reminder_test").then(() => toast("Отправлено. Если ничего не появилось, проверьте уведомления в настройках системы.")).catch(fail) })));
 }
 async function showCode() {
   try { S.code = await rpc("sync_pair_code"); paintCode($("#code-box")); } catch (e) { fail(e); }
@@ -899,9 +1021,11 @@ async function pollSync() {
       if (!first && !st.busy) {
         if (!S.dirty) { await reload(); if (S.draft && S.draft.id) refreshOpen(); }
         if (S.view === "settings") renderSettings();
+        if (S.view === "calendar") renderCalendar().catch(fail);
       }
     }
   } catch (_) { /* окно закрывается или ядро занято */ }
+  try { await refreshFired(); } catch (_) { /* то же */ }
   try {
     const b = await rpc("assist_badge");
     const count = b.suggestions + b.proposals, badge = $("#assist-badge");
@@ -923,13 +1047,13 @@ async function refreshOpen() {
 
 // ---------- горячие клавиши ----------
 // Сочетания сравниваются по коду клавиши (KeyS), а не по символу: так они работают и на русской раскладке.
-const VIEW_KEYS = { Digit1: "notes", Digit2: "chat", Digit3: "assistant", Digit4: "settings", Numpad1: "notes", Numpad2: "chat", Numpad3: "assistant", Numpad4: "settings" };
+const VIEW_KEYS = { Digit1: "notes", Digit2: "chat", Digit3: "assistant", Digit4: "settings", Digit5: "calendar", Numpad1: "notes", Numpad2: "chat", Numpad3: "assistant", Numpad4: "settings", Numpad5: "calendar" };
 const HOTKEYS = [
   ["Esc", "закрыть окно; очистить поиск; закрыть открытую заметку (несохранённые правки сохранятся)"],
   ["Ctrl+S", "сохранить заметку"],
   ["Ctrl+N", "новая заметка"],
   ["Ctrl+F или Ctrl+K", "поиск по заметкам"],
-  ["Ctrl+1 … Ctrl+4", "заметки, ИИ-чат, помощник, настройки"],
+  ["Ctrl+1 … Ctrl+5", "заметки, ИИ-чат, помощник, настройки, календарь"],
   ["Enter в чате", "отправить сообщение (Shift+Enter — новая строка)"],
 ];
 /** Esc закрывает самое верхнее: окно, затем поиск, затем открытую заметку. */
@@ -959,9 +1083,10 @@ function onHotkey(e) {
 
 // ---------- запуск ----------
 function showView() {
-  for (const v of ["notes", "chat", "assistant", "settings"]) $("#view-" + v).classList.toggle("hidden", S.view !== v);
+  for (const v of ["notes", "calendar", "chat", "assistant", "settings"]) $("#view-" + v).classList.toggle("hidden", S.view !== v);
   renderSide();
   if (S.view === "settings") renderSettings().catch(fail);
+  if (S.view === "calendar") refreshFired(true).catch(fail);
   if (S.view === "chat") renderChatView().catch(fail);
   if (S.view === "assistant") renderAssist(true).catch(fail);
 }

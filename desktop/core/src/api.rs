@@ -3,6 +3,7 @@
 use crate::ai::{assistant, chat, checkin, folders, polza, review, video, video_run};
 use crate::app::App;
 use crate::policy;
+use crate::reminders;
 use crate::store::{now_ms, random_hex, Note, SaveInput, Store};
 use crate::sync::{client, pairing, server};
 use anyhow::{anyhow, Result};
@@ -40,6 +41,12 @@ pub fn start_background(app: &Arc<App>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
         assistant::tick(&app3);
+    });
+    // Напоминания: проверка при запуске (пропущенные, пока приложение было закрыто) и затем раз в 15 секунд.
+    let app4 = app.clone();
+    std::thread::spawn(move || loop {
+        reminders::tick(&app4);
+        std::thread::sleep(std::time::Duration::from_secs(reminders::TICK_SECS));
     });
 }
 
@@ -102,15 +109,40 @@ pub fn dispatch(app: &Arc<App>, cmd: &str, args: Value) -> Result<Value> {
         }
         "save_note" => {
             let input: SaveInput = serde_json::from_value(args)?;
-            let note = app.store.lock().unwrap().save_note(&input)?;
+            let note = {
+                let st = app.store.lock().unwrap();
+                let before = match input.id.filter(|i| *i != 0) {
+                    Some(id) => st.note(id)?,
+                    None => None,
+                };
+                let note = st.save_note(&input)?;
+                reminders::on_saved(&st, before.as_ref(), &note)?;
+                note
+            };
             app.cleanup_images();
             Ok(serde_json::to_value(note)?)
         }
         "delete_note" => {
-            app.store.lock().unwrap().delete_note(i(&args, "id"))?;
+            {
+                let st = app.store.lock().unwrap();
+                st.delete_note(i(&args, "id"))?;
+                reminders::on_deleted(&st, i(&args, "id"))?;
+            }
             app.cleanup_images();
             Ok(json!(true))
         }
+        // ---------- напоминания и календарь ----------
+        "reminders_active" => Ok(Value::Array(reminders::local_active(app)?)),
+        "reminder_snooze" => Ok(json!(reminders::local_snooze(app, i(&args, "id"), i(&args, "kind"))?)),
+        "reminder_dismiss" => {
+            reminders::dismiss(&app.store.lock().unwrap(), i(&args, "id"))?;
+            Ok(json!(true))
+        }
+        "reminder_test" => {
+            reminders::push_outbox(app, vec![reminders::test_notice()]);
+            Ok(json!(true))
+        }
+        "calendar" => Ok(Value::Array(reminders::local_calendar(app, i(&args, "from"), i(&args, "to"))?)),
         "move_note" => {
             app.store.lock().unwrap().move_note(i(&args, "id"), i(&args, "folder"))?;
             Ok(json!(true))
@@ -488,6 +520,18 @@ fn note_json(st: &Store, n: &Note, stack: Option<&(Vec<i64>, bool)>, member_of: 
     Ok(v)
 }
 
+/// Сколько знаков текста уходит в список: карточке хватает начала, а полный текст открывается командой `note`.
+/// Без этого окно получало бы весь текст всех заметок (на 30 000 заметок — десятки мегабайт).
+const LIST_BODY_CHARS: usize = 400;
+
+fn list_item(st: &Store, n: &Note, stack: Option<&(Vec<i64>, bool)>, member_of: i64) -> Result<Value> {
+    let mut short = n.clone();
+    if short.body.chars().count() > LIST_BODY_CHARS {
+        short.body = short.body.chars().take(LIST_BODY_CHARS).collect();
+    }
+    note_json(st, &short, stack, member_of)
+}
+
 /// Список заметок: исходные заметки стопок скрыты, пока стопка свёрнута; при поиске видно всё.
 fn list_notes(st: &Store, query: &str, folder: Option<i64>) -> Result<Value> {
     let notes = st.notes(query, folder)?;
@@ -504,14 +548,14 @@ fn list_notes(st: &Store, query: &str, folder: Option<i64>) -> Result<Value> {
         if !flat && member_top.contains_key(&n.id) {
             continue;
         }
-        out.push(note_json(st, n, stacks.get(&n.id), if flat { member_top.get(&n.id).copied().unwrap_or(0) } else { 0 })?);
+        out.push(list_item(st, n, stacks.get(&n.id), if flat { member_top.get(&n.id).copied().unwrap_or(0) } else { 0 })?);
         if flat {
             continue;
         }
         if let Some((members, true)) = stacks.get(&n.id) {
             for m in members {
                 if let Some(member) = st.note(*m)? {
-                    out.push(note_json(st, &member, None, n.id)?);
+                    out.push(list_item(st, &member, None, n.id)?);
                 }
             }
         }
