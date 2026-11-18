@@ -25,7 +25,7 @@ const el = (tag, props = {}, ...kids) => {
 const S = {
   view: "notes", folder: null, query: "", notes: [], folders: [], draft: null, dirty: false,
   grid: false, imgCache: new Map(), sync: null, lastStatus: "", lastPeerSync: 0, code: null,
-  chat: null, chats: [], messages: [], attach: [], ai: null, assist: null, assistSig: "", assistLog: null, videoWatching: false,
+  chat: null, chats: [], messages: [], attach: [], ai: null, assist: null, assistSig: "", assistLog: null, videoWatching: false, modalClose: null,
 };
 
 // ---------- общие помощники ----------
@@ -40,7 +40,8 @@ const fail = (e) => toast(String(e && e.message ? e.message : e), true);
 function modal(build) {
   return new Promise((resolve) => {
     const m = $("#modal");
-    const close = (v) => { m.classList.add("hidden"); m.replaceChildren(); resolve(v); };
+    const close = (v) => { S.modalClose = null; m.classList.add("hidden"); m.replaceChildren(); resolve(v); };
+    S.modalClose = close;
     m.replaceChildren(el("div", { class: "box" }, build(close)));
     m.classList.remove("hidden");
     m.onclick = (ev) => { if (ev.target === m) close(null); };
@@ -49,7 +50,7 @@ function modal(build) {
 function askText(title, initial = "", ok = "Готово") {
   return modal((close) => {
     const input = el("input", { class: "field", value: initial, style: "width:100%" });
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") close(input.value); if (e.key === "Escape") close(null); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) close(input.value); });
     setTimeout(() => { input.focus(); input.select(); }, 0);
     return [el("h3", { text: title }), input, el("div", { class: "btns" },
       el("button", { class: "secondary", text: "Отмена", onclick: () => close(null) }),
@@ -851,7 +852,8 @@ async function renderSettings() {
   root.append(el("h2", { text: "Данные" }));
   root.append(el("div", { class: "row" }, el("button", { class: "secondary", text: "Экспорт заметок в JSON", onclick: exportJson }),
     el("span", { class: "note", text: "Ключ ИИ и настройки в экспорт не попадают." })));
-  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.10.2.3 для компьютера (Android — 0.10.2). Синхронизация чатов и стопок появится позже." }));
+  root.append(el("h2", { text: "Горячие клавиши" }), el("div", { class: "keys" }, HOTKEYS.map(([k, t]) => el("div", { class: "key-row" }, el("kbd", { text: k }), el("span", { text: t })))));
+  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.10.3.5 для компьютера (Android — 0.10.3). Заметки, папки, картинки, чаты и стопки обмениваются с телефоном." }));
 }
 async function showCode() {
   try { S.code = await rpc("sync_pair_code"); paintCode($("#code-box")); } catch (e) { fail(e); }
@@ -919,6 +921,42 @@ async function refreshOpen() {
   }
 }
 
+// ---------- горячие клавиши ----------
+// Сочетания сравниваются по коду клавиши (KeyS), а не по символу: так они работают и на русской раскладке.
+const VIEW_KEYS = { Digit1: "notes", Digit2: "chat", Digit3: "assistant", Digit4: "settings", Numpad1: "notes", Numpad2: "chat", Numpad3: "assistant", Numpad4: "settings" };
+const HOTKEYS = [
+  ["Esc", "закрыть окно; очистить поиск; закрыть открытую заметку (несохранённые правки сохранятся)"],
+  ["Ctrl+S", "сохранить заметку"],
+  ["Ctrl+N", "новая заметка"],
+  ["Ctrl+F или Ctrl+K", "поиск по заметкам"],
+  ["Ctrl+1 … Ctrl+4", "заметки, ИИ-чат, помощник, настройки"],
+  ["Enter в чате", "отправить сообщение (Shift+Enter — новая строка)"],
+];
+/** Esc закрывает самое верхнее: окно, затем поиск, затем открытую заметку. */
+async function onEscape(e) {
+  if (S.modalClose) { e.preventDefault(); S.modalClose(null); return; }
+  const search = $("#search");
+  if (document.activeElement === search) {
+    e.preventDefault();
+    if (search.value) { search.value = ""; S.query = ""; await loadNotes(); renderList(); } else search.blur();
+    return;
+  }
+  if (S.view === "notes" && S.draft) {
+    e.preventDefault();
+    if (await leaveEditor()) closeEditor();
+  }
+}
+function onHotkey(e) {
+  if (e.isComposing || e.altKey) return;
+  if (e.key === "Escape") { onEscape(e).catch(fail); return; }
+  if (!(e.ctrlKey || e.metaKey) || S.modalClose) return;
+  const k = e.code;
+  if (k === "KeyS") { e.preventDefault(); if (S.draft) saveDraft().catch(fail); }
+  else if (k === "KeyN") { e.preventDefault(); S.view = "notes"; showView(); newNote(); }
+  else if (k === "KeyF" || k === "KeyK") { e.preventDefault(); S.view = "notes"; showView(); $("#search").focus(); $("#search").select(); }
+  else if (VIEW_KEYS[k]) { e.preventDefault(); document.querySelector('.nav[data-view="' + VIEW_KEYS[k] + '"]').click(); }
+}
+
 // ---------- запуск ----------
 function showView() {
   for (const v of ["notes", "chat", "assistant", "settings"]) $("#view-" + v).classList.toggle("hidden", S.view !== v);
@@ -946,11 +984,7 @@ async function init() {
   let timer;
   $("#search").addEventListener("input", (e) => { clearTimeout(timer); timer = setTimeout(async () => { S.query = e.target.value; await loadNotes(); renderList(); }, 180); });
   $("#sync-pill").addEventListener("click", () => { S.view = "settings"; showView(); });
-  document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); if (S.draft) saveDraft().catch(fail); }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") { e.preventDefault(); S.view = "notes"; showView(); newNote(); }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); S.view = "notes"; showView(); $("#search").focus(); }
-  });
+  document.addEventListener("keydown", onHotkey);
   showView(); renderEditor(); await reload(); await pollSync();
   setInterval(pollSync, 3000);
 }

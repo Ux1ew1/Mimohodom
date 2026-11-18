@@ -192,7 +192,9 @@ public final class PeerSync {
     @Override
     public List<String> missing() {
       List<String> out = new ArrayList<>();
-      for (String name : store.imageNames()) {
+      java.util.Set<String> names = new java.util.LinkedHashSet<>(store.imageNames());
+      names.addAll(store.chatImageNames());
+      for (String name : names) {
         try {
           if (!ImageFiles.file(context, name).exists()) out.add(name);
         } catch (IOException ignored) {

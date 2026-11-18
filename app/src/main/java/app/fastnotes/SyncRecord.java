@@ -6,7 +6,10 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-/** Запись обмена: заметка, папка или надгробие (docs/SYNC.md). Без зависимости от Android. */
+/**
+ * Запись обмена: заметка, папка, чат, сообщение, стопка или надгробие (docs/SYNC.md). Без
+ * зависимости от Android.
+ */
 public final class SyncRecord {
   public String kind = "note", uid = "";
   public long ts;
@@ -20,6 +23,12 @@ public final class SyncRecord {
   // папка
   public String name = "", key = "";
   public boolean auto;
+  // чат (title и created общие с заметкой) и сообщение (body и created общие)
+  public boolean checkin;
+  public String chat = "", role = "", draft = "";
+  public JSONArray sources = new JSONArray();
+  // стопка: uid исходных заметок (uid записи — верхняя заметка)
+  public List<String> members = new ArrayList<>();
 
   public static SyncRecord tomb(String kind, String uid, long ts) {
     SyncRecord r = new SyncRecord();
@@ -34,6 +43,22 @@ public final class SyncRecord {
     return "folder".equals(kind);
   }
 
+  public boolean isNote() {
+    return "note".equals(kind);
+  }
+
+  public boolean isChat() {
+    return "chat".equals(kind);
+  }
+
+  public boolean isMessage() {
+    return "message".equals(kind);
+  }
+
+  public boolean isStack() {
+    return "stack".equals(kind);
+  }
+
   public JSONObject toJson() {
     try {
       JSONObject o = new JSONObject().put("kind", kind).put("uid", uid).put("ts", ts);
@@ -41,6 +66,15 @@ public final class SyncRecord {
       o.put("deleted", false);
       if (isFolder())
         return o.put("name", name).put("key", key).put("created", created).put("auto", auto);
+      if (isChat()) return o.put("title", title).put("created", created).put("checkin", checkin);
+      if (isMessage())
+        return o.put("chat", chat)
+            .put("role", role)
+            .put("body", body)
+            .put("sources", sources)
+            .put("draft", draft)
+            .put("created", created);
+      if (isStack()) return o.put("members", new JSONArray(members));
       return o.put("title", title)
           .put("body", body)
           .put("created", created)
@@ -84,7 +118,47 @@ public final class SyncRecord {
     r.name = o.optString("name", "");
     r.key = o.optString("key", "");
     r.auto = o.optBoolean("auto", false);
+    r.checkin = o.optBoolean("checkin", false);
+    r.chat = o.optString("chat", "");
+    r.role = o.optString("role", "");
+    r.draft = o.optString("draft", "");
+    JSONArray sources = o.optJSONArray("sources");
+    if (sources != null) r.sources = sources;
+    JSONArray members = o.optJSONArray("members");
+    if (members != null)
+      for (int i = 0; i < members.length(); i++) {
+        String uid = members.optString(i, "");
+        if (!uid.isEmpty()) r.members.add(uid);
+      }
     return r;
+  }
+
+  /**
+   * Заменяет в тексте каждую ссылку {@code [[note:X]]} результатом {@code f(X)}. Номера заметок у
+   * устройств свои, поэтому на проводе вместо них uid (см. «Чаты и стопки» в docs/SYNC.md).
+   */
+  public static String mapLinks(String text, java.util.function.Function<String, String> f) {
+    StringBuilder out = new StringBuilder(text.length());
+    int at = 0;
+    while (true) {
+      int start = text.indexOf("[[note:", at);
+      if (start < 0) break;
+      out.append(text, at, start);
+      int from = start + 7, end = text.indexOf("]]", from);
+      if (end > from && end - from <= 40 && !containsBetween(text, '[', from, end)) {
+        out.append("[[note:").append(f.apply(text.substring(from, end))).append("]]");
+        at = end + 2;
+      } else {
+        out.append("[[note:");
+        at = from;
+      }
+    }
+    return out.append(text, at, text.length()).toString();
+  }
+
+  private static boolean containsBetween(String text, char c, int from, int to) {
+    int i = text.indexOf(c, from);
+    return i >= 0 && i < to;
   }
 
   /** Безопасное имя файла картинки: без путей и странных символов. */

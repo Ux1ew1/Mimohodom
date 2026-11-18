@@ -1,6 +1,7 @@
 //! Записи обмена и их слияние: что отправить соседу и как принять его записи
 //! (правило «побеждает больший ts», копия при конфликте правок). См. docs/SYNC.md.
 
+use super::chats;
 use crate::policy;
 use crate::store::{now_ms, random_hex, Note, Store};
 use anyhow::Result;
@@ -47,6 +48,20 @@ pub struct Record {
     pub key: String,
     #[serde(default)]
     pub auto: bool,
+    // чат (`title` и `created` общие с заметкой) и сообщение (`body`, `created` общие)
+    #[serde(default)]
+    pub checkin: bool,
+    #[serde(default)]
+    pub chat: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub sources: Vec<Value>,
+    #[serde(default)]
+    pub draft: String,
+    // стопка: uid исходных заметок (`uid` записи — верхняя заметка)
+    #[serde(default)]
+    pub members: Vec<String>,
 }
 
 fn minus_one() -> i64 {
@@ -58,6 +73,18 @@ impl Record {
     pub fn to_wire(&self) -> Value {
         if self.deleted {
             return json!({"kind": self.kind, "uid": self.uid, "ts": self.ts, "deleted": true});
+        }
+        if self.kind == "chat" {
+            return json!({"kind":"chat","uid":self.uid,"ts":self.ts,"deleted":false,
+                   "title":self.title,"created":self.created,"checkin":self.checkin});
+        }
+        if self.kind == "message" {
+            return json!({"kind":"message","uid":self.uid,"ts":self.ts,"deleted":false,
+                   "chat":self.chat,"role":self.role,"body":self.body,"sources":self.sources,
+                   "draft":self.draft,"created":self.created});
+        }
+        if self.kind == "stack" {
+            return json!({"kind":"stack","uid":self.uid,"ts":self.ts,"deleted":false,"members":self.members});
         }
         if self.kind == "folder" {
             json!({"kind":"folder","uid":self.uid,"ts":self.ts,"deleted":false,
@@ -129,9 +156,16 @@ pub fn collect(
     exclude: &str,
     limit: usize,
     all_folders: bool,
+    chats: bool,
 ) -> Result<(Vec<Record>, bool, i64)> {
+    if chats {
+        chats::stamp_stacks(store)?;
+    }
     let snapshot = store.current_seq()?;
     let mut items: Vec<(i64, Record)> = Vec::new();
+    if chats {
+        items.extend(chats::collect_items(store, since, snapshot, exclude, limit)?);
+    }
     {
         let mut st = store.conn.prepare(
             "SELECT id,uid,title,body,created,updated,reminder,repeat_mode,lead_minutes,image,folder,title_auto,ai_checked,metadata,sync_ts,sync_seq
@@ -231,14 +265,14 @@ pub fn collect(
     Ok((out, more, next))
 }
 
-fn tombstone_ts(store: &Store, kind: &str, uid: &str) -> Result<Option<i64>> {
+pub(super) fn tombstone_ts(store: &Store, kind: &str, uid: &str) -> Result<Option<i64>> {
     Ok(store
         .conn
         .query_row("SELECT ts FROM tombstones WHERE kind=?1 AND uid=?2", params![kind, uid], |r| r.get(0))
         .optional()?)
 }
 
-fn put_tombstone(store: &Store, kind: &str, uid: &str, ts: i64, peer: &str) -> Result<()> {
+pub(super) fn put_tombstone(store: &Store, kind: &str, uid: &str, ts: i64, peer: &str) -> Result<()> {
     let seq = store.stamp_remote(ts)?;
     store.conn.execute(
         "INSERT OR REPLACE INTO tombstones(kind,uid,ts,seq,from_peer) VALUES(?1,?2,?3,?4,?5)",
@@ -270,6 +304,7 @@ pub fn apply(store: &Store, peer: &str, sent_seq: i64, recs: &[Record]) -> Resul
             }
         }
     }
+    chats::apply(store, peer, recs, &mut stats)?;
     tx.commit()?;
     Ok(stats)
 }
@@ -447,7 +482,7 @@ mod tests {
 
     /// Односторонняя передача: A -> B через `collect`/`apply`.
     fn push(a: &Store, b: &Store, since: i64, a_dev: &str, b_dev: &str, b_sent: i64) -> Stats {
-        let (recs, _more, _next) = collect(a, since, b_dev, 1000, true).unwrap();
+        let (recs, _more, _next) = collect(a, since, b_dev, 1000, true, true).unwrap();
         // через провод: сериализация и разбор
         let wire: Vec<Record> = recs
             .iter()
@@ -487,9 +522,9 @@ mod tests {
         a.save_note(&input("x", "y")).unwrap();
         push(&a, &b, 0, "A", "B", 0);
         // B ничего не меняла: записи, принятые от A, A обратно не отдаются.
-        let (recs, _, _) = collect(&b, 0, "A", 100, false).unwrap();
+        let (recs, _, _) = collect(&b, 0, "A", 100, false, true).unwrap();
         assert!(recs.iter().all(|r| r.kind != "note"));
-        let (recs, _, _) = collect(&b, 0, "C", 100, false).unwrap();
+        let (recs, _, _) = collect(&b, 0, "C", 100, false, true).unwrap();
         assert_eq!(recs.iter().filter(|r| r.kind == "note").count(), 1);
     }
 
@@ -561,7 +596,7 @@ mod tests {
         eb.id = Some(nb.id);
         b.save_note(&eb).unwrap();
         // A получает версию B: побеждает B, версия A остаётся копией
-        let (recs, _, _) = collect(&b, sent_by_b, "A", 100, true).unwrap();
+        let (recs, _, _) = collect(&b, sent_by_b, "A", 100, true, true).unwrap();
         let s = apply(&a, "B", 0, &recs).unwrap();
         assert_eq!(s.conflicts, 1);
         let all = a.notes("", None).unwrap();
@@ -603,13 +638,13 @@ mod tests {
         for i in 0..7 {
             a.save_note(&input(&format!("n{}", i), "t")).unwrap();
         }
-        let (r1, more1, next1) = collect(&a, 0, "B", 3, false).unwrap();
+        let (r1, more1, next1) = collect(&a, 0, "B", 3, false, true).unwrap();
         assert_eq!(r1.len(), 3);
         assert!(more1);
-        let (r2, more2, next2) = collect(&a, next1, "B", 3, false).unwrap();
+        let (r2, more2, next2) = collect(&a, next1, "B", 3, false, true).unwrap();
         assert_eq!(r2.len(), 3);
         assert!(more2);
-        let (r3, more3, next3) = collect(&a, next2, "B", 3, false).unwrap();
+        let (r3, more3, next3) = collect(&a, next2, "B", 3, false, true).unwrap();
         assert_eq!(r3.len(), 1);
         assert!(!more3);
         assert_eq!(next3, a.current_seq().unwrap());

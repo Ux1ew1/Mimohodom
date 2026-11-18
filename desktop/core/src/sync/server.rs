@@ -30,6 +30,8 @@ struct SyncRequest {
     #[serde(default)]
     first: bool,
     #[serde(default)]
+    features: Vec<String>,
+    #[serde(default)]
     records: Vec<Record>,
 }
 
@@ -46,6 +48,7 @@ struct SyncResponse {
     want: Vec<String>,
     name: String,
     device: String,
+    features: Vec<&'static str>,
 }
 
 pub fn is_running(app: &Arc<App>) -> bool {
@@ -244,7 +247,7 @@ fn handle_sync(app: &Arc<App>, device: &str, v: &Value) -> Result<Vec<u8>> {
         if !req.hosts.is_empty() {
             let _ = store.set_peer_hosts(device, &req.hosts);
         }
-        engine::collect(&store, req.since, device, req.limit.clamp(1, 1000), req.first)?
+        engine::collect(&store, req.since, device, req.limit.clamp(1, 1000), req.first, req.features.iter().any(|f| f == "chats"))?
     };
     let mut want = app.missing_images();
     want.truncate(200);
@@ -256,6 +259,7 @@ fn handle_sync(app: &Arc<App>, device: &str, v: &Value) -> Result<Vec<u8>> {
         want,
         name: own_name,
         device: own_device,
+        features: vec!["chats"],
     };
     Ok(serde_json::to_vec(&resp)?)
 }
@@ -276,7 +280,12 @@ fn handle_blob_put(app: &Arc<App>, v: &Value) -> Result<Vec<u8>> {
         return Err(anyhow!("плохой размер"));
     }
     // Принимаем только то, на что ссылается заметка: иначе файл — мусор.
-    let used = app.store.lock().unwrap().image_names()?;
+    let used = {
+        let st = app.store.lock().unwrap();
+        let mut u = st.image_names()?;
+        u.extend(st.chat_image_names()?);
+        u
+    };
     if !used.contains(name) {
         return Ok(serde_json::to_vec(&json!({"ok": false}))?);
     }

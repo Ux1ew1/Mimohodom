@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 9);
+    super(context, name, null, 10);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -77,6 +77,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addReminderOptions(db);
     addFolders(db);
     addSync(db);
+    addChatSync(db);
   }
 
   @Override
@@ -91,6 +92,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 7) addReminderOptions(db);
     if (oldV < 8) addFolders(db);
     if (oldV < 9) addSync(db);
+    if (oldV < 10) addChatSync(db);
   }
 
   /** Папки: таблица и номер папки у заметки (0 — «Все заметки»). Безопасно вызывается повторно. */
@@ -204,6 +206,80 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
             + "INSERT OR REPLACE INTO tombstones(kind,uid,ts,seq,from_peer) VALUES('folder',old.uid,"
             + now
             + ",'');END");
+  }
+
+  /**
+   * Синхронизация чатов, сообщений и стопок (docs/SYNC.md, «Чаты и стопки»). У чатов и сообщений
+   * постоянный uid, время и номер изменения; всё ведут триггеры. Стопки (note_groups,
+   * note_members) триггеров не имеют: изменившиеся находятся сравнением с таблицей stack_sync при
+   * отправке и приёме. Удаление сообщений отдельно не передаётся, они уходят вместе с чатом.
+   * Должна вызываться после addSync, безопасна при повторном вызове.
+   */
+  private void addChatSync(SQLiteDatabase db) {
+    for (String table : new String[] {"chats", "messages"}) {
+      if (!hasColumn(db, table, "uid"))
+        db.execSQL("ALTER TABLE " + table + " ADD COLUMN uid TEXT NOT NULL DEFAULT ''");
+      if (!hasColumn(db, table, "sync_ts"))
+        db.execSQL("ALTER TABLE " + table + " ADD COLUMN sync_ts INTEGER NOT NULL DEFAULT 0");
+      if (!hasColumn(db, table, "sync_seq"))
+        db.execSQL("ALTER TABLE " + table + " ADD COLUMN sync_seq INTEGER NOT NULL DEFAULT 0");
+      if (!hasColumn(db, table, "sync_from"))
+        db.execSQL("ALTER TABLE " + table + " ADD COLUMN sync_from TEXT NOT NULL DEFAULT ''");
+      db.execSQL("CREATE INDEX IF NOT EXISTS " + table + "_sync_seq ON " + table + "(sync_seq)");
+    }
+    db.execSQL(
+        "CREATE TABLE IF NOT EXISTS stack_sync(top TEXT PRIMARY KEY,members TEXT NOT NULL,ts"
+            + " INTEGER NOT NULL,seq INTEGER NOT NULL,from_peer TEXT NOT NULL DEFAULT ''"
+            + ",deleted INTEGER NOT NULL DEFAULT 0)");
+    db.execSQL("CREATE INDEX IF NOT EXISTS stack_sync_seq ON stack_sync(seq)");
+    // Уже существующие чаты и сообщения получают uid и разные номера выше текущего счётчика.
+    db.execSQL(
+        "UPDATE chats SET uid=lower(hex(randomblob(16))),sync_ts=created,sync_seq=(SELECT seq FROM"
+            + " sync_meta WHERE id=1)+id WHERE uid=''");
+    db.execSQL(
+        "UPDATE messages SET uid=lower(hex(randomblob(16))),sync_ts=created,sync_seq=(SELECT seq"
+            + " FROM sync_meta WHERE id=1)+(SELECT ifnull(max(id),0) FROM chats)+id WHERE uid=''");
+    db.execSQL(
+        "UPDATE sync_meta SET seq=max(seq,(SELECT ifnull(max(sync_seq),0) FROM chats),(SELECT"
+            + " ifnull(max(sync_seq),0) FROM messages)),hlc=max(hlc,(SELECT ifnull(max(sync_ts),0)"
+            + " FROM chats),(SELECT ifnull(max(sync_ts),0) FROM messages)) WHERE id=1");
+    String stamp =
+        "UPDATE sync_meta SET seq=seq+1,hlc=max(hlc+1,CAST((julianday('now')-2440587.5)*86400000"
+            + " AS INTEGER)) WHERE id=1;";
+    String now = "(SELECT hlc FROM sync_meta WHERE id=1),(SELECT seq FROM sync_meta WHERE id=1)";
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS chats_sync_ins AFTER INSERT ON chats WHEN new.sync_seq=0"
+            + " BEGIN "
+            + stamp
+            + "UPDATE chats SET uid=CASE WHEN new.uid='' THEN lower(hex(randomblob(16))) ELSE"
+            + " new.uid END,sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq FROM"
+            + " sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS chats_sync_upd AFTER UPDATE OF title ON chats WHEN"
+            + " new.sync_seq=old.sync_seq AND new.title<>old.title BEGIN "
+            + stamp
+            + "UPDATE chats SET sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq"
+            + " FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS chats_sync_del AFTER DELETE ON chats WHEN old.uid<>'' BEGIN "
+            + stamp
+            + "INSERT OR REPLACE INTO tombstones(kind,uid,ts,seq,from_peer) VALUES('chat',old.uid,"
+            + now
+            + ",'');END");
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS messages_sync_ins AFTER INSERT ON messages WHEN"
+            + " new.sync_seq=0 BEGIN "
+            + stamp
+            + "UPDATE messages SET uid=CASE WHEN new.uid='' THEN lower(hex(randomblob(16))) ELSE"
+            + " new.uid END,sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq FROM"
+            + " sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS messages_sync_upd AFTER UPDATE OF body,sources,draft ON"
+            + " messages WHEN new.sync_seq=old.sync_seq AND (new.body<>old.body OR"
+            + " new.sources<>old.sources OR new.draft<>old.draft) BEGIN "
+            + stamp
+            + "UPDATE messages SET sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT"
+            + " seq FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
   }
 
   private static String deviceLabel() {
@@ -706,7 +782,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT role,body,sources,id,draft FROM messages WHERE chat=? ORDER BY id",
+                "SELECT role,body,sources,id,draft FROM messages WHERE chat=? ORDER BY created,id",
                 new String[] {"" + chat})) {
       while (c.moveToNext()) {
         try {
@@ -740,7 +816,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT body FROM messages WHERE chat=? AND role='user' ORDER BY id",
+                "SELECT body FROM messages WHERE chat=? AND role='user' ORDER BY created,id",
                 new String[] {"" + chat})) {
       while (c.moveToNext()) out.append(out.length() == 0 ? "" : "; ").append(c.getString(0));
     }
@@ -752,7 +828,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT body FROM messages WHERE chat=? ORDER BY id LIMIT 1",
+                "SELECT body FROM messages WHERE chat=? ORDER BY created,id LIMIT 1",
                 new String[] {"" + chat})) {
       return c.moveToFirst() ? c.getString(0) : "";
     }

@@ -69,6 +69,16 @@ const sync = method('void addSync(SQLiteDatabase db)');
 const syncStatements = statements(sync, { table: '@TABLE@' });
 check(syncStatements.filter(s => s.sql.includes('CREATE TRIGGER')).length === 5, 'пять триггеров синхронизации');
 
+const chatSync = statements(method('void addChatSync(SQLiteDatabase db)'), { table: '@TABLE@' });
+check(chatSync.filter(x => x.sql.includes('CREATE TRIGGER')).length === 5, 'пять триггеров синхронизации чатов');
+function runChatSync(db) {
+  for (const st of chatSync) {
+    if (st.sql.includes('@TABLE@')) {
+      for (const t of ['chats', 'messages']) { try { db.exec(st.sql.replaceAll('@TABLE@', t)); } catch (e) { if (!String(e.message).includes('duplicate column')) throw e; } }
+    } else db.exec(st.sql);
+  }
+}
+
 function build(withNotes) {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys=ON');
@@ -187,5 +197,65 @@ const meta = db => db.prepare('SELECT * FROM sync_meta WHERE id=1').get();
   check(db.prepare("SELECT sync_seq FROM notes WHERE title='Свежая'").get().sync_seq === meta(db).seq, 'после обновления триггеры работают');
   runSync(db); // повторный вызов безопасен
   check(db.prepare('SELECT count(*) c FROM notes').get().c === 3, 'повторный запуск миграции безопасен');
+}
+
+// ---- Чаты и сообщения: новая установка ----
+{
+  const db = build(false);
+  runSync(db);
+  runChatSync(db);
+  const seq0 = meta(db).seq;
+  db.prepare("INSERT INTO chats(title,created) VALUES('Первый',100)").run();
+  let c = db.prepare('SELECT * FROM chats WHERE id=1').get();
+  check(/^[0-9a-f]{32}$/.test(c.uid) && c.sync_seq === seq0 + 1 && c.sync_ts > 0 && c.sync_from === '', 'новый чат получил uid, ts и seq');
+  db.prepare("INSERT INTO messages(chat,role,body,sources,created,draft) VALUES(1,'user','привет','[]',101,'')").run();
+  let m = db.prepare('SELECT * FROM messages WHERE id=1').get();
+  check(/^[0-9a-f]{32}$/.test(m.uid) && m.sync_seq === seq0 + 2, 'новое сообщение получило uid и seq');
+  db.prepare('UPDATE messages SET draft = ? WHERE id=1').run('{"a":1}');
+  check(db.prepare('SELECT sync_seq FROM messages WHERE id=1').get().sync_seq === seq0 + 3, 'изменение предложения двигает seq');
+  db.prepare('UPDATE messages SET draft = ? WHERE id=1').run('{"a":1}');
+  check(db.prepare('SELECT sync_seq FROM messages WHERE id=1').get().sync_seq === seq0 + 3, 'запись без изменений seq не двигает');
+  db.prepare('UPDATE messages SET body=?,sources=? WHERE id=1').run('привет!', '[{"id":1}]');
+  check(db.prepare('SELECT sync_seq FROM messages WHERE id=1').get().sync_seq === seq0 + 4, 'правка текста и источников двигает seq');
+  db.prepare("UPDATE chats SET title='Переименован' WHERE id=1").run();
+  check(db.prepare('SELECT sync_seq FROM chats WHERE id=1').get().sync_seq === seq0 + 5, 'переименование чата двигает seq');
+  // Принятые от соседа записи не штампуются заново.
+  const before = meta(db).seq;
+  db.prepare("INSERT INTO chats(title,created,uid,sync_ts,sync_seq,sync_from) VALUES('Чужой',5,'remote-chat',700,50,'peer')").run();
+  db.prepare("INSERT INTO messages(chat,role,body,created,uid,sync_ts,sync_seq,sync_from) VALUES(2,'assistant','ответ',6,'remote-msg',701,51,'peer')").run();
+  db.prepare("UPDATE messages SET body='ответ 2',sync_ts=702,sync_seq=52,sync_from='peer' WHERE uid='remote-msg'").run();
+  const rm = db.prepare("SELECT * FROM messages WHERE uid='remote-msg'").get();
+  check(rm.sync_ts === 702 && rm.sync_seq === 52 && rm.sync_from === 'peer' && meta(db).seq === before, 'принятые чат и сообщения не перештампованы');
+  // Удаление чата: надгробие у чата, сообщения уходят каскадом без надгробий.
+  const uid = db.prepare('SELECT uid FROM chats WHERE id=1').get().uid;
+  db.prepare('DELETE FROM chats WHERE id=1').run();
+  const tomb = db.prepare("SELECT * FROM tombstones WHERE kind='chat' AND uid=?").get(uid);
+  check(tomb && tomb.seq === meta(db).seq && tomb.from_peer === '', 'удаление чата оставило надгробие');
+  check(db.prepare("SELECT count(*) c FROM messages WHERE chat=1").get().c === 0, 'сообщения удалены каскадом');
+  check(db.prepare("SELECT count(*) c FROM tombstones WHERE kind<>'chat'").get().c === 0, 'надгробий сообщений нет');
+}
+
+// ---- Чаты и сообщения: обновление с версии 9 ----
+{
+  const db = build(false);
+  runSync(db);
+  db.prepare("INSERT INTO chats(title,created) VALUES('Старый',1000)").run();
+  db.prepare("INSERT INTO chats(title,created) VALUES('Второй',2000)").run();
+  db.prepare("INSERT INTO messages(chat,role,body,sources,created,draft) VALUES(1,'user','a','[]',1100,'')").run();
+  db.prepare("INSERT INTO messages(chat,role,body,sources,created,draft) VALUES(1,'assistant','b','[]',1200,'')").run();
+  db.prepare("INSERT INTO messages(chat,role,body,sources,created,draft) VALUES(2,'user','c','[]',2100,'')").run();
+  const seq0 = meta(db).seq;
+  runChatSync(db);
+  const rows = [...db.prepare('SELECT uid,sync_seq,sync_ts FROM chats').all(), ...db.prepare('SELECT uid,sync_seq,sync_ts FROM messages').all()];
+  check(rows.length === 5 && rows.every(r => /^[0-9a-f]{32}$/.test(r.uid)) && new Set(rows.map(r => r.uid)).size === 5, 'старые чаты и сообщения получили разные uid');
+  check(new Set(rows.map(r => r.sync_seq)).size === 5 && rows.every(r => r.sync_seq > seq0), 'номера старых записей разные и выше счётчика');
+  check(meta(db).seq === Math.max(...rows.map(r => r.sync_seq)) && meta(db).hlc >= 2100, 'счётчики подтянуты');
+  db.prepare("INSERT INTO chats(title,created) VALUES('Новый',3000)").run();
+  check(db.prepare("SELECT sync_seq FROM chats WHERE title='Новый'").get().sync_seq === meta(db).seq, 'после обновления триггеры работают');
+  runChatSync(db); // повторный вызов безопасен
+  check(db.prepare('SELECT count(*) c FROM chats').get().c === 3, 'повторный запуск миграции безопасен');
+  // Таблица стопок на месте.
+  db.prepare("INSERT INTO stack_sync(top,members,ts,seq) VALUES('t','a,b',1,1)").run();
+  check(db.prepare('SELECT count(*) c FROM stack_sync').get().c === 1, 'таблица stack_sync создана');
 }
 console.log(`sync-sql OK (${count} проверок)`);

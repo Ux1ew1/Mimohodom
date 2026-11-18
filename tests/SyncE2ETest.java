@@ -54,6 +54,43 @@ public final class SyncE2ETest {
       entries.put(r.kind + ":" + r.uid, e);
     }
 
+    String localChat(String title) {
+      SyncRecord r = new SyncRecord();
+      r.kind = "chat";
+      r.uid = SyncCrypto.randomHex(16);
+      r.title = title;
+      r.created = System.currentTimeMillis();
+      put(r);
+      return r.uid;
+    }
+
+    String liveNoteUid(String title) {
+      for (SyncRecord n : live(false)) if (n.title.equals(title)) return n.uid;
+      throw new AssertionError("нет заметки " + title);
+    }
+
+    void localMessage(String chat, String role, String body, String sourceUid) throws org.json.JSONException {
+      SyncRecord r = new SyncRecord();
+      r.kind = "message";
+      r.uid = SyncCrypto.randomHex(16);
+      r.chat = chat;
+      r.role = role;
+      r.body = body;
+      r.created = System.currentTimeMillis();
+      if (!sourceUid.isEmpty()) r.sources.put(new org.json.JSONObject().put("uid", sourceUid).put("title", "Купить молоко и хлеб"));
+      put(r);
+    }
+
+    /** Стопка из верхней заметки и одной исходной; прежняя стопка компьютера разбирается. */
+    void localStack(String topTitle, String memberTitle) {
+      for (SyncRecord s : live("stack")) put(SyncRecord.tomb("stack", s.uid, 0));
+      SyncRecord r = new SyncRecord();
+      r.kind = "stack";
+      r.uid = liveNoteUid(topTitle);
+      r.members.add(liveNoteUid(memberTitle));
+      put(r);
+    }
+
     String localNote(String title, String body, String... images) {
       SyncRecord r = new SyncRecord();
       r.uid = SyncCrypto.randomHex(16);
@@ -67,7 +104,7 @@ public final class SyncE2ETest {
 
     void localEdit(String title, String body) {
       for (Entry e : new ArrayList<>(entries.values()))
-        if (!e.rec.deleted && !e.rec.isFolder() && e.rec.title.equals(title)) {
+        if (!e.rec.deleted && e.rec.isNote() && e.rec.title.equals(title)) {
           SyncRecord copy = SyncRecord.fromJson(e.rec.toJson());
           copy.body = body;
           copy.updated = System.currentTimeMillis();
@@ -77,7 +114,7 @@ public final class SyncE2ETest {
 
     void localDelete(String title) {
       for (Entry e : new ArrayList<>(entries.values()))
-        if (!e.rec.deleted && !e.rec.isFolder() && e.rec.title.equals(title))
+        if (!e.rec.deleted && e.rec.isNote() && e.rec.title.equals(title))
           put(SyncRecord.tomb("note", e.rec.uid, 0));
     }
 
@@ -124,7 +161,13 @@ public final class SyncE2ETest {
     List<SyncRecord> live(boolean folders) {
       List<SyncRecord> out = new ArrayList<>();
       for (Entry e : entries.values())
-        if (!e.rec.deleted && e.rec.isFolder() == folders) out.add(e.rec);
+        if (!e.rec.deleted && (folders ? e.rec.isFolder() : e.rec.isNote())) out.add(e.rec);
+      return out;
+    }
+
+    List<SyncRecord> live(String kind) {
+      List<SyncRecord> out = new ArrayList<>();
+      for (Entry e : entries.values()) if (!e.rec.deleted && e.rec.kind.equals(kind)) out.add(e.rec);
       return out;
     }
   }
@@ -150,6 +193,10 @@ public final class SyncE2ETest {
   private static void refresh(Memory phone, MemFiles files) {
     files.referenced.clear();
     for (SyncRecord r : phone.live(false)) files.referenced.addAll(r.images);
+    for (SyncRecord r : phone.live("message")) {
+      java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\[\\[img:([^\\]]*)\\]\\]").matcher(r.body);
+      while (m.find()) files.referenced.addAll(Arrays.asList(m.group(1).split(",")));
+    }
   }
 
   public static void main(String[] args) throws Exception {
@@ -171,15 +218,31 @@ public final class SyncE2ETest {
       // картинки скачиваются после слияния: второй проход, как в приложении (missing() вычисляется заново)
       client = new SyncClient(phone, files, "android").timeouts(2000, 20000);
     }
-    check(r1.received == 2, "получено заметок: " + r1.received);
+    check(r1.received == 3, "получено заметок: " + r1.received);
     check(phone.live(true).size() == 1 && phone.live(true).get(0).name.equals("Работа"), "папка «Работа»");
-    check(phone.live(false).size() == 2, "две заметки на телефоне");
+    check(phone.live(false).size() == 3, "три заметки на телефоне");
+    // Чат, сообщения, ссылки на заметки и стопка пришли с компьютера.
+    SyncRecord fixtureReport = null, fixtureTop = null;
+    for (SyncRecord n : phone.live(false)) {
+      if (n.title.equals("Отчёт")) fixtureReport = n;
+      if (n.title.equals("Итог")) fixtureTop = n;
+    }
+    check(phone.live("chat").size() == 1 && phone.live("chat").get(0).title.equals("Про отчёт"), "чат «Про отчёт»");
+    List<SyncRecord> pcMessages = phone.live("message");
+    check(pcMessages.size() == 2, "два сообщения чата: " + pcMessages.size());
+    SyncRecord answer = null;
+    for (SyncRecord m : pcMessages) if (m.role.equals("assistant")) answer = m;
+    check(answer != null && answer.body.contains("[[note:" + fixtureReport.uid + "]]"), "ссылка на заметку передана как uid");
+    check(answer.sources.length() == 1 && answer.sources.getJSONObject(0).getString("uid").equals(fixtureReport.uid), "источник передан как uid");
+    check(phone.live("stack").size() == 1 && phone.live("stack").get(0).uid.equals(fixtureTop.uid)
+        && phone.live("stack").get(0).members.equals(Arrays.asList(fixtureReport.uid)), "стопка «Итог»");
     SyncRecord report = null;
     for (SyncRecord n : phone.live(false)) if (n.title.equals("Отчёт")) report = n;
     check(report != null && report.reminder == 1_900_000_000_000L && report.repeat == 2 && report.lead == 15, "поля напоминания");
     check(report != null && !report.folder.isEmpty(), "заметка в папке");
     SyncClient.Report r1b = client.sync(code.device);
     check(files.files.containsKey("img-one.jpg") && files.files.get("img-one.jpg").length == 9, "картинка скачана: " + r1b.imagesDown);
+    check(files.files.containsKey("chat-img.jpg") && files.files.get("chat-img.jpg").length == 6, "картинка из чата скачана");
     check((files.files.get("img-one.jpg")[0] & 0xff) == 0xFF && (files.files.get("img-one.jpg")[1] & 0xff) == 0xD8, "байты картинки совпали");
     System.out.println("PHASE1");
     System.out.flush();
@@ -190,6 +253,13 @@ public final class SyncE2ETest {
     phone.localNote("С телефона", "Записал на ходу", "phone-img.jpg");
     phone.localEdit("Покупки", "не нужен");
     phone.localEdit("Купить молоко и хлеб", "Купить молоко, хлеб и сыр");
+    // Чат телефона со ссылкой на заметку, картинкой и стопкой; стопка компьютера разбирается.
+    files.files.put("phone-chat.jpg", new byte[] {(byte) 0xFF, (byte) 0xD8, 5, (byte) 0xFF, (byte) 0xD9});
+    String chatUid = phone.localChat("С телефона");
+    String linked = phone.liveNoteUid("Купить молоко и хлеб");
+    phone.localMessage(chatUid, "user", "где молоко?", "");
+    phone.localMessage(chatUid, "assistant", "Вот [[note:" + linked + "]]\n[[img:phone-chat.jpg]]", linked);
+    phone.localStack("С телефона", "Купить молоко и хлеб");
     phone.localDelete("Отчёт");
     SyncClient.Report r2 = client.sync(code.device);
     refresh(phone, files);

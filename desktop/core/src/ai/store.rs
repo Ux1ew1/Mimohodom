@@ -443,7 +443,7 @@ impl Store {
 
     /// Текст пользователя в чате (пустой — на вопрос так и не ответили).
     pub fn user_text(&self, chat: i64) -> String {
-        let mut st = match self.conn.prepare("SELECT body FROM messages WHERE chat=?1 AND role='user' ORDER BY id") {
+        let mut st = match self.conn.prepare("SELECT body FROM messages WHERE chat=?1 AND role='user' ORDER BY created, id") {
             Ok(s) => s,
             Err(_) => return String::new(),
         };
@@ -452,7 +452,7 @@ impl Store {
     }
 
     pub fn first_message(&self, chat: i64) -> String {
-        self.conn.query_row("SELECT body FROM messages WHERE chat=?1 ORDER BY id LIMIT 1", params![chat], |r| r.get(0)).unwrap_or_default()
+        self.conn.query_row("SELECT body FROM messages WHERE chat=?1 ORDER BY created, id LIMIT 1", params![chat], |r| r.get(0)).unwrap_or_default()
     }
 
     /// Ближайшие заметки с напоминаниями: (время, название).

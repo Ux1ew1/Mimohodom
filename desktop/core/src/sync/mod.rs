@@ -1,5 +1,6 @@
 //! Синхронизация по локальной сети. Протокол — docs/SYNC.md.
 
+pub mod chats;
 pub mod client;
 pub mod crypto;
 pub mod engine;
