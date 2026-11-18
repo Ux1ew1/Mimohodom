@@ -399,7 +399,13 @@ public final class MainActivity extends Activity
         () ->
             runOnUiThread(
                 () -> {
-                  if (isDestroyed() || rendering) return;
+                  if (isDestroyed()) return;
+                  if (pullSync) {
+                    // Обмен запущен жестом «потянуть вниз»: сообщаем итог.
+                    pullSync = false;
+                    toast(PeerSync.status(this));
+                  }
+                  if (rendering) return;
                   if ("settings.sync".equals(page)
                       || (PeerSync.changedLastRun() && "notes".equals(page))) {
                     stash();
@@ -2155,7 +2161,7 @@ public final class MainActivity extends Activity
     LinearLayout listing = column();
     // Список прокручивается под плавающей панелью, поэтому внизу оставлен запас.
     listing.setPadding(0, 0, 0, dp(100));
-    content.addView(scroll(listing), new LinearLayout.LayoutParams(-1, 0, 1));
+    content.addView(pullToSync(scroll(listing)), new LinearLayout.LayoutParams(-1, 0, 1));
     Runnable refresh =
         () -> {
           listing.removeAllViews();
@@ -2246,6 +2252,109 @@ public final class MainActivity extends Activity
   }
 
   private static final long SEARCH_DELAY_MS = 150;
+
+  /** Обмен запущен жестом «потянуть вниз» и ждёт итога (его покажет слушатель PeerSync). */
+  private boolean pullSync;
+
+  /**
+   * Жест «потянуть вниз» на списке заметок: у верхнего края список оттягивается, на отпускании
+   * после достаточной длины жеста запускается обмен с компьютером (как «Обменяться сейчас» в
+   * настройках). Обычная прокрутка и нажатия на карточки не затрагиваются: перехват начинается,
+   * только когда список уже у верха и движение идёт вниз и в основном вертикально.
+   */
+  private final class PullLayout extends FrameLayout {
+    private final View target;
+    private final TextView hint;
+    private final int slop = ViewConfiguration.get(MainActivity.this).getScaledTouchSlop();
+    private final float threshold = dp(64), limit = dp(96);
+    private float startX, startY, pulled;
+    private boolean pulling, armed;
+
+    PullLayout(View target) {
+      super(MainActivity.this);
+      this.target = target;
+      hint = text("", 13, MUTED);
+      hint.setAlpha(0);
+      hint.setGravity(Gravity.CENTER);
+      addView(hint, new LayoutParams(-1, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+      hint.setPadding(0, dp(10), 0, 0);
+      addView(target, new LayoutParams(-1, -1));
+    }
+
+    @Override
+    public boolean onInterceptTouchEvent(MotionEvent e) {
+      switch (e.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN -> {
+          startX = e.getX();
+          startY = e.getY();
+          pulling = false;
+        }
+        case MotionEvent.ACTION_MOVE -> {
+          float dy = e.getY() - startY, dx = e.getX() - startX;
+          if (!pulling && dy > slop && dy > Math.abs(dx) * 1.5f && !target.canScrollVertically(-1)) {
+            pulling = true;
+            armed = false;
+            startY = e.getY();
+            return true;
+          }
+        }
+        default -> {}
+      }
+      return false;
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent e) {
+      if (!pulling) return false;
+      switch (e.getActionMasked()) {
+        case MotionEvent.ACTION_MOVE -> {
+          pulled = Math.min(limit, Math.max(0, (e.getY() - startY) * 0.5f));
+          target.setTranslationY(pulled);
+          hint.setAlpha(Math.min(1f, pulled / threshold));
+          boolean now = pulled >= threshold;
+          if (now != armed) {
+            armed = now;
+            if (now) buzz(0);
+          }
+          hint.setText(armed ? "Отпустите, чтобы обменяться" : "Потяните, чтобы обменяться");
+        }
+        case MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+          boolean go = armed && e.getActionMasked() == MotionEvent.ACTION_UP;
+          pulling = false;
+          armed = false;
+          target.animate().translationY(0).setDuration(160).start();
+          hint.animate().alpha(0).setDuration(160).start();
+          if (go) startPullSync();
+        }
+        default -> {}
+      }
+      return true;
+    }
+  }
+
+  private View pullToSync(View list) {
+    return new PullLayout(list);
+  }
+
+  private void startPullSync() {
+    if (PeerSync.running()) {
+      toast("Обмен уже идёт");
+      return;
+    }
+    List<SyncStore.Peer> peers;
+    try {
+      peers = PeerSync.peers(this);
+    } catch (RuntimeException e) {
+      peers = Collections.emptyList();
+    }
+    if (peers.isEmpty()) {
+      toast("Компьютер не подключён: Настройки → Синхронизация");
+      return;
+    }
+    pullSync = true;
+    toast("Обмен…");
+    PeerSync.runAsync(this, true);
+  }
 
   /** Состав стопок на время построения списка; вне его {@code null} и карточки спрашивают базу. */
   private Map<Long, List<Long>> membersCache;
