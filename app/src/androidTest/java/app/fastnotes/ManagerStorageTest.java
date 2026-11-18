@@ -216,6 +216,26 @@ final class ManagerStorageTest {
       try (Store upgraded = new Store(context, name)) {
         require(upgraded.note(a).body.equals("Новое содержание"), "v5 to v6 preserves content");
         require(new ManagerStore(upgraded).pending().isEmpty(), "v5 to v6 adds manager tables");
+        require(
+            upgraded.note(a).repeat == 0 && upgraded.note(a).lead == -1,
+            "Upgrade keeps default reminder options");
+        long when = System.currentTimeMillis() + 3600000;
+        long recurring = upgraded.save(0, "Повтор", "Раз в неделю", when, 2, 30);
+        require(
+            upgraded.note(recurring).repeat == 2 && upgraded.note(recurring).lead == 30,
+            "Reminder options persist");
+        upgraded.save(recurring, "Повтор", "Раз в неделю, правка", when + 3600000);
+        require(
+            upgraded.note(recurring).repeat == 2 && upgraded.note(recurring).lead == 30,
+            "Four-argument save keeps reminder options");
+        require(
+            upgraded.advanceReminder(recurring, when + 3600000, when + 7 * 86400000L)
+                && !upgraded.advanceReminder(recurring, when, when + 14 * 86400000L),
+            "Advance requires the expected reminder time");
+        upgraded.save(recurring, "Повтор", "Без напоминания", 0);
+        require(
+            upgraded.note(recurring).repeat == 0 && upgraded.note(recurring).lead == -1,
+            "Clearing the reminder clears reminder options");
       }
     } finally {
       context.deleteDatabase(name);

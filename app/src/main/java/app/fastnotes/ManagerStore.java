@@ -381,6 +381,31 @@ public final class ManagerStore {
     }
   }
 
+  /**
+   * Верхняя заметка каждой стопки одним запросом: и для самой верхней, и для исходных. Заметок вне
+   * стопок в карте нет (для них {@link #top} вернул бы 0). Нужна списку, чтобы не спрашивать базу
+   * про каждую заметку отдельно.
+   */
+  public Map<Long, Long> topMap() {
+    Map<Long, Long> out = new HashMap<>();
+    try (Cursor c = db.rawQuery("SELECT note, top FROM note_members", null)) {
+      while (c.moveToNext()) out.put(c.getLong(0), c.getLong(1));
+    }
+    try (Cursor c = db.rawQuery("SELECT top FROM note_groups", null)) {
+      while (c.moveToNext()) out.put(c.getLong(0), c.getLong(0));
+    }
+    return out;
+  }
+
+  /** Состав всех стопок одним запросом: верхняя заметка → исходные по возрастанию номера. */
+  public Map<Long, List<Long>> membersMap() {
+    Map<Long, List<Long>> out = new HashMap<>();
+    try (Cursor c = db.rawQuery("SELECT top, note FROM note_members ORDER BY top, note", null)) {
+      while (c.moveToNext()) out.computeIfAbsent(c.getLong(0), k -> new ArrayList<>()).add(c.getLong(1));
+    }
+    return out;
+  }
+
   public List<Long> members(long top) {
     List<Long> out = new ArrayList<>();
     try (Cursor c =

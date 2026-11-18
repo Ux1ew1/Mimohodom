@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Мост консольных команд агента. Только сборка agent. Доступ у держателей DUMP (adb shell), uid проверяется в коде. -->
+        <provider android:name=".AgentProvider" android:authorities="${applicationId}.agent" android:exported="true" android:permission="android.permission.DUMP" />
+    </application>
+</manifest>

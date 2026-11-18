@@ -1,0 +1,14 @@
+[package]
+name = "mimohodom"
+version = "0.10.2-3"
+edition = "2021"
+description = "Мимоходом для Windows и macOS"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+mimo-core = { path = "../core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde_json = "1"

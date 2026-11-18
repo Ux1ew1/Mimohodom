@@ -113,6 +113,21 @@ public final class SmokeInstrumentation extends Instrumentation {
       require(
           note.created == created && note.body.equals("Новый текст"), "Edit preserves creation");
       Reminders.schedule(getTargetContext(), note);
+      // Отложенное оповещение переживает повторную постановку будильников (открытие приложения,
+      // перезагрузку) и правку текста, а перенос события его снимает.
+      Reminders.snooze(getTargetContext(), id, note.reminder, 0);
+      Reminders.schedule(getTargetContext(), note);
+      require(
+          Reminders.snoozedReminder(getTargetContext(), id) == note.reminder,
+          "Snooze survives reschedule");
+      Reminders.scheduleEdited(getTargetContext(), note, note);
+      require(
+          Reminders.snoozedReminder(getTargetContext(), id) == note.reminder,
+          "Snooze survives text edit");
+      Note moved = db.note(id);
+      moved.reminder = note.reminder + 60_000;
+      Reminders.scheduleEdited(getTargetContext(), note, moved);
+      require(Reminders.snoozedReminder(getTargetContext(), id) == 0, "Moving event clears snooze");
       Reminders.cancel(getTargetContext(), id);
       chat = db.newChat("Smoke test");
       db.message(chat, "user", "Вопрос", new JSONArray());
@@ -173,6 +188,40 @@ public final class SmokeInstrumentation extends Instrumentation {
           require(
               migrated.pendingAnalysis().size() == 1,
               "Migrated notes eligible for reminder suggestions");
+          require(
+              retained.folder == FolderPolicy.ALL,
+              "Migrated notes start in All notes");
+          FolderStore folders = new FolderStore(migrated);
+          long folder = folders.create("Проверка", false);
+          require(folder > 0 && folders.create("  ПРОВЕРКА ", false) == folder, "Folder names are unique");
+          folders.move(1, folder);
+          require(migrated.note(1).folder == folder, "Note moves into a folder");
+          folders.delete(folder);
+          require(
+              migrated.note(1) != null && migrated.note(1).folder == FolderPolicy.ALL,
+              "Deleting a folder keeps its notes");
+          long first =
+              migrated.save(
+                  0, "Видео А", "Сводка А\n\nВидео: https://www.youtube.com/watch?v=aaaaaaaaaaa", 0);
+          long second =
+              migrated.save(
+                  0, "Видео Б", "Сводка Б\n\nВидео: https://www.youtube.com/watch?v=bbbbbbbbbbb", 0);
+          Note a = migrated.note(first), b = migrated.note(second);
+          require(migrated.videoNotes().size() == 2, "Video notes are found by their source line");
+          require(
+              !migrated.mergeVideo(second, b.updated + 1, first, a.updated, "Т", "тело")
+                  && migrated.note(second) != null
+                  && migrated.note(first).body.startsWith("Сводка А"),
+              "Merge with a stale revision changes nothing");
+          require(
+              migrated.mergeVideo(
+                  second, b.updated, first, a.updated, "Общая тема", "Общее по теме\nтекст"),
+              "Video merge succeeds");
+          require(
+              migrated.note(second) == null
+                  && migrated.note(first).title.equals("Общая тема")
+                  && migrated.note(first).body.startsWith("Общее по теме"),
+              "Merged note replaces the source note");
         }
       } finally {
         getTargetContext().deleteDatabase(migrationName);

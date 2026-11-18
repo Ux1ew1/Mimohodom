@@ -197,7 +197,7 @@ public final class BackgroundAnalysis extends JobService {
           }
         }
         status("Проверено заметок: " + applied + ". Предложения доступны в заметках.");
-        if (firstSuggestion != 0) notifySuggestion(firstSuggestion);
+        if (firstSuggestion != 0) notifySuggestion(firstSuggestion, store.pendingSuggestions());
       }
     } catch (Exception e) {
       status(
@@ -211,7 +211,8 @@ public final class BackgroundAnalysis extends JobService {
     ReviewLog.record(this, value);
   }
 
-  private void notifySuggestion(long id) {
+  /** Несколько предложений собираются в одно уведомление, а не затирают друг друга. */
+  private void notifySuggestion(long id, int count) {
     if (Build.VERSION.SDK_INT >= 33
         && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED) return;
@@ -223,15 +224,23 @@ public final class BackgroundAnalysis extends JobService {
         PendingIntent.getActivity(
             this,
             7203,
-            new Intent(this, MainActivity.class).putExtra("note", id),
+            count > 1
+                ? new Intent(this, MainActivity.class)
+                : new Intent(this, MainActivity.class).putExtra("note", id),
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     manager.notify(
         7203,
         new Notification.Builder(this, "suggestions")
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Предложить напоминание?")
+            .setContentTitle(
+                count > 1 ? "Предложений напоминаний: " + count : "Предложить напоминание?")
             .setContentText(
-                "Помощник нашёл дату и время. Откройте заметку, чтобы проверить и подтвердить.")
+                count > 1
+                    ? "Помощник нашёл даты и время в заметках. Откройте заметки с предложением,"
+                        + " чтобы проверить и подтвердить."
+                    : "Помощник нашёл дату и время. Откройте заметку, чтобы проверить и"
+                        + " подтвердить.")
+            .setNumber(count)
             .setContentIntent(open)
             .setAutoCancel(true)
             .build());

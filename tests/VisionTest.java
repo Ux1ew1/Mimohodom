@@ -46,6 +46,30 @@ public final class VisionTest {
             .getString("content")
             .contains("Europe/Moscow"),
         "Timezone supplied");
+    check(
+        payload
+            .getJSONArray("messages")
+            .getJSONObject(0)
+            .getString("content")
+            .contains("дословно"),
+        "Verbatim text reading requested");
+    JSONObject many =
+        Vision.payload(
+            "test/vision",
+            java.util.List.of("QQ==", "Qg==", "Qw=="),
+            "",
+            now,
+            ZoneId.of("Europe/Moscow"));
+    JSONArray manyParts = many.getJSONArray("messages").getJSONObject(1).getJSONArray("content");
+    check(manyParts.length() == 4, "Text plus three images");
+    check(
+        manyParts.getJSONObject(0).getString("text").equals("Создай заметку по изображениям"),
+        "Default question for several images");
+    check(
+        manyParts.getJSONObject(3).getJSONObject("image_url").getString("url").endsWith("Qw=="),
+        "Images keep their order");
+    check(many.getInt("max_tokens") == 2000, "Several images get a larger answer cap");
+    check(Vision.DEFAULT_MODEL.startsWith("google/gemini"), "Default vision model set");
     Vision.Result result = Vision.parse(answer("2026-11-07T18:00:00+03:00").toString(), now);
     check(result.title.equals("Встреча") && result.summary.contains("18:00"), "Note generated");
     check(

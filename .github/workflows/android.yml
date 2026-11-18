@@ -61,10 +61,22 @@ jobs:
           ./scripts/test-polza.ps1
           ./scripts/test-manager.ps1
           ./scripts/test-aicore.ps1
+          ./scripts/test-reminders.ps1
+          ./scripts/test-reminder-batch.ps1
+          ./scripts/test-images.ps1
+          ./scripts/test-image-input.ps1
+          ./scripts/test-image-list.ps1
+          ./scripts/test-chat-images.ps1
+          ./scripts/test-folders.ps1
+          ./scripts/test-video.ps1
+          ./scripts/test-calendar.ps1
+          ./scripts/test-sync.ps1
           node tests/metadata-sql.cjs
           if ($LASTEXITCODE -ne 0) { throw 'Metadata SQL tests failed' }
           node tests/manager-sql.cjs
           if ($LASTEXITCODE -ne 0) { throw 'Manager SQL tests failed' }
+          node tests/folders-sql.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Folders SQL tests failed' }
       - name: Build APK, test APK and lint
         run: |
           ./gradlew.bat --no-daemon --console=plain assembleDebug assembleDebugAndroidTest lintDebug
@@ -93,3 +105,41 @@ jobs:
         run: |
           $keyFile = Join-Path $env:USERPROFILE '.android/debug.keystore'
           if (Test-Path -LiteralPath $keyFile) { Remove-Item -LiteralPath $keyFile -Force }
+
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-14]
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Rust tests (core and sync)
+        run: cargo test -p mimo-core
+      - name: Install Tauri CLI
+        run: npm ci
+      - name: Build installer
+        run: npx tauri build
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: mimohodom-desktop-${{ matrix.os }}-${{ github.run_number }}
+          path: |
+            desktop/target/release/bundle/nsis/*.exe
+            desktop/target/release/bundle/msi/*.msi
+            desktop/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14

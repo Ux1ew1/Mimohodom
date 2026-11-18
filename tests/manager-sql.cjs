@@ -63,6 +63,15 @@ db.exec('INSERT INTO note_groups(top) VALUES(47)');
 db.exec('INSERT INTO note_members(note,top) VALUES(45,47),(46,47)');
 let candidates=db.prepare(pendingSql).all().map(n=>n.id);
 check(candidates.includes(48) && !candidates.some(id=>[45,46,47].includes(id)),'Standalone note eligible, whole stack excluded');
+// ManagerStore.topMap/membersMap (список читает стопки одним проходом) совпадают с top()/members() по заметке.
+const topOne=id=>{const r=db.prepare('SELECT top FROM note_groups WHERE top=? UNION SELECT top FROM note_members WHERE note=?').get(id,id);return r?r.top:0;};
+const topMap=new Map();
+for(const r of db.prepare('SELECT note, top FROM note_members').all()) topMap.set(r.note,r.top);
+for(const r of db.prepare('SELECT top FROM note_groups').all()) topMap.set(r.top,r.top);
+check([45,46,47,48].every(id=>(topMap.get(id)||0)===topOne(id)),'topMap matches per-note top()');
+const membersMap=new Map();
+for(const r of db.prepare('SELECT top, note FROM note_members ORDER BY top, note').all()){if(!membersMap.has(r.top))membersMap.set(r.top,[]);membersMap.get(r.top).push(r.note);}
+check(JSON.stringify(membersMap.get(47))===JSON.stringify(db.prepare('SELECT note FROM note_members WHERE top=? ORDER BY note').all(47).map(r=>r.note)) && !membersMap.has(48),'membersMap matches per-top members()');
 db.exec('UPDATE note_groups SET expanded=1 WHERE top=47');
 db.exec('UPDATE notes SET updated=2 WHERE id IN (45,47)');
 candidates=db.prepare(pendingSql).all().map(n=>n.id);

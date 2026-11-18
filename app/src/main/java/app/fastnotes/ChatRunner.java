@@ -3,6 +3,8 @@ package app.fastnotes;
 import android.content.Context;
 import android.os.*;
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.*;
 import org.json.*;
 
@@ -45,6 +47,26 @@ public final class ChatRunner {
       String query,
       int maxTokens,
       String image) {
+    send(context, chat, key, model, query, maxTokens, image, "");
+  }
+
+  /** Текст запроса, когда пользователь приложил картинки и ничего не написал. */
+  public static final String NOTE_QUERY = "Создай краткую заметку по изображению";
+
+  /**
+   * {@code image} — картинки, приложенные к этому сообщению (имена через запятую). Они остаются в
+   * чате: в каждый следующий запрос уходят последние картинки чата, так что присылать их заново
+   * не нужно. {@code imageModel} — модель для запросов с картинками; пусто — обычная модель.
+   */
+  public static synchronized void send(
+      Context context,
+      long chat,
+      String key,
+      String model,
+      String query,
+      int maxTokens,
+      String image,
+      String imageModel) {
     if (running != 0) return;
     running = chat;
     error = "";
@@ -52,25 +74,48 @@ public final class ChatRunner {
     usage = "";
     Context app = context.getApplicationContext();
     boolean local = LocalLlm.enabled(context);
+    boolean checkin = CheckInJob.isCheckInChat(context, chat);
     worker.execute(
         () -> {
           try (Store store = new Store(app, local)) {
             JSONArray history = store.messages(chat);
+            String stored = ChatImages.attach(query, ImageList.parse(image));
+            String currentContent = stored;
+            boolean fresh = !image.isEmpty();
             if (history.length() > 0) {
               JSONObject last = history.getJSONObject(history.length() - 1);
-              if (last.getString("role").equals("user") && last.getString("content").equals(query))
+              String lastBody = last.getString("content");
+              // Повтор после ошибки: то же сообщение уже записано, второй раз не добавляем.
+              if (last.getString("role").equals("user")
+                  && (lastBody.equals(stored)
+                      || (!fresh && ChatImages.split(lastBody).text.equals(query)))) {
+                currentContent = lastBody;
                 history.remove(history.length() - 1);
-              else store.message(chat, "user", query, new JSONArray());
-            } else store.message(chat, "user", query, new JSONArray());
+              } else store.message(chat, "user", stored, new JSONArray());
+            } else store.message(chat, "user", stored, new JSONArray());
+            var settings = app.getSharedPreferences("settings", 0);
+            // Картинки теперь принадлежат чату (записаны в сообщении), черновик вложения не нужен.
+            if (fresh && image.equals(settings.getString("chatImage." + chat, "")))
+              settings.edit().remove("chatImage." + chat).apply();
             changed();
+            List<String> contents = new ArrayList<>();
+            for (int i = 0; i < history.length(); i++)
+              contents.add(history.getJSONObject(i).getString("content"));
+            contents.add(currentContent);
+            List<String> chatImages = ChatImages.all(contents);
+            List<String> current = ChatImages.split(currentContent).images;
+            boolean noteFlow =
+                !current.isEmpty() && (query.equals(NOTE_QUERY) || Polza.wantsNote(query));
+            String visionModel = imageModel.trim().isEmpty() ? model : imageModel.trim();
             Polza.Answer answer;
             long created = 0;
-            if (!image.isEmpty()) {
-              Vision.Result result = ImageFiles.analyze(app, key, model, image, query);
+            if (noteFlow) {
+              Vision.Result result =
+                  ImageFiles.analyze(app, key, visionModel, ImageList.join(current), query);
               store.getWritableDatabase().beginTransaction();
               try {
                 if (!store.chatExists(chat)) throw new java.io.IOException("Чат удалён");
-                long id = store.saveVision(result, image);
+                long id = store.saveVision(result, ImageList.join(current));
                 created = id;
                 answer = new Polza.Answer();
                 answer.text =
@@ -86,12 +131,74 @@ public final class ChatRunner {
               } finally {
                 store.getWritableDatabase().endTransaction();
               }
-              var prefs = app.getSharedPreferences("settings", 0);
-              if (image.equals(prefs.getString("chatImage." + chat, "")))
-                prefs.edit().remove("chatImage." + chat).apply();
-              answer.usage = "Изображение проанализировано. Заметка сохранена.";
-            } else answer = Polza.ask(store, key, model, query, history, maxTokens);
-            if (image.isEmpty() && store.chatExists(chat)) {
+              answer.usage = "Изображения проанализированы. Заметка сохранена.";
+            } else {
+              // Диалог, начатый помощником: он продолжает расспрашивать по ситуации.
+              String guidance = checkin ? CheckIn.followUp(local) : "";
+              // Чат помнит картинки: последние из них идут в запрос, даже если их прислали давно.
+              List<String> picked =
+                  local
+                      ? new ArrayList<>()
+                      : ChatImages.select(
+                          chatImages,
+                          ImageFiles.sizes(app, chatImages),
+                          ChatImages.MAX_IN_REQUEST,
+                          ChatImages.MAX_REQUEST_BYTES);
+              JSONArray parts = new JSONArray();
+              for (String name : picked) {
+                parts.put(
+                    new JSONObject()
+                        .put("type", "text")
+                        .put(
+                            "text",
+                            "Изображение №"
+                                + (chatImages.indexOf(name) + 1)
+                                + (current.contains(name)
+                                    ? " (приложено к последнему сообщению):"
+                                    : ":")));
+                parts.put(Vision.imagePart(ImageFiles.base64(app, name)));
+              }
+              if (!picked.isEmpty())
+                guidance =
+                    (guidance.isEmpty() ? "" : guidance + "\n")
+                        + ChatImages.guidance(picked.size(), chatImages.size());
+              java.util.Set<String> visible = new java.util.HashSet<>(picked);
+              JSONArray clean = new JSONArray();
+              for (int i = 0; i < history.length(); i++) {
+                JSONObject h = history.getJSONObject(i);
+                clean.put(
+                    new JSONObject()
+                        .put("role", h.getString("role"))
+                        .put(
+                            "content",
+                            ChatImages.forModel(h.getString("content"), chatImages, visible)));
+              }
+              answer =
+                  Polza.ask(
+                      store,
+                      key,
+                      picked.isEmpty() ? model : visionModel,
+                      query,
+                      clean,
+                      picked.isEmpty()
+                          // Пачка напоминаний длиннее обычного ответа: блок не должен оборваться.
+                          ? (ReminderBatch.wants(query) ? Math.max(maxTokens, 3000) : maxTokens)
+                          : ChatImages.answerTokens(maxTokens),
+                      guidance,
+                      parts,
+                      picked.isEmpty() ? "" : ChatImages.questionHint());
+              if (!picked.isEmpty())
+                answer.usage =
+                    (answer.usage == null || answer.usage.isEmpty() ? "" : answer.usage + " · ")
+                        + "ИИ видит картинок чата: "
+                        + picked.size()
+                        + " из "
+                        + chatImages.size();
+            }
+            if (!noteFlow && store.chatExists(chat)) {
+              long memoNote = 0;
+              boolean memoUpdated = false;
+              String memoBody = "", memoTitle = "", memoRef = "";
               store.getWritableDatabase().beginTransaction();
               try {
                 for (int i = 0; i < answer.metadataUpdates.length(); i++) {
@@ -112,8 +219,65 @@ public final class ChatRunner {
                       new JSONObject().put("id", id).put("title", answer.draft.getString("title")));
                   answer.text += "\n\nЗаметка создана [[note:" + id + "]].";
                   answer.draft = null;
+                } else if (checkin && answer.draft != null) {
+                  // Диалог помощника: заметку записываем сами. Свою прежнюю запись из этого чата
+                  // обновляем, пока пользователь её не правил; если правил, оставляем предложение.
+                  var prefs = app.getSharedPreferences("settings", 0);
+                  String ref = prefs.getString("checkInNote." + chat, "");
+                  Note previous = null;
+                  boolean edited = false;
+                  int colon = ref.indexOf(':');
+                  if (colon > 0) {
+                    Note n = store.note(Long.parseLong(ref.substring(0, colon)));
+                    if (n != null && n.updated == Long.parseLong(ref.substring(colon + 1)))
+                      previous = n;
+                    else edited = n != null;
+                  }
+                  if (!edited) {
+                    memoTitle = answer.draft.getString("title");
+                    memoBody = answer.draft.getString("body");
+                    long id =
+                        store.save(
+                            previous == null ? 0 : previous.id,
+                            memoTitle,
+                            memoBody,
+                            previous == null ? 0 : previous.reminder);
+                    long revision = store.note(id).updated;
+                    store.applyMetadata(id, revision, answer.draft.optJSONObject("metadata"));
+                    memoNote = id;
+                    memoUpdated = previous != null;
+                    memoRef = id + ":" + revision;
+                    answer.sources.put(new JSONObject().put("id", id).put("title", memoTitle));
+                    answer.draft = null;
+                  }
                 }
-                store.message(chat, "assistant", answer.text, answer.sources, answer.draft);
+                store.message(
+                    chat,
+                    "assistant",
+                    checkin ? ChatMemo.attach(answer.text, answer.facts) : answer.text,
+                    answer.sources,
+                    // Предложение создать напоминания по датам хранится там же, где черновик.
+                    answer.reminders != null ? answer.reminders : answer.draft);
+                if (memoNote > 0) {
+                  List<String> bodies = new ArrayList<>();
+                  for (int i = 0; i < history.length(); i++)
+                    bodies.add(history.getJSONObject(i).getString("content"));
+                  bodies.add(ChatMemo.attach(answer.text, answer.facts));
+                  List<String> facts = ChatMemo.all(bodies);
+                  if (facts.isEmpty()) facts = ChatMemo.fromNote(memoBody);
+                  store.message(
+                      chat,
+                      "assistant",
+                      ChatMemo.recap(facts, memoNote, memoUpdated),
+                      new JSONArray()
+                          .put(new JSONObject().put("id", memoNote).put("title", memoTitle)),
+                      null);
+                  app.getSharedPreferences("settings", 0)
+                      .edit()
+                      .putString("checkInNote." + chat, memoRef)
+                      .apply();
+                  if (!memoUpdated) created = memoNote;
+                }
                 store.getWritableDatabase().setTransactionSuccessful();
               } finally {
                 store.getWritableDatabase().endTransaction();
