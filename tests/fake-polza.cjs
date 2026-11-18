@@ -15,6 +15,13 @@ function answer(payload) {
   const parts = Array.isArray(last.content) ? last.content : [{ type: "text", text: String(last.content || "") }];
   const text = parts.filter((p) => p.type === "text").map((p) => p.text).join("\n").toLowerCase();
   const images = parts.filter((p) => p.type === "image_url").length;
+  // Видео YouTube: сводка по ссылке и общая сводка нескольких видео.
+  const clip = parts.find((p) => p.type === "video_url");
+  if (clip) {
+    const id = String(clip.video_url.url).split("v=").pop();
+    return "ЗАГОЛОВОК: Видео " + id + " про Moonlight\nКРАТКО: Ролик про стриминг игр на телефон.\nГЛАВНОЕ:\n- Moonlight быстрее Steam Link\n- Нужен Sunshine на ПК\nТЕМЫ: Moonlight, стриминг игр";
+  }
+  if (system.includes("Ниже сводки нескольких видео")) return "ЗАГОЛОВОК: Стриминг игр на телефон\nОБЩЕЕ: Все видео про Moonlight и Sunshine.\n- Moonlight быстрее Steam Link";
   // Фоновый помощник: проверка заметок, выжимка, вопрос о планах, диалог, начатый помощником.
   if (system.includes("Ты менеджер заметок")) {
     let data = [];

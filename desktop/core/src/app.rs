@@ -3,6 +3,7 @@
 use crate::ai::assistant::AssistState;
 use crate::ai::chat::ChatState;
 use crate::ai::keys::{KeyStore, MemoryKeys, SystemKeys};
+use crate::ai::video_run::VideoState;
 use crate::store::Store;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -36,6 +37,8 @@ pub struct App {
     pub chat: Mutex<ChatState>,
     /// Состояние фонового помощника: проверка, выжимка, вопрос.
     pub assist: Mutex<AssistState>,
+    /// Состояние сводок видео YouTube: идёт ли запрос и результат, который ещё не забрал интерфейс.
+    pub video: Mutex<VideoState>,
     /// Адрес API Polza.AI; в тестах — локальная заглушка.
     pub ai_base: Mutex<String>,
 }
@@ -53,6 +56,7 @@ impl App {
             keys,
             chat: Mutex::new(ChatState::default()),
             assist: Mutex::new(AssistState::default()),
+            video: Mutex::new(VideoState::default()),
             ai_base: Mutex::new(crate::ai::polza::DEFAULT_BASE.to_string()),
         })
     }

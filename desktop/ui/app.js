@@ -25,7 +25,7 @@ const el = (tag, props = {}, ...kids) => {
 const S = {
   view: "notes", folder: null, query: "", notes: [], folders: [], draft: null, dirty: false,
   grid: false, imgCache: new Map(), sync: null, lastStatus: "", lastPeerSync: 0, code: null,
-  chat: null, chats: [], messages: [], attach: [], ai: null, assist: null, assistSig: "", assistLog: null,
+  chat: null, chats: [], messages: [], attach: [], ai: null, assist: null, assistSig: "", assistLog: null, videoWatching: false,
 };
 
 // ---------- общие помощники ----------
@@ -176,6 +176,16 @@ async function leaveEditor() {
 function closeEditor() { S.draft = null; S.dirty = false; renderEditor(); renderList(); }
 async function saveDraft(silent = false) {
   const d = S.draft; if (!d) return;
+  // В новую заметку вставили только ссылки на видео: предложим сводку вместо заметки-ссылки (не при автосохранении).
+  if (!silent && !d.id && !d.images.length && !d.title.trim()) {
+    let info = null;
+    try { info = await rpc("video_info", { text: d.body }); } catch (_) { /* сохраняем как обычную заметку */ }
+    if (info && info.only_links) {
+      const choice = await offerVideo(info.links, true);
+      if (choice === null) return;
+      if (choice === "start") { if (await startVideo(info.links)) closeEditor(); return; }
+    }
+  }
   const saved = await rpc("save_note", {
     id: d.id, title: d.title, body: d.body, reminder: d.reminder, repeat: d.repeat, lead: d.lead, images: d.images, folder: d.folder,
   });
@@ -237,8 +247,15 @@ function renderEditor() {
   host.classList.remove("hidden"); split.classList.remove("no-editor");
   const d = S.draft;
   const title = el("input", { class: "title", id: "e-title", placeholder: "Название (необязательно)", value: d.title, oninput: (e) => { d.title = e.target.value; markDirty(); } });
-  const body = el("textarea", { id: "e-body", placeholder: "Что записать?", oninput: (e) => { d.body = e.target.value; markDirty(); } });
+  const body = el("textarea", { id: "e-body", placeholder: "Что записать?", oninput: (e) => { d.body = e.target.value; markDirty(); clearTimeout(refreshVideo.timer); refreshVideo.timer = setTimeout(refreshVideo, 400); } });
   body.value = d.body;
+  let videoLinks = [];
+  const videoBtn = el("button", { class: "secondary hidden", text: "Сводка видео", title: "Сделать отдельную заметку-сводку по ссылке на YouTube из текста", onclick: async () => {
+    if (await offerVideo(videoLinks, false) === "start") await startVideo(videoLinks);
+  } });
+  async function refreshVideo() {
+    try { videoLinks = (await rpc("video_info", { text: d.body })).links; videoBtn.classList.toggle("hidden", !videoLinks.length); } catch (_) { /* кнопка просто не появится */ }
+  }
   const rem = el("input", { type: "datetime-local", value: toLocalInput(d.reminder), onchange: (e) => {
     d.reminder = e.target.value ? new Date(e.target.value).getTime() : 0; markDirty(); syncOpts();
   } });
@@ -268,14 +285,105 @@ function renderEditor() {
     el("button", { class: "compact", text: "Скрыть", onclick: async () => { try { await rpc("suggestion_dismiss", { id: d.id }); d.suggestion = 0; banner.classList.add("hidden"); await reload(); } catch (e) { fail(e); } } }));
   host.replaceChildren(title, el("hr"), banner, body, el("div", { class: "strip", id: "e-strip" }),
     el("div", { class: "opts" },
-      el("button", { class: "secondary", text: "+ Картинка", onclick: () => pick.click() }), pick,
+      el("button", { class: "secondary", text: "+ Картинка", onclick: () => pick.click() }), pick, videoBtn,
       el("label", {}, "Напомнить", rem, clearRem), el("label", {}, rep), el("label", {}, lead),
       el("label", {}, "Папка", fold)),
     foot);
-  syncOpts(); renderStrip(); updateFoot();
+  syncOpts(); renderStrip(); updateFoot(); refreshVideo();
   host.onpaste = (e) => { const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/")); if (files.length) { e.preventDefault(); addImages(files); } };
   host.ondragover = (e) => e.preventDefault();
   host.ondrop = (e) => { e.preventDefault(); addImages([...e.dataTransfer.files]); };
+}
+
+// ---------- видео YouTube ----------
+// Сводки по ссылкам: платный запрос к модели, которая сама смотрит ролик. Как на телефоне: окно с ценой,
+// отдельная заметка на ролик, затем предложение добавить её в общую заметку по той же теме.
+const VIDEO_QUEUE = [];
+function infoBox(title, text) {
+  return modal((close) => [el("h3", { text: title }), el("div", { class: "note", style: "white-space:pre-line", text }),
+    el("div", { class: "btns" }, el("button", { class: "primary", text: "Понятно", onclick: () => close(true) }))]);
+}
+/** Окно с ценой. Возвращает "start", "keep" (сохранить ссылку как есть) или null (отмена). */
+async function offerVideo(links, canKeep) {
+  await loadAi();
+  const ai = S.ai, model = ai.videoModel || ai.defaultVideoModel, many = links.length > 1;
+  return modal((close) => {
+    const keep = canKeep ? el("button", { class: "secondary", text: "Сохранить как есть", onclick: () => close("keep") }) : null;
+    const cancel = el("button", { class: "secondary", text: "Отмена", onclick: () => close(null) });
+    if (!ai.hasKey) {
+      return [el("h3", { text: "Подключите Polza.AI" }),
+        el("div", { class: "note", text: "Сводку видео делает модель Polza.AI. Укажите ключ API в настройках ИИ" + (canKeep ? " или сохраните ссылку как обычную заметку." : ".") }),
+        el("div", { class: "btns" }, cancel, keep)];
+    }
+    const text = (many ? "Ссылок на видео: " + links.length + ", каждая — отдельный запрос. Модель " : "Ссылка на видео будет отправлена в Polza.AI, и модель ") + model +
+      " посмотрит ролик. Запрос оплачивается с вашего баланса Polza.AI, цена растёт с длиной видео. Ориентир: ролик на 10 минут обошёлся примерно в 2 ₽ на " + ai.defaultVideoModel +
+      ". Результат появится отдельной заметкой; повтор после ошибки — только вручную.";
+    return [el("h3", { text: many ? "Сделать сводки видео?" : "Сделать сводку видео?" }), el("div", { class: "note", text }),
+      el("div", { class: "btns" }, cancel, keep, el("button", { class: "primary", text: "Сделать сводку", onclick: () => close("start") }))];
+  });
+}
+async function startVideo(links) {
+  try { await rpc("video_start", { links }); toast("Видео отправлено на анализ. Это может занять до минуты."); watchVideo(); return true; }
+  catch (e) { fail(e); return false; }
+}
+/** Следит за запуском, пока он идёт, и забирает результат один раз. */
+async function watchVideo() {
+  if (S.videoWatching) return;
+  S.videoWatching = true;
+  const pill = $("#video-pill");
+  let outcome = null;
+  try {
+    for (;;) {
+      const p = await rpc("video_poll");
+      if (!p.running) { outcome = p.outcome; break; }
+      pill.classList.remove("hidden");
+      pill.textContent = p.kind === "merge" ? "Объединяю видео в одну заметку…" : "Сводка видео: " + p.done + " из " + p.total + "…";
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  } catch (e) { fail(e); }
+  pill.classList.add("hidden");
+  S.videoWatching = false;
+  if (outcome) await videoFinished(outcome).catch(fail);
+}
+async function videoFinished(o) {
+  await reload();
+  if (S.draft && S.draft.id && !S.dirty) await refreshOpen();
+  const idle = S.view === "notes" && !S.draft;
+  if (o.kind === "merge") {
+    if (o.merge_error) await infoBox("Объединить не удалось", o.merge_error); else toast("Видео добавлено в общую заметку");
+    const asked = await askNextMerge();
+    if (o.merged && !asked && idle) await openNote(o.merged);
+    return;
+  }
+  const made = o.created.length;
+  if (o.error) await infoBox("Сводка видео не готова", (made ? "Готово заметок: " + made + ".\n\n" : "") + o.error);
+  else {
+    VIDEO_QUEUE.push(...o.created);
+    toast(made > 1 ? "Готово сводок: " + made : made === 1 ? "Сводка видео готова" : "Это видео уже есть в заметках");
+  }
+  const asked = !o.error && (await askNextMerge());
+  const open = made === 1 ? o.created[0] : !made && o.existing.length === 1 ? o.existing[0] : 0;
+  if (open && !asked && !o.error && idle) await openNote(open);
+}
+/** Предлагает добавить свежую сводку в заметку по той же теме; true — объединение запущено. */
+async function askNextMerge() {
+  while (VIDEO_QUEUE.length) {
+    const id = VIDEO_QUEUE.shift();
+    let target = null;
+    try { target = await rpc("video_merge_candidate", { id }); } catch (_) { continue; }
+    if (!target) continue;
+    const yes = await modal((close) => [el("h3", { text: "Добавить в общую заметку?" }),
+      el("div", { class: "note", text: "Видео «" + target.fresh_title + "» похоже на тему заметки «" + target.title + "». Добавить его отдельным разделом туда и обновить общую сводку? Нужен ещё один небольшой платный запрос (только текст, без видео). Отдельная заметка о видео после этого удаляется." }),
+      el("div", { class: "btns" }, el("button", { class: "secondary", text: "Оставить отдельно", onclick: () => close(false) }), el("button", { class: "primary", text: "Объединить", onclick: () => close(true) }))]);
+    if (!yes) continue;
+    if (S.draft && (S.draft.id === id || S.draft.id === target.id)) {
+      if (S.dirty) { toast("Заметка открыта с несохранёнными правками, сводка осталась отдельной.", true); continue; }
+      closeEditor();
+    }
+    try { await rpc("video_merge", { src: id, dst: target.id }); toast("Объединяю видео в одну заметку…"); watchVideo(); return true; }
+    catch (e) { fail(e); }
+  }
+  return false;
 }
 
 // ---------- ИИ-чат ----------
@@ -668,16 +776,20 @@ function renderAiSettings(root) {
   const list = el("datalist", { id: "ai-models" });
   const model = el("input", { class: "field grow", list: "ai-models", value: ai.model, placeholder: "Например, openai/gpt-4o-mini" });
   const image = el("input", { class: "field grow", list: "ai-models", value: ai.imageModel, placeholder: ai.defaultImageModel });
+  const video = el("input", { class: "field grow", list: "ai-models", value: ai.videoModel, placeholder: ai.defaultVideoModel });
   const save = async (k, v) => { try { await rpc("setting_set", { key: k, value: v.trim() }); await loadAi(); toast("Сохранено"); } catch (e) { fail(e); } };
   model.addEventListener("change", () => save("ai.model", model.value));
   image.addEventListener("change", () => save("ai.imageModel", image.value));
+  video.addEventListener("change", () => save("ai.videoModel", video.value));
   root.append(list,
     el("div", { class: "row" }, el("span", { text: "Модель чата" }), model,
       ai.hasKey ? el("button", { class: "secondary", text: "Загрузить список", onclick: async () => {
         try { const ids = await rpc("ai_models"); list.replaceChildren(...ids.map((id) => el("option", { value: id }))); toast("Моделей: " + ids.length + ". Начните вводить название."); } catch (e) { fail(e); }
       } }) : null),
     el("div", { class: "row" }, el("span", { text: "Модель для картинок" }), image),
-    el("div", { class: "note", text: "Если поле пустое — " + ai.defaultImageModel + ". Запросы с картинками идут этой моделью весь остаток чата, они дороже обычных." }));
+    el("div", { class: "note", text: "Если поле пустое — " + ai.defaultImageModel + ". Запросы с картинками идут этой моделью весь остаток чата, они дороже обычных." }),
+    el("div", { class: "row" }, el("span", { text: "Модель для видео YouTube" }), video),
+    el("div", { class: "note", text: "Если поле пустое — " + ai.defaultVideoModel + ". Модель сама смотрит ролик по ссылке, поэтому нужна модель Gemini; ролик на 10 минут обходится примерно в 2 ₽. Самые новые модели могут резервировать крупную сумму и отвечать «недостаточно средств»: тогда оставьте поле пустым." }));
   const tokens = el("select", { class: "field", onchange: (e) => save("ai.maxTokens", e.target.value) },
     [["300", "Короткие (300 токенов)"], ["600", "Обычные (600)"], ["1000", "Подробные (1000)"], ["2000", "Длинные (2000)"], ["4000", "Очень длинные (4000)"]].map(([v, t]) => el("option", { value: v, text: t })));
   tokens.value = String(ai.maxTokens);
@@ -739,7 +851,7 @@ async function renderSettings() {
   root.append(el("h2", { text: "Данные" }));
   root.append(el("div", { class: "row" }, el("button", { class: "secondary", text: "Экспорт заметок в JSON", onclick: exportJson }),
     el("span", { class: "note", text: "Ключ ИИ и настройки в экспорт не попадают." })));
-  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.12.0 для компьютера. Видео YouTube и синхронизация чатов и стопок появятся позже." }));
+  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.10.2.3 для компьютера (Android — 0.10.2). Синхронизация чатов и стопок появится позже." }));
 }
 async function showCode() {
   try { S.code = await rpc("sync_pair_code"); paintCode($("#code-box")); } catch (e) { fail(e); }
@@ -823,6 +935,7 @@ async function init() {
     S.view = b.dataset.view; showView();
   });
   $("#new-note").addEventListener("click", newNote);
+  watchVideo();
   $("#new-chat").addEventListener("click", () => newChat());
   $("#new-folder").addEventListener("click", async () => {
     const name = await askText("Новая папка", "", "Создать");

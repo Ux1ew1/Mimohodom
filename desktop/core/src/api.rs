@@ -1,6 +1,6 @@
 //! Единая точка команд для интерфейса (Tauri) и отладочного HTTP-сервера: `dispatch(cmd, args)`.
 
-use crate::ai::{assistant, chat, checkin, folders, polza, review};
+use crate::ai::{assistant, chat, checkin, folders, polza, review, video, video_run};
 use crate::app::App;
 use crate::policy;
 use crate::store::{now_ms, random_hex, Note, SaveInput, Store};
@@ -292,6 +292,8 @@ pub fn dispatch(app: &Arc<App>, cmd: &str, args: Value) -> Result<Value> {
                 "model": cfg.model,
                 "imageModel": cfg.image_model,
                 "defaultImageModel": chat::DEFAULT_IMAGE_MODEL,
+                "videoModel": app.store.lock().unwrap().setting("ai.videoModel").unwrap_or_default().trim().to_string(),
+                "defaultVideoModel": video::DEFAULT_MODEL,
                 "maxTokens": cfg.max_tokens,
                 "state": state,
             }))
@@ -314,6 +316,22 @@ pub fn dispatch(app: &Arc<App>, cmd: &str, args: Value) -> Result<Value> {
                 return Err(anyhow!("Сначала сохраните ключ Polza.AI"));
             }
             Ok(json!(polza::models(&app.ai_base(), &key)?))
+        }
+        // ---------- видео YouTube ----------
+        "video_info" => {
+            let text = s(&args, "text");
+            Ok(json!({"links": video::all(&text), "only_links": video::only_links(&text)}))
+        }
+        "video_start" => {
+            let links: Vec<String> = args.get("links").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            video_run::start(app, links)?;
+            Ok(json!(true))
+        }
+        "video_poll" => Ok(video_run::poll(app)),
+        "video_merge_candidate" => video_run::candidate(app, i(&args, "id")),
+        "video_merge" => {
+            video_run::merge(app, i(&args, "src"), i(&args, "dst"))?;
+            Ok(json!(true))
         }
         // ---------- ИИ-чат ----------
         "chats" => Ok(serde_json::to_value(app.store.lock().unwrap().chats()?)?),

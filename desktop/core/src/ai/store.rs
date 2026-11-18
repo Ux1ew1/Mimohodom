@@ -477,6 +477,83 @@ impl Store {
     }
 }
 
+impl Store {
+    // ---------- видео YouTube ----------
+
+    /// Заметка уже проверена: фоновый помощник не тратит на неё платный разбор (порт `ai_checked`).
+    pub fn mark_reviewed(&self, id: i64) -> Result<()> {
+        self.conn.execute("UPDATE notes SET ai_checked=updated WHERE id=?1", params![id])?;
+        if let Some(n) = self.note(id)? {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO manager_review(note,revision,attempted,failed) VALUES(?1,?2,?3,0)",
+                params![id, review::fingerprint(&n), now_ms()],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Сохраняет сводку видео как заметку с темами для поиска; без платного фонового разбора.
+    pub fn save_video(&self, title: &str, body: &str, metadata: &Value) -> Result<Note> {
+        let n = self.save_note(&SaveInput { title: title.to_string(), body: body.to_string(), lead: -1, ..Default::default() })?;
+        self.apply_metadata(n.id, n.updated, metadata)?;
+        self.mark_reviewed(n.id)?;
+        self.note(n.id)?.ok_or_else(|| anyhow!("Заметка не найдена после сохранения"))
+    }
+
+    /// Номер самой ранней заметки, в тексте которой есть эта строка, или 0.
+    pub fn note_id_containing(&self, text: &str) -> i64 {
+        self.conn
+            .query_row("SELECT id FROM notes WHERE instr(body,?1)>0 ORDER BY id LIMIT 1", params![text], |r| r.get(0))
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
+
+    /// Заметки со ссылкой на видео, кроме входящих в стопки: кандидаты для общей заметки.
+    pub fn video_notes(&self) -> Result<Vec<Note>> {
+        let mut st = self.conn.prepare(
+            "SELECT id FROM notes WHERE instr(body,?1)>0
+             AND id NOT IN (SELECT top FROM note_groups) AND id NOT IN (SELECT note FROM note_members)
+             ORDER BY updated DESC LIMIT 100",
+        )?;
+        let ids: Vec<i64> = st.query_map(params![super::video::SOURCE], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let mut out = Vec::new();
+        for id in ids {
+            if let Some(n) = self.note(id)? {
+                out.push(n);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Переносит сводку видео `src` в заметку `dst` с готовым текстом и удаляет `src`. Если любая из
+    /// заметок изменилась после чтения (`*_rev` — их время правки), ничего не меняется.
+    pub fn merge_video(&self, src: i64, src_rev: i64, dst: i64, dst_rev: i64, title: &str, body: &str) -> Result<bool> {
+        if src == dst {
+            return Ok(false);
+        }
+        let (Some(from), Some(into)) = (self.note(src)?, self.note(dst)?) else { return Ok(false) };
+        if from.updated != src_rev || into.updated != dst_rev {
+            return Ok(false);
+        }
+        let saved = self.save_note(&SaveInput {
+            id: Some(dst),
+            title: title.to_string(),
+            body: body.to_string(),
+            reminder: into.reminder,
+            repeat: into.repeat,
+            lead: into.lead,
+            ..Default::default()
+        })?;
+        let ai = policy::metadata_read(&from.metadata).get("ai").cloned().unwrap_or(Value::Null);
+        self.apply_metadata(saved.id, saved.updated, &ai)?;
+        self.mark_reviewed(dst)?;
+        self.delete_note(src)?;
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,6 +678,51 @@ mod tests {
         assert!(st.reserve_budget("2026-11-18", true).unwrap(), "лимит можно снять");
         assert!(st.reserve_budget("2026-11-19", false).unwrap());
         assert_eq!(st.budget_used("2026-11-19"), 1);
+    }
+
+    #[test]
+    fn video_note_is_saved_reviewed_and_merged() {
+        use crate::ai::video;
+        let st = Store::open_memory().unwrap();
+        let link = video::canonical("YCmvK_Up-4k");
+        let meta = json!({"search_title": "Steam Link", "topics": ["стриминг игр", "Moonlight"]});
+        let a = st.save_video("Steam Link против Moonlight", &format!("Сравнение.\n\nВидео: {}", link), &meta).unwrap();
+        assert_eq!(st.note_id_containing(&link), a.id);
+        assert_eq!(st.note_id_containing("Видео: https://www.youtube.com/watch?v=нет"), 0);
+        // Подсказки ИИ найдутся поиском, а фоновая проверка эту заметку не возьмёт.
+        assert_eq!(st.notes("moonlight", None).unwrap().len(), 1);
+        assert!(st.note(a.id).unwrap().unwrap().ai_checked);
+        assert!(st.review_batch(false).unwrap().is_empty());
+        assert_eq!(st.video_notes().unwrap().len(), 1);
+        assert!(st.note(a.id).unwrap().unwrap().sync_ts > 0);
+
+        let link2 = video::canonical("jNQXAC9IVRw");
+        let b = st.save_video("Sunshine для Moonlight", &format!("Сервер.\n\nВидео: {}", link2), &json!({"topics": ["Sunshine"]})).unwrap();
+        // Изменённая после чтения заметка не склеивается, ничего не теряется.
+        assert!(!st.merge_video(b.id, b.updated + 1, a.id, a.updated, "Общая", "текст").unwrap());
+        assert!(!st.merge_video(b.id, b.updated, b.id, b.updated, "Общая", "текст").unwrap());
+        assert_eq!(st.count_notes().unwrap(), 2);
+
+        let parsed_a = video::split(&st.note(a.id).unwrap().unwrap());
+        let parsed_b = video::split(&st.note(b.id).unwrap().unwrap());
+        let all: Vec<_> = parsed_a.sections.iter().chain(parsed_b.sections.iter()).cloned().collect();
+        let body = video::compose("Оба про стриминг.", &all);
+        assert!(st.merge_video(b.id, b.updated, a.id, a.updated, "Стриминг игр", &body).unwrap());
+        assert_eq!(st.count_notes().unwrap(), 1);
+        assert!(st.note(b.id).unwrap().is_none());
+        let merged = st.note(a.id).unwrap().unwrap();
+        assert_eq!(merged.title, "Стриминг игр");
+        assert!(merged.body.contains(&link) && merged.body.contains(&link2));
+        // Темы второго видео перешли к общей заметке и ищутся.
+        assert_eq!(st.notes("sunshine", None).unwrap().len(), 1);
+        assert!(st.review_batch(false).unwrap().is_empty());
+        // Повтор и сама заметка по ссылке находятся и после объединения.
+        assert_eq!(st.note_id_containing(&link2), a.id);
+        // Заметка из стопки в кандидаты не попадает.
+        let c = st.save_video("Третье", &format!("Ещё.\n\nВидео: {}", video::canonical("aaaaaaaaaaa")), &json!({})).unwrap();
+        st.conn.execute("INSERT INTO note_groups(top) VALUES(?1)", params![a.id]).unwrap();
+        st.conn.execute("INSERT INTO note_members(note,top) VALUES(?1,?2)", params![c.id, a.id]).unwrap();
+        assert!(st.video_notes().unwrap().is_empty());
     }
 
     #[test]
