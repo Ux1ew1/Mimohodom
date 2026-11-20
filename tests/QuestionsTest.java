@@ -108,6 +108,16 @@ public final class QuestionsTest {
     check(ProgressCheck.canPostpone(future, 0) && !ProgressCheck.canPostpone(future, ReminderPolicy.REPEAT_LIST)
         && !ProgressCheck.canPostpone(0, 0), "only single reminders move");
 
+    // Числовые ключи без кавычек (google/gemma-3-27b-it): Android их не принимает
+    check(JsonRepair.quoteNumericKeys("{\"kinds\":{41:\"info\"},\"actions\":[]}").equals("{\"kinds\":{\"41\":\"info\"},\"actions\":[]}"), "numeric key quoted");
+    check(JsonRepair.quoteNumericKeys("{1:\"a\", 2 :\"b\",-3:\"c\"}").equals("{\"1\":\"a\", \"2\" :\"b\",\"-3\":\"c\"}"), "several keys, spaces, minus");
+    check(JsonRepair.quoteNumericKeys("{\"t\":\"в 10:30, 11:00\",\"n\":[1,2]}").equals("{\"t\":\"в 10:30, 11:00\",\"n\":[1,2]}"), "strings and arrays untouched");
+    check(JsonRepair.quoteNumericKeys("{\"a\":{\"b\":\"x\\\"y\"},3:1}").equals("{\"a\":{\"b\":\"x\\\"y\"},\"3\":1}"), "escaped quotes handled");
+    check(JsonRepair.quoteNumericKeys("{\"id\":41,\"n\":5}").equals("{\"id\":41,\"n\":5}"), "values untouched");
+    Map<Long, String> gemma =
+        TaskKind.parse("{\"kinds\":{41:\"info\"},\"actions\":[],\"notes\":[{\"id\":41}]}", Set.of(41L));
+    check("info".equals(gemma.get(41L)), "gemma kinds parsed");
+
     // Ежедневный обход дел
     long morning = at(zone, 2026, 11, 20, 9, 0), evening = at(zone, 2026, 11, 20, 20, 0);
     long todayNum = java.time.LocalDate.of(2026, 11, 20).toEpochDay();

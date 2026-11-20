@@ -6,6 +6,7 @@ New-Item -ItemType Directory -Force "$projectRoot/.tools/questions-tests" | Out-
 $sources = @(
   "$projectRoot/app/src/main/java/app/fastnotes/AgentAction.java",
   "$projectRoot/app/src/main/java/app/fastnotes/AgentPlan.java",
+  "$projectRoot/app/src/main/java/app/fastnotes/JsonRepair.java",
   "$projectRoot/app/src/main/java/app/fastnotes/AgentJournal.java",
   "$projectRoot/app/src/main/java/app/fastnotes/DeckPolicy.java",
   "$projectRoot/app/src/main/java/app/fastnotes/Note.java",

@@ -76,6 +76,7 @@ public final class Analysis {
     // Пояснение до или после JSON не ломает разбор: берём от первой «{» до последней «}».
     int open = clean.indexOf('{'), close = clean.lastIndexOf('}');
     if (open >= 0 && close > open) clean = clean.substring(open, close + 1);
+    clean = JsonRepair.quoteNumericKeys(clean);
     JSONArray rows = new JSONObject(clean).getJSONArray("notes");
     Map<Long, Result> out = new HashMap<>();
     for (int i = 0; i < rows.length(); i++) {

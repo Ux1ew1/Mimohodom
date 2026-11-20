@@ -27,7 +27,7 @@ public final class AgentPlan {
     }
     int open = clean.indexOf('{'), close = clean.lastIndexOf('}');
     if (open >= 0 && close > open) clean = clean.substring(open, close + 1);
-    return clean.trim();
+    return JsonRepair.quoteNumericKeys(clean.trim());
   }
 
   public static List<AgentAction> parse(String text, AgentAction.Scope scope) throws JSONException {
