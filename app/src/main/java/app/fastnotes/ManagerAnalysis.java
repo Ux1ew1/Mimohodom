@@ -119,59 +119,33 @@ public final class ManagerAnalysis {
     return payload;
   }
 
-  public static List<JSONObject> parse(String text, List<Note> notes) throws Exception {
-    String clean = text.trim();
-    if (clean.startsWith("```")) {
-      int start = clean.indexOf('\n'), end = clean.lastIndexOf("```");
-      if (start >= 0 && end > start) clean = clean.substring(start + 1, end);
-    }
-    Map<Long, Note> known = new HashMap<>();
-    Set<Long> complete = new HashSet<>();
+  /** Что знает разбор о входе: заметки пачки и те, что ушли модели целиком (до 12 000 знаков). */
+  public static AgentAction.Scope scope(List<Note> notes, long now, java.time.ZoneId zone) {
+    AgentAction.Scope scope = new AgentAction.Scope(now, zone);
     int remaining = 12000;
     for (Note n : notes) {
-      known.put(n.id, n);
-      if (n.body.length() <= remaining) complete.add(n.id);
+      scope.note(n.id, n.body.length() <= remaining);
       remaining -= Math.min(remaining, n.body.length());
     }
-    JSONArray rows = new JSONObject(clean).getJSONArray("suggestions");
+    return scope;
+  }
+
+  /**
+   * Предложения для колокольчика из ответа модели. Разбор и проверку делает {@link AgentPlan};
+   * здесь действия превращаются в прежние предложения с версиями исходников.
+   */
+  public static List<JSONObject> parse(String text, List<Note> notes) throws Exception {
+    Map<Long, Note> known = new HashMap<>();
+    for (Note n : notes) known.put(n.id, n);
+    List<AgentAction> actions =
+        AgentPlan.parse(
+            text, scope(notes, System.currentTimeMillis(), java.time.ZoneId.systemDefault()));
     List<JSONObject> out = new ArrayList<>();
-    for (int i = 0; i < rows.length() && out.size() < 4; i++) {
-      JSONObject p = rows.optJSONObject(i);
-      if (p == null) continue;
-      String type = p.optString("type"), reason = p.optString("reason").trim();
-      if (!Arrays.asList("merge", "link", "task", "question", "clarify").contains(type)
-          || reason.isEmpty()
-          || reason.length() > 1000) continue;
-      JSONArray ids = p.optJSONArray("sources");
-      if (ids == null || ids.length() == 0 || ids.length() > 8) continue;
-      TreeSet<Long> sorted = new TreeSet<>();
-      boolean valid = true;
-      for (int j = 0; j < ids.length(); j++) {
-        long id = ids.optLong(j, -1);
-        if (!known.containsKey(id)
-            || !sorted.add(id)
-            || (type.equals("merge") && !complete.contains(id))) valid = false;
-      }
-      if (!valid || ((type.equals("merge") || type.equals("link")) && sorted.size() < 2)) continue;
-      JSONArray options = new JSONArray();
-      if (type.equals("clarify")) {
-        if (sorted.size() != 1 || reason.length() > 300) continue;
-        JSONArray raw = p.optJSONArray("options");
-        Set<String> seen = new HashSet<>();
-        for (int j = 0; raw != null && j < raw.length() && options.length() < 4; j++) {
-          String option = raw.optString(j, "").trim();
-          if (!option.isEmpty() && option.length() <= 40 && seen.add(option.toLowerCase(Locale.ROOT)))
-            options.put(option);
-        }
-        if (options.length() < 2) continue;
-      }
-      String title = p.optString("title").trim(), body = p.optString("body").trim();
-      if (!type.equals("link") && !type.equals("clarify") && (title.isEmpty() || body.isEmpty()))
-        continue;
-      if (title.length() > 160 || body.length() > 24000) continue;
+    for (AgentAction a : AgentPlan.proposals(actions)) {
+      JSONObject p = a.proposal();
       JSONArray sources = new JSONArray();
-      StringBuilder identity = new StringBuilder(type);
-      for (long id : sorted) {
+      StringBuilder identity = new StringBuilder(a.legacy);
+      for (long id : a.sources()) {
         String revision = fingerprint(known.get(id));
         sources.put(new JSONObject().put("id", id).put("revision", revision));
         identity
@@ -182,15 +156,7 @@ public final class ManagerAnalysis {
             .append(':')
             .append(revision);
       }
-      out.add(
-          new JSONObject()
-              .put("type", type)
-              .put("reason", reason)
-              .put("title", title)
-              .put("body", body)
-              .put("sources", sources)
-              .put("options", options)
-              .put("identity", identity.toString()));
+      out.add(p.put("sources", sources).put("identity", identity.toString()));
     }
     return out;
   }

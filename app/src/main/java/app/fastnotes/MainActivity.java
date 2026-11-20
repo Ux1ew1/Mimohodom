@@ -309,6 +309,8 @@ public final class MainActivity extends Activity
             // Корзина: заметки старше 30 дней удаляются насовсем, их картинки уберёт очистка ниже.
             if (!purgeStore.purgeTrash(System.currentTimeMillis(), false).isEmpty())
               CalendarSync.runAsync(getApplicationContext());
+            // Журнал агента хранится 30 дней.
+            AgentLog.prune(purgeStore, System.currentTimeMillis());
           } catch (Exception ignored) {
             // Не удалось сейчас — попробуем при следующем запуске.
           }
@@ -1406,6 +1408,27 @@ public final class MainActivity extends Activity
     ScrollView list = new ScrollView(this);
     list.addView(items);
     panel.addView(list, new LinearLayout.LayoutParams(-1, proposals.size() > 2 ? dp(300) : -2));
+    // Сделанное помощником за сутки — с «Отменить» (журнал агента).
+    List<AgentLog.Entry> recentDone = new ArrayList<>();
+    long nowMs = System.currentTimeMillis();
+    for (AgentLog.Entry e : AgentLog.recent(store, 20, AgentJournal.UNDO_WINDOW))
+      if (e.undoable(nowMs)) recentDone.add(e);
+    if (!recentDone.isEmpty()) {
+      View doneRule = new View(this);
+      doneRule.setBackgroundColor(LINE);
+      panel.addView(doneRule, new LinearLayout.LayoutParams(-1, dp(1)));
+      LinearLayout doneBox = column();
+      doneBox.setPadding(dp(16), dp(10), dp(12), dp(2));
+      TextView doneTitle = text("Сделано помощником", 13, STACK_FG);
+      doneTitle.setTypeface(null, Typeface.BOLD);
+      doneBox.addView(doneTitle);
+      for (int i = 0; i < Math.min(3, recentDone.size()); i++)
+        doneBox.addView(journalRow(recentDone.get(i), () -> suggestionsPopup.dismiss()));
+      if (recentDone.size() > 3)
+        doneBox.addView(
+            text("И ещё " + (recentDone.size() - 3) + " — в журнале помощника", 12, MUTED));
+      panel.addView(doneBox);
+    }
     LinearLayout foot = column();
     foot.setPadding(dp(16), dp(10), dp(8), dp(6));
     String today = java.time.LocalDate.now().toString();
@@ -3123,9 +3146,10 @@ public final class MainActivity extends Activity
               option,
               false,
               () -> {
-                if (manager.answerClarify(p.optLong("id"), option)) toast("Запомнил: " + option);
-                else toast("Запись уже изменилась");
+                boolean answered = manager.answerClarify(p.optLong("id"), option);
                 after.run();
+                if (answered) undoBar("Запомнил: " + option);
+                else toast("Запись уже изменилась");
               }));
       gap(parent, 6);
     }
@@ -3146,6 +3170,106 @@ public final class MainActivity extends Activity
               manager.state(p.optLong("id"), "dismissed");
               after.run();
             }));
+  }
+
+  /** Строка журнала агента: что сделано, когда и «Отменить», пока прошло меньше суток. */
+  private View journalRow(AgentLog.Entry e, Runnable beforeUndo) {
+    long now = System.currentTimeMillis();
+    LinearLayout line = row();
+    line.setGravity(Gravity.CENTER_VERTICAL);
+    line.setPadding(0, dp(6), 0, dp(6));
+    LinearLayout words = column();
+    TextView what = text(e.text(), 13, AgentJournal.UNDONE.equals(e.state) ? MUTED : INK);
+    what.setMaxLines(3);
+    what.setEllipsize(TextUtils.TruncateAt.END);
+    words.addView(what);
+    String left = AgentJournal.left(e.state, e.created, now);
+    words.addView(
+        text(
+            shortDate(e.created)
+                + (AgentJournal.UNDONE.equals(e.state)
+                    ? " · отменено"
+                    : left.isEmpty() ? "" : " · отменить можно " + left),
+            11,
+            MUTED));
+    line.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+    if (e.undoable(now)) {
+      TextView undo =
+          compactButton(
+              "Отменить",
+              false,
+              () -> {
+                beforeUndo.run();
+                confirmUndo(e);
+              });
+      undo.setContentDescription("Отменить: " + e.text());
+      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+      lp.leftMargin = dp(8);
+      line.addView(undo, lp);
+    }
+    return line;
+  }
+
+  private void confirmUndo(AgentLog.Entry e) {
+    new AlertDialog.Builder(this)
+        .setTitle("Отменить действие помощника?")
+        .setMessage(e.text() + "\n\n" + AgentJournal.undoHint(e.action))
+        .setNegativeButton("Назад", null)
+        .setPositiveButton("Отменить", (d, w) -> undoAgent(e.id))
+        .show();
+  }
+
+  private void undoAgent(long id) {
+    String done;
+    try {
+      done = AgentLog.undo(store, id);
+    } catch (IllegalStateException e) {
+      done = e.getMessage();
+    } catch (Exception e) {
+      done = "Не удалось отменить";
+    }
+    render();
+    toast(done);
+  }
+
+  /**
+   * Плашка внизу экрана сразу после действия помощника: что сделано и «Отменить» без
+   * подтверждения. Через 8 секунд исчезает; отменить можно и позже — из колокольчика, сутки.
+   */
+  private void undoBar(String message) {
+    List<AgentLog.Entry> last = AgentLog.recent(store, 1, AgentJournal.UNDO_WINDOW);
+    if (frame == null || last.isEmpty() || !last.get(0).undoable(System.currentTimeMillis())) {
+      toast(message);
+      return;
+    }
+    long id = last.get(0).id;
+    LinearLayout bar = row();
+    bar.setGravity(Gravity.CENTER_VERTICAL);
+    bar.setBackground(shape(INK, 12));
+    bar.setPadding(dp(16), dp(4), dp(4), dp(4));
+    bar.setElevation(dp(8));
+    bar.addView(text(message, 14, PAPER), new LinearLayout.LayoutParams(0, -2, 1));
+    TextView undo = text("Отменить", 14, LIME);
+    undo.setTypeface(null, Typeface.BOLD);
+    undo.setGravity(Gravity.CENTER);
+    undo.setMinHeight(dp(44));
+    undo.setPadding(dp(14), 0, dp(14), 0);
+    undo.setBackground(ripple(android.graphics.Color.TRANSPARENT, 10));
+    undo.setContentDescription("Отменить: " + message);
+    FrameLayout host = frame;
+    undo.setOnClickListener(
+        v -> {
+          buzz(0);
+          host.removeView(bar);
+          undoAgent(id);
+        });
+    bar.addView(undo);
+    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+    lp.leftMargin = dp(16);
+    lp.rightMargin = dp(16);
+    lp.bottomMargin = navInset + dp(96);
+    host.addView(bar, lp);
+    bar.postDelayed(() -> host.removeView(bar), 8000);
   }
 
   private String proposalLabel(String type) {
@@ -3315,6 +3439,27 @@ public final class MainActivity extends Activity
               }));
       content.addView(card);
     }
+    gap(content, 24);
+    TextView journalTitle = text("Журнал помощника", 18, INK);
+    journalTitle.setTypeface(null, Typeface.BOLD);
+    if (Build.VERSION.SDK_INT >= 28) journalTitle.setAccessibilityHeading(true);
+    content.addView(journalTitle);
+    secondary(
+        content,
+        "Что помощник сделал за 30 дней: названия, созданные заметки, стопки, ответы на вопросы."
+            + " Отменить можно в течение суток.");
+    List<AgentLog.Entry> journal = AgentLog.recent(store, 30, 0);
+    if (journal.isEmpty()) {
+      gap(content, 6);
+      secondary(content, "Пока пусто.");
+      return;
+    }
+    gap(content, 8);
+    LinearLayout journalCard = column();
+    journalCard.setPadding(dp(16), dp(8), dp(12), dp(8));
+    journalCard.setBackground(shape(SURFACE, 12));
+    for (AgentLog.Entry e : journal) journalCard.addView(journalRow(e, () -> {}));
+    content.addView(journalCard);
   }
 
   private void prepareSummary(JSONObject p) {
@@ -3436,7 +3581,7 @@ public final class MainActivity extends Activity
                         page = "notes";
                         search = "";
                         render();
-                        toast(
+                        undoBar(
                             p.optString("type").equals("link")
                                     || p.optString("type").equals("merge")
                                 ? "✓ Стопка создана"

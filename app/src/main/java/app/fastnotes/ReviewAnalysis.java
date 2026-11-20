@@ -63,11 +63,7 @@ public final class ReviewAnalysis {
       throw new Failure("Модель вернула пустой ответ. Попробуйте другую модель.");
     Result result = new Result();
     result.proposals = ManagerAnalysis.parse(text, notes);
-    String clean = text.trim();
-    if (clean.startsWith("```")) {
-      int start = clean.indexOf('\n'), end = clean.lastIndexOf("```");
-      if (start >= 0 && end > start) clean = clean.substring(start + 1, end);
-    }
+    String clean = AgentPlan.unwrap(text);
     if (new JSONObject(clean).getJSONArray("suggestions").length() > 0
         && result.proposals.isEmpty())
       throw new Failure(

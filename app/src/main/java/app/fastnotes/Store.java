@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 13);
+    super(context, name, null, 14);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -81,6 +81,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addSuggestionLead(db);
     addPlans(db);
     addTrash(db);
+    AgentLog.create(db);
   }
 
   @Override
@@ -99,6 +100,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 11) addSuggestionLead(db);
     if (oldV < 12) addPlans(db);
     if (oldV < 13) addTrash(db);
+    if (oldV < 14) AgentLog.create(db);
   }
 
   /**
@@ -855,7 +857,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
         || new ManagerStore(this).top(note.id) != 0) return false;
     ContentValues v = new ContentValues();
     v.put("ai_failed", 0);
-    if (note.autoTitle && !result.title.isEmpty()) {
+    boolean named = note.autoTitle && !result.title.isEmpty();
+    if (named) {
       v.put("title", result.title);
       v.put("title_auto", 0);
     }
@@ -875,10 +878,50 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("metadata", metadata.toString());
     v.put("search_text", Metadata.searchText(metadata));
     // Do not change the user's edit timestamp or overwrite a revision edited during the request.
-    return getWritableDatabase()
-            .update(
-                "notes", v, "id=? AND updated=?", new String[] {"" + note.id, "" + note.updated})
-        == 1;
+    boolean applied =
+        getWritableDatabase()
+                .update(
+                    "notes",
+                    v,
+                    "id=? AND updated=?",
+                    new String[] {"" + note.id, "" + note.updated})
+            == 1;
+    // Название — единственное, что агент делает сам; пишем в журнал, чтобы его можно было вернуть.
+    if (applied && named && !result.title.equals(note.title))
+      try {
+        AgentLog.record(
+            getWritableDatabase(),
+            AgentJournal.NAME,
+            AgentJournal.nameData(note.id, result.title, note.title));
+      } catch (JSONException ignored) {
+      }
+    return applied;
+  }
+
+  /**
+   * «Отменить» для названия от агента: возвращает прежнее, если пользователь не переименовал
+   * заметку сам. Прежнее название становится авторским, чтобы проверка не поставила новое снова.
+   * Время правки не меняется, очередь проверки считает новое состояние уже просмотренным.
+   */
+  public boolean undoAgentTitle(long id, String expected, String before) {
+    Note note = note(id);
+    if (note == null || note.trashed > 0 || !note.title.equals(expected)) return false;
+    String title = Note.autoTitle(before, note.body);
+    JSONObject metadata = Metadata.base(title, note.body, note.created, note.updated);
+    Metadata.withAI(metadata, Metadata.read(note.metadata).optJSONObject("ai"), note.updated);
+    ContentValues v = new ContentValues();
+    v.put("title", title);
+    v.put("title_auto", 0);
+    v.put("metadata", metadata.toString());
+    v.put("search_text", Metadata.searchText(metadata));
+    SQLiteDatabase db = getWritableDatabase();
+    if (db.update("notes", v, "id=? AND title=?", new String[] {"" + id, expected}) != 1)
+      return false;
+    Note after = note(id);
+    db.execSQL(
+        "UPDATE manager_review SET revision=? WHERE note=?",
+        new Object[] {ManagerAnalysis.fingerprint(after), id});
+    return true;
   }
 
   public boolean applyMetadata(long id, long revision, JSONObject enrichment) {

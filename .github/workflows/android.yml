@@ -65,6 +65,7 @@ jobs:
           ./scripts/test-reminder-batch.ps1
           ./scripts/test-plan.ps1
           ./scripts/test-trash.ps1
+          ./scripts/test-agent-actions.ps1
           ./scripts/test-images.ps1
           ./scripts/test-image-input.ps1
           ./scripts/test-image-list.ps1
@@ -79,6 +80,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Manager SQL tests failed' }
           node tests/folders-sql.cjs
           if ($LASTEXITCODE -ne 0) { throw 'Folders SQL tests failed' }
+          node tests/agent-log-sql.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Agent log SQL tests failed' }
       - name: Build APK, test APK and lint
         run: |
           ./gradlew.bat --no-daemon --console=plain assembleDebug assembleDebugAndroidTest lintDebug

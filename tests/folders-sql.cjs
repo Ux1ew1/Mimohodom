@@ -121,6 +121,7 @@ check(trashSql.length === 1 && trashSql[0].includes("trashed INTEGER NOT NULL DE
 check(db.prepare("SELECT trashed FROM notes WHERE id=1").get().trashed === 0, "Old notes are not in trash");
 check(method(store, "void onCreate(SQLiteDatabase db)").includes("addTrash(db)"), "Fresh install also gets trash");
 check(/oldV < 13\)\s*addTrash\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 12 -> 13 adds trash");
-check(/super\(context, name, null, 13\)/.test(store), "Database version is 13");
+// Версия 14: журнал агента (AgentLog), проверяется в tests/agent-log-sql.cjs.
+check(/super\(context, name, null, 14\)/.test(store), "Database version is 14");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

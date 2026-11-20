@@ -233,6 +233,18 @@ public final class ManagerStore {
       v.put("data", data.toString());
       v.put("state", "accepted");
       boolean done = db.update("manager_proposals", v, "id=?", new String[] {"" + id}) == 1;
+      JSONArray sources = data.optJSONArray("sources");
+      if (done)
+        AgentLog.record(
+            db,
+            AgentJournal.ANSWER,
+            AgentJournal.answerData(
+                sources == null || sources.length() == 0
+                    ? 0
+                    : sources.getJSONObject(0).getLong("id"),
+                data.optString("reason"),
+                answer.trim(),
+                id));
       db.setTransactionSuccessful();
       return done;
     } catch (JSONException e) {
@@ -449,6 +461,8 @@ public final class ManagerStore {
       long result = store.save(0, title, body, 0);
       if (p.getString("type").equals("merge") || p.getString("type").equals("link")) {
         LinkedHashSet<Long> members = new LinkedHashSet<>();
+        // Прежние стопки, которые войдут в новую: журнал вернёт их по «Отменить».
+        Map<Long, List<Long>> before = new LinkedHashMap<>();
         JSONArray sources = p.getJSONArray("sources");
         for (int i = 0; i < sources.length(); i++) {
           long source = sources.getJSONObject(i).getLong("id"), top = top(source);
@@ -456,15 +470,24 @@ public final class ManagerStore {
           if (top != 0) {
             members.add(top);
             members.addAll(members(top));
+            before.putIfAbsent(top, members(top));
           }
         }
+        AgentLog.record(
+            db,
+            AgentJournal.GROUP,
+            AgentJournal.groupData(result, store.note(result).title, members, before, id));
         for (long member : members) db.delete("note_groups", "top=?", new String[] {"" + member});
         db.execSQL("INSERT INTO note_groups(top) VALUES(?)", new Object[] {result});
         for (long member : members)
           db.execSQL(
               "INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)",
               new Object[] {member, result});
-      }
+      } else
+        AgentLog.record(
+            db,
+            AgentJournal.CREATE,
+            AgentJournal.createData(result, store.note(result).title, id));
       db.execSQL(
           "UPDATE manager_proposals SET state='accepted',result=? WHERE id=?",
           new Object[] {result, id});
