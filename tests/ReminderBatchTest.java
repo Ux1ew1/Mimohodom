@@ -109,6 +109,45 @@ public final class ReminderBatchTest {
     List<ReminderBatch.Item> back = ReminderBatch.items(new org.json.JSONObject(json.toString()));
     check(back.size() == 3 && back.get(1).title.equals("Корпоратив"), "json round trip");
     check(ReminderBatch.guidance().contains("[[reminders]]"), "guidance names the block");
+    check(ReminderBatch.guidance().contains("[[reminders separate]]"), "guidance names separate");
+
+    // Одна заметка — несколько дат (этап 4)
+    check(!r.separate && !ReminderBatch.separate(json), "one affair by default");
+    check(json.has("separate"), "separate stored");
+    check(!ReminderBatch.separate(new org.json.JSONObject()), "old drafts are one note");
+    String sep =
+        "Разные дела.\n[[reminders separate]]\n2026-11-07 15:00 | Врач\n2026-11-08 10:00 | Шиномонтаж\n[[/reminders]]";
+    ReminderBatch.Result s = ReminderBatch.parse(sep, zone, now);
+    check(s.separate && s.items.size() == 2, "separate block parsed");
+    check(ReminderBatch.separate(ReminderBatch.toJson(s)), "separate kept in json");
+    check(ReminderBatch.strip(sep).equals("Разные дела."), "strip separate block");
+    check(ReminderBatch.source(new org.json.JSONObject().put("note", 42)) == 42, "source note");
+    check(ReminderBatch.source(json) == 0 && ReminderBatch.source(null) == 0, "no source note");
+    long[] t = ReminderBatch.times(r.items);
+    check(t.length == 3 && t[0] == r.items.get(0).at && t[2] == r.items.get(2).at, "times in order");
+    String[] mixed = ReminderBatch.combined(r.items, zone);
+    check(mixed[0].equals("Большой выбор и ещё 2"), "combined title for different titles: " + mixed[0]);
+    check(mixed[1].split("\n").length == 3, "line per date");
+    check(mixed[1].contains("— Корпоратив. Гастроли"), "line has title and body: " + mixed[1]);
+    ReminderBatch.Result course =
+        ReminderBatch.parse(
+            "[[reminders]]\n2026-11-10 19:00 | Английский | урок 1\n2026-11-12 19:00 | английский\n[[/reminders]]",
+            zone, now);
+    String[] same = ReminderBatch.combined(course.items, zone);
+    check(same[0].equals("Английский"), "combined title for same titles");
+    check(same[1].equals("• 10.11.2026 вт 19:00 — урок 1\n• 12.11.2026 чт 19:00"), "combined body: " + same[1]);
+    check(ReminderBatch.combined(new java.util.ArrayList<>(), zone)[0].isEmpty(), "combined empty");
+    long hour = 3_600_000L, a = now + hour, b = now + 2 * hour, c = now + 3 * hour;
+    long[] fromNone = ReminderBatch.mergedTimes(0, 0, "", new long[] {b, a}, now);
+    check(fromNone.length == 2 && fromNone[0] == a, "merge into note without reminder");
+    long[] fromSingle = ReminderBatch.mergedTimes(c, 0, "", new long[] {a, b}, now);
+    check(fromSingle.length == 3 && fromSingle[2] == c, "single future reminder kept");
+    check(ReminderBatch.mergedTimes(now - hour, 0, "", new long[] {a}, now).length == 1, "past single dropped");
+    long[] fromList =
+        ReminderBatch.mergedTimes(a, ReminderPolicy.REPEAT_LIST, "[" + (now - hour) + "," + a + "]", new long[] {a, c}, now);
+    check(fromList.length == 3 && fromList[0] == now - hour && fromList[2] == c, "list merged without duplicates");
+    check(ReminderBatch.canMerge(0) && ReminderBatch.canMerge(ReminderPolicy.REPEAT_LIST), "can merge");
+    check(!ReminderBatch.canMerge(ReminderPolicy.REPEAT_WEEKLY), "periodic note gets a new note");
 
     System.out.println("Reminder batch tests passed: " + count);
   }

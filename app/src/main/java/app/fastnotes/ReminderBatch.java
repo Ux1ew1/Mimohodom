@@ -11,13 +11,17 @@ import java.util.regex.Pattern;
 /**
  * Пачка напоминаний из ответа ИИ: «напомни о каждом из этих дней». Модель выдаёт блок
  * {@code [[reminders]]} со строками {@code 2026-11-06 16:00 | Название | пояснение}; приложение
- * разбирает его, отбрасывает прошедшие и повторяющиеся строки и предлагает создать по заметке с
- * напоминанием на каждую дату. Чистая Java без Android, проверяется на JVM.
+ * разбирает его, отбрасывает прошедшие и повторяющиеся строки и предлагает одну заметку со всеми
+ * датами (серия {@link ReminderPolicy#REPEAT_LIST}) — или, если модель пометила даты разными делами
+ * ({@code [[reminders separate]]}), по заметке на каждую дату. Если запрос пришёл из заметки, даты
+ * можно добавить в неё. Чистая Java без Android, проверяется на JVM.
  */
 public final class ReminderBatch {
   public static final int MAX_ITEMS = 40;
   private static final Pattern BLOCK =
-      Pattern.compile("\\[\\[reminders]](.*?)\\[\\[/reminders]]", Pattern.DOTALL);
+      Pattern.compile("\\[\\[reminders(\\s+separate)?\\s*]](.*?)\\[\\[/reminders]]", Pattern.DOTALL);
+  /** Начало запроса «напоминания по датам из заметки»: по нему чат узнаёт заметку-источник. */
+  public static final String REQUEST = "Создай напоминания по датам из заметки";
   private static final Pattern LINE =
       Pattern.compile("^\\s*[-*•]?\\s*(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{1,2}):(\\d{2})\\s*\\|(.*)$");
 
@@ -36,6 +40,8 @@ public final class ReminderBatch {
     public final List<Item> items = new ArrayList<>();
     /** Строки, которые не вошли: время прошло, повтор или не разобралось. */
     public int skipped;
+    /** Модель считает даты разными делами: по умолчанию предлагать отдельные заметки. */
+    public boolean separate;
   }
 
   /** Пользователь просит поставить напоминания (может быть несколько). */
@@ -63,7 +69,7 @@ public final class ReminderBatch {
   /** Вопрос для чата по тексту заметки: пользователь видит его и может поправить перед отправкой. */
   public static String requestFor(String title, String body) {
     String text = body.length() > 4000 ? body.substring(0, 4000) : body;
-    return "Создай напоминания по датам из заметки"
+    return REQUEST
         + (title.trim().isEmpty() ? "" : " «" + title.trim() + "»")
         + ". Время напоминания — время начала из текста.\n\n"
         + text;
@@ -74,7 +80,8 @@ public final class ReminderBatch {
     Result result = new Result();
     Matcher block = BLOCK.matcher(raw);
     if (!block.find()) return result;
-    for (String line : block.group(1).split("\\R")) {
+    result.separate = block.group(1) != null;
+    for (String line : block.group(2).split("\\R")) {
       if (line.trim().isEmpty()) continue;
       Matcher m = LINE.matcher(line);
       if (!m.matches()) {
@@ -122,10 +129,66 @@ public final class ReminderBatch {
       return new org.json.JSONObject()
           .put("kind", "reminders")
           .put("items", items)
-          .put("skipped", result.skipped);
+          .put("skipped", result.skipped)
+          .put("separate", result.separate);
     } catch (org.json.JSONException e) {
       throw new IllegalStateException(e);
     }
+  }
+
+  /** Даты разными делами (отдельные заметки по умолчанию). */
+  public static boolean separate(org.json.JSONObject draft) {
+    return draft != null && draft.optBoolean("separate");
+  }
+
+  /** Заметка, из которой пришёл запрос (0 — запрос набран в чате). */
+  public static long source(org.json.JSONObject draft) {
+    return draft == null ? 0 : Math.max(0, draft.optLong("note"));
+  }
+
+  /** Даты строк по порядку, без повторов. */
+  public static long[] times(List<Item> items) {
+    long[] out = new long[items.size()];
+    for (int i = 0; i < out.length; i++) out[i] = items.get(i).at;
+    return ReminderPolicy.parseTimes(ReminderPolicy.encodeTimes(out));
+  }
+
+  /**
+   * Название и текст одной заметки со всеми датами: общее название строк (или первое «и ещё N»), в
+   * тексте — по строке на дату с пояснением.
+   */
+  public static String[] combined(List<Item> items, ZoneId zone) {
+    if (items.isEmpty()) return new String[] {"", ""};
+    boolean same = true;
+    for (Item i : items) same &= i.title.equalsIgnoreCase(items.get(0).title);
+    String title = same ? items.get(0).title : items.get(0).title + " и ещё " + (items.size() - 1);
+    StringBuilder body = new StringBuilder();
+    for (Item i : items) {
+      if (body.length() > 0) body.append('\n');
+      body.append("• ").append(label(i.at, zone));
+      if (!same) body.append(" — ").append(i.title);
+      if (!i.body.isEmpty()) body.append(same ? " — " : ". ").append(i.body);
+    }
+    return new String[] {title, body.toString()};
+  }
+
+  /**
+   * Даты заметки после добавления новых: прежний список серии или прежнее разовое будущее
+   * напоминание плюс новые. У заметки с повтором по правилу (каждый день …) списка нет — для неё
+   * вызывающий делает новую заметку ({@link #canMerge}).
+   */
+  public static long[] mergedTimes(long reminder, int repeat, String times, long[] add, long now) {
+    long[] out =
+        repeat == ReminderPolicy.REPEAT_LIST
+            ? ReminderPolicy.parseTimes(times)
+            : reminder > now ? new long[] {reminder} : new long[0];
+    for (long t : add) out = ReminderPolicy.withTime(out, t);
+    return out;
+  }
+
+  /** Можно ли добавить даты в заметку: у неё нет повтора по правилу. */
+  public static boolean canMerge(int repeat) {
+    return !ReminderPolicy.periodic(repeat);
   }
 
   public static boolean isBatch(org.json.JSONObject draft) {
@@ -151,7 +214,7 @@ public final class ReminderBatch {
 
   /** Текст ответа без служебного блока (в том числе оборванного по лимиту). */
   public static String strip(String text) {
-    return text.replaceAll("(?s)\\[\\[reminders]].*?(?:\\[\\[/reminders]]|$)", "").trim();
+    return text.replaceAll("(?s)\\[\\[reminders[^\\]]*]].*?(?:\\[\\[/reminders]]|$)", "").trim();
   }
 
   /** Подсказка модели о формате блока; добавляется к системному промпту. */
@@ -164,7 +227,11 @@ public final class ReminderBatch {
         + "[[/reminders]]. Дата полностью (год-месяц-день), время 24 часа. Если пользователь просит"
         + " сдвинуть время (например, за 2 часа до начала), впиши уже посчитанное время. Только"
         + " будущие даты, год возьми из контекста и сегодняшней даты. Не выдумывай события, а если"
-        + " дата или время неразборчивы, пропусти строку и скажи об этом в тексте.";
+        + " дата или время неразборчивы, пропусти строку и скажи об этом в тексте. Если все даты —"
+        + " одно дело (расписание занятий, курс, серия приёмов, график), пиши блок как есть:"
+        + " приложение сделает одну заметку со всеми датами. Если даты — разные дела, открой блок"
+        + " строкой [[reminders separate]] вместо [[reminders]]: каждая дата станет отдельной"
+        + " заметкой.";
   }
 
   /** Подпись для списка: «06.11 пт 16:00». */

@@ -192,7 +192,7 @@ public final class SqliteSyncStore implements SyncStore {
                     + "n.lead_minutes,n.image,n.title_auto,"
                     + "(n.ai_checked=n.updated AND n.ai_failed=0 AND n.ai_checked<>0),n.metadata,"
                     + "n.sync_ts,n.sync_seq,ifnull((SELECT uid FROM folders f WHERE f.id=n.folder),''),"
-                    + "n.plan,n.trashed"
+                    + "n.plan,n.trashed,n.reminder_times"
                     + " FROM notes n WHERE n.sync_seq>? AND n.sync_seq<=? AND n.sync_from<>?"
                     + " ORDER BY n.sync_seq LIMIT ?",
                 new String[] {"" + since, "" + snapshot, exclude, "" + (limit + 1)})) {
@@ -214,6 +214,7 @@ public final class SqliteSyncStore implements SyncStore {
         r.folder = c.getString(14);
         r.plan = c.getString(15);
         r.trashed = c.getLong(16);
+        r.reminderTimes = c.getString(17);
         items.add(new Item(c.getLong(13), r));
       }
     }
@@ -439,6 +440,10 @@ public final class SqliteSyncStore implements SyncStore {
     v.put("suggestion_lead", -1);
     if (r.plan != null) v.put("plan", r.plan);
     if (r.trashed != null) v.put("trashed", r.trashed);
+    // Список дат нужен только серии «по списку»; запись без поля (компьютер) свой список не трогает.
+    if (r.repeat != ReminderPolicy.REPEAT_LIST || r.reminder == 0) v.put("reminder_times", "");
+    else if (r.reminderTimes != null)
+      v.put("reminder_times", ReminderPolicy.encodeTimes(ReminderPolicy.parseTimes(r.reminderTimes)));
     v.put("metadata", metadata);
     v.put("search_text", Metadata.searchText(Metadata.read(metadata)));
     v.put("sync_ts", r.ts);

@@ -127,6 +127,7 @@ public final class Reminders {
    */
   public static void scheduleEdited(Context c, Note before, Note after) {
     if (after == null) return;
+    // Правка дальних дат списка текущее событие не трогает: отложенное оповещение остаётся.
     if (before == null || before.reminder != after.reminder || before.repeat != after.repeat)
       cancel(c, after.id);
     schedule(c, after);
@@ -153,9 +154,12 @@ public final class Reminders {
 
   /** Передвигает повторяющееся напоминание на ближайшее будущее время и ставит будильник. */
   private static void advance(Context c, Note n) {
+    long now = System.currentTimeMillis();
+    // Серия по списку дат берёт следующую дату из списка, остальные — по правилу повтора.
     long next =
-        ReminderPolicy.nextOccurrence(
-            n.reminder, n.repeat, System.currentTimeMillis(), ZoneId.systemDefault());
+        n.repeat == ReminderPolicy.REPEAT_LIST
+            ? ReminderPolicy.nextInList(n.reminder, ReminderPolicy.parseTimes(n.reminderTimes), now)
+            : ReminderPolicy.nextOccurrence(n.reminder, n.repeat, now, ZoneId.systemDefault());
     if (next <= n.reminder) return;
     try (Store store = new Store(c)) {
       if (!store.advanceReminder(n.id, n.reminder, next)) return;

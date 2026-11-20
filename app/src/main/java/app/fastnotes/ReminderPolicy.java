@@ -18,7 +18,11 @@ public final class ReminderPolicy {
       REPEAT_DAILY = 1,
       REPEAT_WEEKLY = 2,
       REPEAT_MONTHLY = 3,
-      REPEAT_YEARLY = 4;
+      REPEAT_YEARLY = 4,
+      /** Серия по списку дат: в {@code notes.reminder_times} лежат все даты, в {@code reminder} — ближайшая. */
+      REPEAT_LIST = 5;
+  /** Сколько дат может быть у одной заметки. */
+  public static final int MAX_TIMES = 40;
   public static final int DIGEST_DEFAULT_MINUTES = 8 * 60;
   /** Допустимые значения «напомнить за N минут»: от момента события до недели. */
   public static final int[] LEADS = {0, 5, 10, 15, 30, 60, 120, 1440, 2880, 4320, 10080};
@@ -104,14 +108,15 @@ public final class ReminderPolicy {
       case REPEAT_WEEKLY -> "Каждую неделю";
       case REPEAT_MONTHLY -> "Каждый месяц";
       case REPEAT_YEARLY -> "Каждый год";
+      case REPEAT_LIST -> "По списку дат";
       default -> "Не повторять";
     };
   }
 
   /**
    * Ближайшее повторение строго после {@code now}, с тем же временем суток. Если в месяце нет
-   * нужного числа (31-е, 29 февраля), берётся последний день месяца. Для {@link #REPEAT_NONE}
-   * возвращает исходное время.
+   * нужного числа (31-е, 29 февраля), берётся последний день месяца. Для {@link #REPEAT_NONE} и
+   * {@link #REPEAT_LIST} (у неё следующую дату даёт {@link #nextInList}) возвращает исходное время.
    */
   public static long nextOccurrence(long reminder, int mode, long now, ZoneId zone) {
     if (mode < REPEAT_DAILY || mode > REPEAT_YEARLY || reminder <= 0) return reminder;
@@ -128,6 +133,110 @@ public final class ReminderPolicy {
       if (next.toInstant().toEpochMilli() > now) break;
     }
     return next.toInstant().toEpochMilli();
+  }
+
+  // ---- Серия по списку дат (одна заметка — несколько дат) ----
+
+  /**
+   * Разбирает список дат {@code notes.reminder_times}: JSON-массив моментов в миллисекундах, например
+   * {@code [1793700000000,1793786400000]}. Нечисла и неположительные значения отбрасываются, повторы
+   * убираются, даты сортируются, остаются не больше {@link #MAX_TIMES} самых ранних. Пустая или
+   * повреждённая строка — пустой список.
+   */
+  public static long[] parseTimes(String raw) {
+    if (raw == null) return new long[0];
+    String text = raw.trim();
+    if (text.startsWith("[")) text = text.substring(1);
+    if (text.endsWith("]")) text = text.substring(0, text.length() - 1);
+    java.util.TreeSet<Long> set = new java.util.TreeSet<>();
+    for (String part : text.split(",")) {
+      String p = part.trim();
+      if (p.isEmpty()) continue;
+      try {
+        long t = Long.parseLong(p);
+        if (t > 0) set.add(t);
+      } catch (NumberFormatException e) {
+        // мусор пропускаем
+      }
+    }
+    long[] out = new long[Math.min(set.size(), MAX_TIMES)];
+    int i = 0;
+    for (long t : set) {
+      if (i >= out.length) break;
+      out[i++] = t;
+    }
+    return out;
+  }
+
+  /** Обратное к {@link #parseTimes}: упорядоченный массив без повторов; пустой список — "". */
+  public static String encodeTimes(long[] times) {
+    long[] clean = parseTimes(join(times));
+    return clean.length == 0 ? "" : "[" + join(clean) + "]";
+  }
+
+  private static String join(long[] times) {
+    StringBuilder out = new StringBuilder();
+    if (times != null)
+      for (long t : times) {
+        if (out.length() > 0) out.append(',');
+        out.append(t);
+      }
+    return out.toString();
+  }
+
+  /**
+   * Следующая дата серии после наступившей: самая ранняя из списка позже и события {@code reminder},
+   * и {@code now} (промежуточные даты, пропущенные при выключенном телефоне, не догоняются). Если
+   * дат впереди нет, серия закончилась — возвращается {@code reminder}.
+   */
+  public static long nextInList(long reminder, long[] times, long now) {
+    long after = Math.max(reminder, now);
+    for (long t : times) if (t > after) return t;
+    return reminder;
+  }
+
+  /**
+   * Какая дата должна стоять в {@code reminder} для списка: ближайшая будущая; если все прошли —
+   * последняя; пустой список — 0 (напоминания нет).
+   */
+  public static long currentInList(long[] times, long now) {
+    if (times.length == 0) return 0;
+    for (long t : times) if (t > now) return t;
+    return times[times.length - 1];
+  }
+
+  /** Список с добавленной датой (без повтора). */
+  public static long[] withTime(long[] times, long at) {
+    long[] out = java.util.Arrays.copyOf(times, times.length + 1);
+    out[times.length] = at;
+    return parseTimes(join(out));
+  }
+
+  /** Список без даты {@code at}. */
+  public static long[] withoutTime(long[] times, long at) {
+    return java.util.Arrays.stream(times).filter(t -> t != at).toArray();
+  }
+
+  /** Сколько дат списка ещё впереди. */
+  public static int remaining(long[] times, long now) {
+    int count = 0;
+    for (long t : times) if (t > now) count++;
+    return count;
+  }
+
+  /** «1 дата», «3 даты», «5 дат». */
+  public static String dateCount(int count) {
+    int hundreds = count % 100, units = count % 10;
+    String word =
+        hundreds >= 11 && hundreds <= 14
+            ? "дат"
+            : units == 1 ? "дата" : units >= 2 && units <= 4 ? "даты" : "дат";
+    return count + " " + word;
+  }
+
+  /** Повторяется ли напоминание по правилу (каждый день … каждый год), а не по списку дат. */
+  public static boolean periodic(int mode) {
+    return mode >= REPEAT_DAILY && mode <= REPEAT_YEARLY;
   }
 
   /**

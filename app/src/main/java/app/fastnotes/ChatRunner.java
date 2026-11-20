@@ -256,6 +256,15 @@ public final class ChatRunner {
                     answer.draft = null;
                   }
                 }
+                if (answer.reminders != null && query.contains(ReminderBatch.REQUEST)) {
+                  // Запрос «напоминания по датам из заметки»: даты можно будет добавить в неё.
+                  var sourcePrefs = app.getSharedPreferences("settings", 0);
+                  long source = sourcePrefs.getLong("reminderSource", 0);
+                  if (source > 0) {
+                    answer.reminders.put("note", source);
+                    sourcePrefs.edit().remove("reminderSource").apply();
+                  }
+                }
                 store.message(
                     chat,
                     "assistant",

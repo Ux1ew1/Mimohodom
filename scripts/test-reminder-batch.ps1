@@ -6,6 +6,7 @@ if (-not (Test-Path $jsonJar)) { throw 'Test dependency missing: org.json:json:2
 New-Item -ItemType Directory -Force "$projectRoot/.tools/reminder-batch-tests" | Out-Null
 $sources = @(
   "$projectRoot/app/src/main/java/app/fastnotes/ReminderBatch.java",
+  "$projectRoot/app/src/main/java/app/fastnotes/ReminderPolicy.java",
   "$projectRoot/tests/ReminderBatchTest.java"
 )
 & "$javaRoot/bin/javac.exe" -encoding UTF-8 -cp $jsonJar -d "$projectRoot/.tools/reminder-batch-tests" $sources

@@ -306,4 +306,26 @@ const meta = db => db.prepare('SELECT * FROM sync_meta WHERE id=1').get();
   db.prepare('DELETE FROM notes WHERE id=1').run();
   check(db.prepare("SELECT count(*) c FROM tombstones WHERE kind='note'").get().c === 1, 'удаление насовсем оставляет надгробие');
 }
+
+// ---- Несколько дат у заметки (SQLite 15): правка списка уходит в обмен ----
+{
+  const db = build(false);
+  runSync(db);
+  const times = statements(method('void addReminderTimes(SQLiteDatabase db)'));
+  check(times.length === 2 && times[0].sql.includes("reminder_times TEXT NOT NULL DEFAULT ''"), 'столбец и триггер списка дат');
+  for (const st of times) db.exec(st.sql);
+  db.exec(times[1].sql); // повторно безопасно
+  db.prepare('INSERT INTO notes(title,body,created,updated,metadata,search_text) VALUES(?,?,?,?,?,?)').run('Курсы', 'x', 10, 10, '{}', 'x');
+  stampPending(db);
+  check(db.prepare('SELECT reminder_times t FROM notes WHERE id=1').get().t === '', 'у старых заметок списка нет');
+  const before = db.prepare('SELECT * FROM notes WHERE id=1').get();
+  db.prepare('UPDATE notes SET reminder_times=? WHERE id=1').run('[100,200]');
+  const after = db.prepare('SELECT * FROM notes WHERE id=1').get();
+  check(after.sync_seq > before.sync_seq && after.updated === before.updated, 'правка списка дат: новая метка обмена');
+  const seq = meta(db).seq;
+  db.prepare('UPDATE notes SET reminder_times=? WHERE id=1').run('[100,200]');
+  check(meta(db).seq === seq, 'тот же список не уходит повторно');
+  db.prepare('UPDATE notes SET reminder_times=?,sync_seq=?,sync_from=? WHERE id=1').run('[300]', 9999, 'peer');
+  check(meta(db).seq === seq, 'список от соседа не перенумеровывается');
+}
 console.log(`sync-sql OK (${count} проверок)`);

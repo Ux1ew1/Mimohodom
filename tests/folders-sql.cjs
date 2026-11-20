@@ -122,6 +122,13 @@ check(db.prepare("SELECT trashed FROM notes WHERE id=1").get().trashed === 0, "O
 check(method(store, "void onCreate(SQLiteDatabase db)").includes("addTrash(db)"), "Fresh install also gets trash");
 check(/oldV < 13\)\s*addTrash\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 12 -> 13 adds trash");
 // Версия 14: журнал агента (AgentLog), проверяется в tests/agent-log-sql.cjs.
-check(/super\(context, name, null, 14\)/.test(store), "Database version is 14");
+// Версия 15: все даты серии «по списку» (триггер обмена — в tests/sync-sql.cjs).
+const times = statements(method(store, "void addReminderTimes(SQLiteDatabase db)"));
+check(times.length === 1 && times[0].includes("reminder_times TEXT NOT NULL DEFAULT ''"), "Read actual reminder times migration SQL");
+db.exec(times[0]);
+check(db.prepare("SELECT reminder_times FROM notes WHERE id=1").get().reminder_times === "", "Old notes have no date list");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addReminderTimes(db)"), "Fresh install also gets date lists");
+check(/oldV < 15\)\s*addReminderTimes\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 14 -> 15 adds date lists");
+check(/super\(context, name, null, 15\)/.test(store), "Database version is 15");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

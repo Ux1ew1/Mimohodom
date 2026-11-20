@@ -16,6 +16,11 @@ public final class Note {
   public int suggestionLead = -1;
   /** Номер папки или {@link FolderPolicy#ALL}, если заметка лежит только в «Все заметки». */
   public long folder;
+  /**
+   * Все даты серии {@link ReminderPolicy#REPEAT_LIST} (JSON-массив моментов, {@link
+   * ReminderPolicy#parseTimes}); у остальных заметок пусто.
+   */
+  public String reminderTimes = "";
   /** Когда заметку положили в корзину; 0 — не в корзине. */
   public long trashed;
 

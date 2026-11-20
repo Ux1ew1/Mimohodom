@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 14);
+    super(context, name, null, 15);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -82,6 +82,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addPlans(db);
     addTrash(db);
     AgentLog.create(db);
+    addReminderTimes(db);
   }
 
   @Override
@@ -101,6 +102,27 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 12) addPlans(db);
     if (oldV < 13) addTrash(db);
     if (oldV < 14) AgentLog.create(db);
+    if (oldV < 15) addReminderTimes(db);
+  }
+
+  /**
+   * Одна заметка — несколько дат: все даты серии {@link ReminderPolicy#REPEAT_LIST} (JSON-массив
+   * моментов), в {@code reminder} — ближайшая. Правка списка уходит в обмен, как и остальные поля
+   * напоминания. Безопасно вызывается повторно.
+   */
+  private void addReminderTimes(SQLiteDatabase db) {
+    if (!hasColumn(db, "reminder_times"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN reminder_times TEXT NOT NULL DEFAULT ''");
+    String stamp =
+        "UPDATE sync_meta SET seq=seq+1,hlc=max(hlc+1,CAST((julianday('now')-2440587.5)*86400000"
+            + " AS INTEGER)) WHERE id=1;";
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS notes_sync_times AFTER UPDATE OF reminder_times ON notes WHEN"
+            + " new.sync_seq=old.sync_seq AND new.reminder_times<>old.reminder_times BEGIN "
+            + stamp
+            + "UPDATE notes SET uid=CASE WHEN new.uid='' THEN lower(hex(randomblob(16))) ELSE"
+            + " new.uid END,sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq"
+            + " FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
   }
 
   /**
@@ -427,6 +449,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (leadColumn >= 0) n.suggestionLead = c.getInt(leadColumn);
     int trashColumn = c.getColumnIndex("trashed");
     if (trashColumn >= 0) n.trashed = c.getLong(trashColumn);
+    int timesColumn = c.getColumnIndex("reminder_times");
+    if (timesColumn >= 0) n.reminderTimes = c.getString(timesColumn);
     return n;
   }
 
@@ -543,8 +567,19 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  /** Как {@link #save(long, String, String, long, int, int, String)}; список дат берётся у заметки. */
   public long save(
       long id, String title, String body, long reminder, int repeat, int lead) {
+    Note existing = id == 0 ? null : note(id);
+    return save(id, title, body, reminder, repeat, lead, existing == null ? "" : existing.reminderTimes);
+  }
+
+  /**
+   * Сохраняет заметку. {@code times} — все даты серии {@link ReminderPolicy#REPEAT_LIST}; у других
+   * повторов и без напоминания список очищается.
+   */
+  public long save(
+      long id, String title, String body, long reminder, int repeat, int lead, String times) {
     ContentValues v = new ContentValues();
     long now = System.currentTimeMillis();
     Note old = id == 0 ? null : note(id);
@@ -564,6 +599,11 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("reminder", reminder);
     v.put("repeat_mode", reminder == 0 ? 0 : repeat);
     v.put("lead_minutes", reminder == 0 ? -1 : lead);
+    v.put(
+        "reminder_times",
+        reminder != 0 && repeat == ReminderPolicy.REPEAT_LIST
+            ? ReminderPolicy.encodeTimes(ReminderPolicy.parseTimes(times))
+            : "");
     JSONObject metadata =
         Metadata.base(
             Note.autoTitle(title, body), body.trim(), old == null ? now : old.created, now);
@@ -1162,12 +1202,17 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  /** Как принять пачку дат: по заметке на дату, одна новая заметка со всеми датами, в исходную. */
+  public static final int BATCH_SEPARATE = 0, BATCH_ONE = 1, BATCH_INTO = 2;
+
   /**
-   * Создаёт по заметке с напоминанием на каждую предложенную дату из сообщения, кроме отмеченных
-   * как лишние (номера в {@code skip}). Одна транзакция: либо все заметки, либо ничего. Возвращает
-   * созданные заметки; будильники ставит вызывающий.
+   * Принимает предложенные даты из сообщения, кроме отмеченных как лишние (номера в {@code skip}):
+   * {@link #BATCH_SEPARATE} — по заметке с напоминанием на каждую дату; {@link #BATCH_ONE} — одна
+   * новая заметка со всеми датами (серия по списку); {@link #BATCH_INTO} — даты добавляются в
+   * заметку, из которой пришёл запрос. Одна транзакция: либо всё, либо ничего. Возвращает созданные
+   * или изменённые заметки; будильники ставит вызывающий.
    */
-  public List<Note> acceptReminders(long message, java.util.Set<Integer> skip) {
+  public List<Note> acceptReminders(long message, java.util.Set<Integer> skip, int mode) {
     SQLiteDatabase db = getWritableDatabase();
     db.beginTransaction();
     try (Cursor c =
@@ -1182,19 +1227,56 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
       JSONArray sources = new JSONArray(c.getString(0));
       List<Note> created = new ArrayList<>();
       long now = System.currentTimeMillis();
-      for (int i = 0; i < items.size(); i++) {
-        ReminderBatch.Item item = items.get(i);
-        if (skip.contains(i) || item.at <= now) continue;
-        long id = save(0, item.title, item.body.isEmpty() ? item.title : item.body, item.at);
-        Note note = note(id);
-        created.add(note);
-        sources.put(new JSONObject().put("id", id).put("title", note.title));
+      List<ReminderBatch.Item> chosen = new ArrayList<>();
+      for (int i = 0; i < items.size(); i++)
+        if (!skip.contains(i) && items.get(i).at > now) chosen.add(items.get(i));
+      if (chosen.isEmpty()) throw new IllegalStateException("Нет напоминаний с будущим временем");
+      String outcome;
+      if (mode == BATCH_INTO) {
+        Note target = note(ReminderBatch.source(draft));
+        if (target == null || target.trashed > 0 || !ReminderBatch.canMerge(target.repeat))
+          throw new IllegalStateException("Заметку удалили или у неё свой повтор");
+        long[] times =
+            ReminderBatch.mergedTimes(
+                target.reminder, target.repeat, target.reminderTimes, ReminderBatch.times(chosen), now);
+        boolean list = times.length > 1;
+        save(
+            target.id,
+            target.title,
+            target.body,
+            list ? ReminderPolicy.currentInList(times, now) : times[0],
+            list ? ReminderPolicy.REPEAT_LIST : ReminderPolicy.REPEAT_NONE,
+            target.lead,
+            ReminderPolicy.encodeTimes(times));
+        created.add(note(target.id));
+        outcome = "Добавлено дат в заметку: " + chosen.size() + ".";
+      } else if (mode == BATCH_ONE && chosen.size() > 1) {
+        String[] text = ReminderBatch.combined(chosen, java.time.ZoneId.systemDefault());
+        long[] times = ReminderBatch.times(chosen);
+        long id =
+            save(
+                0,
+                text[0],
+                text[1],
+                ReminderPolicy.currentInList(times, now),
+                ReminderPolicy.REPEAT_LIST,
+                -1,
+                ReminderPolicy.encodeTimes(times));
+        created.add(note(id));
+        outcome = "Создана заметка с напоминаниями: " + ReminderPolicy.dateCount(times.length) + ".";
+      } else {
+        for (ReminderBatch.Item item : chosen) {
+          long id = save(0, item.title, item.body.isEmpty() ? item.title : item.body, item.at);
+          created.add(note(id));
+        }
+        outcome = "Создано напоминаний: " + created.size() + ".";
       }
-      if (created.isEmpty()) throw new IllegalStateException("Нет напоминаний с будущим временем");
+      for (Note note : created)
+        sources.put(new JSONObject().put("id", note.id).put("title", note.title));
       ContentValues v = new ContentValues();
       v.put("draft", "");
       v.put("sources", sources.toString());
-      v.put("body", c.getString(2) + "\n\nСоздано напоминаний: " + created.size() + ".");
+      v.put("body", c.getString(2) + "\n\n" + outcome);
       db.update("messages", v, "id=?", new String[] {"" + message});
       db.setTransactionSuccessful();
       return created;

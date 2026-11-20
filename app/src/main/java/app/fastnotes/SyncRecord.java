@@ -24,6 +24,11 @@ public final class SyncRecord {
   public String plan;
   /** Когда заметку положили в корзину (0 — не в корзине); null — поля не было в записи. */
   public Long trashed;
+  /**
+   * Все даты серии «по списку дат» (JSON-массив моментов, Android 0.10.10+); null — поля не было в
+   * записи: свой список не трогаем, пока повтор остаётся «по списку».
+   */
+  public String reminderTimes;
   // папка
   public String name = "", key = "";
   public boolean auto;
@@ -92,7 +97,8 @@ public final class SyncRecord {
           .put("aiChecked", aiChecked)
           .put("metadata", metadata)
           .putOpt("plan", plan)
-          .putOpt("trashed", trashed);
+          .putOpt("trashed", trashed)
+          .putOpt("reminderTimes", reminderTimes);
     } catch (JSONException e) {
       throw new IllegalStateException(e);
     }
@@ -123,6 +129,7 @@ public final class SyncRecord {
     r.metadata = o.optString("metadata", "");
     r.plan = o.has("plan") ? o.optString("plan", "") : null;
     r.trashed = o.has("trashed") ? Math.max(0, o.optLong("trashed", 0)) : null;
+    r.reminderTimes = o.has("reminderTimes") ? o.optString("reminderTimes", "") : null;
     r.name = o.optString("name", "");
     r.key = o.optString("key", "");
     r.auto = o.optBoolean("auto", false);

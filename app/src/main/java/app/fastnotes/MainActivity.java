@@ -140,6 +140,8 @@ public final class MainActivity extends Activity
   private long editing = 0, reminder = 0, chat = 0;
   /** Повтор и свой интервал напоминания в открытом редакторе (-1 — общая настройка). */
   private int repeatMode = 0, leadChoice = -1;
+  /** Все даты серии «по списку» в открытом редакторе (JSON, {@link ReminderPolicy#parseTimes}). */
+  private String reminderTimes = "";
   /** Какая из картинок открытой заметки выбрана в ленте; {@code selectedImageFor} — её заметка. */
   private int selectedImage = 0;
   /** Положение ленты миниатюр заметки: перерисовка экрана не должна возвращать её в начало. */
@@ -1496,6 +1498,7 @@ public final class MainActivity extends Activity
           .putLong(p + "reminder", reminder)
           .putLong(p + "folder", editFolder)
           .putInt(p + "repeat", repeatMode)
+          .putString(p + "times", reminderTimes)
           .putInt(p + "lead", leadChoice)
           .putString(p + "image", noteImage)
           .apply();
@@ -1513,6 +1516,7 @@ public final class MainActivity extends Activity
         .remove(p + "reminder")
         .remove(p + "folder")
         .remove(p + "repeat")
+        .remove(p + "times")
         .remove(p + "lead")
         .remove(p + "image")
         .apply();
@@ -1655,6 +1659,7 @@ public final class MainActivity extends Activity
     sheet.addView(footerRule, new LinearLayout.LayoutParams(-1, dp(1)));
     reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
     repeatMode = prefs.getInt(p + "repeat", note == null ? 0 : note.repeat);
+    reminderTimes = prefs.getString(p + "times", note == null ? "" : note.reminderTimes);
     leadChoice = prefs.getInt(p + "lead", note == null ? -1 : note.lead);
     editFolder = prefs.getLong(p + "folder", note == null ? folder : note.folder);
     if (editFolder != FolderPolicy.ALL && !new FolderStore(store).exists(editFolder))
@@ -2021,6 +2026,7 @@ public final class MainActivity extends Activity
       if (old == null) return true;
       reconcileReminder(old);
       int repeatNow = reminder == 0 ? 0 : repeatMode, leadNow = reminder == 0 ? -1 : leadChoice;
+      String timesNow = timesFor(repeatNow);
       // Пока заметка была открыта, её могли изменить фоновая проверка ИИ (название, предложение
       // напоминания) или помощник в чате (итог). Поэтому сравниваем с тем, что загрузили в
       // редактор, и записываем только поля, которые изменил пользователь; остальное берём из базы.
@@ -2028,8 +2034,14 @@ public final class MainActivity extends Activity
       boolean titleEdited = !title.equals(base.title) && !title.equals(old.title);
       boolean bodyEdited = !body.equals(base.body) && !body.equals(old.body);
       boolean reminderEdited =
-          !(reminder == base.reminder && repeatNow == base.repeat && leadNow == base.lead)
-              && !(reminder == old.reminder && repeatNow == old.repeat && leadNow == old.lead);
+          !(reminder == base.reminder
+                  && repeatNow == base.repeat
+                  && leadNow == base.lead
+                  && timesNow.equals(timesFor(base)))
+              && !(reminder == old.reminder
+                  && repeatNow == old.repeat
+                  && leadNow == old.lead
+                  && timesNow.equals(timesFor(old)));
       boolean imageEdited = !noteImage.equals(base.image) && !noteImage.equals(old.image);
       boolean folderEdited = editFolder != base.folder && editFolder != old.folder;
       if (folderEdited) new FolderStore(store).move(editing, editFolder);
@@ -2040,7 +2052,8 @@ public final class MainActivity extends Activity
             bodyEdited ? body : old.body,
             reminderEdited ? reminder : old.reminder,
             reminderEdited ? repeatMode : old.repeat,
-            reminderEdited ? leadChoice : old.lead);
+            reminderEdited ? leadChoice : old.lead,
+            reminderEdited ? timesNow : old.reminderTimes);
         if (imageEdited) {
           store.image(editing, noteImage);
           releaseImage(old.image, noteImage);
@@ -2054,6 +2067,7 @@ public final class MainActivity extends Activity
       Note shown = new Note(editing, title, body, old.created, old.updated, reminder);
       shown.repeat = repeatNow;
       shown.lead = leadNow;
+      shown.reminderTimes = timesNow;
       shown.image = noteImage;
       shown.folder = editFolder;
       editorBase = shown;
@@ -2078,7 +2092,95 @@ public final class MainActivity extends Activity
   }
 
   private String reminderLabel() {
-    return reminder == 0 ? "" : date(reminder) + (repeatMode != 0 ? "  ↻" : "");
+    if (reminder == 0) return "";
+    if (repeatMode == ReminderPolicy.REPEAT_LIST)
+      return date(reminder) + moreDates(repeatMode, reminderTimes);
+    return date(reminder) + (repeatMode != 0 ? "  ↻" : "");
+  }
+
+  /** « +2» после даты: сколько ещё дат серии впереди; пусто, если серии нет. */
+  private String moreDates(int repeat, String times) {
+    if (repeat != ReminderPolicy.REPEAT_LIST) return "";
+    int left = ReminderPolicy.remaining(ReminderPolicy.parseTimes(times), System.currentTimeMillis());
+    return left > 1 ? "  +" + (left - 1) : "";
+  }
+
+  /** Список дат для сохранения: только у серии по списку, иначе пусто. */
+  private String timesFor(int repeat) {
+    return repeat == ReminderPolicy.REPEAT_LIST ? ReminderPolicy.encodeTimes(editorTimes()) : "";
+  }
+
+  private static String timesFor(Note n) {
+    return n.repeat == ReminderPolicy.REPEAT_LIST
+        ? ReminderPolicy.encodeTimes(ReminderPolicy.parseTimes(n.reminderTimes))
+        : "";
+  }
+
+  /** Даты открытой заметки: список серии или единственное напоминание. */
+  private long[] editorTimes() {
+    if (repeatMode == ReminderPolicy.REPEAT_LIST) {
+      long[] times = ReminderPolicy.parseTimes(reminderTimes);
+      // Список мог прийти пустым (старая запись): текущее напоминание в нём всегда есть.
+      return reminder > 0 ? ReminderPolicy.withTime(times, reminder) : times;
+    }
+    return reminder > 0 ? new long[] {reminder} : new long[0];
+  }
+
+  /** Ставит даты в редактор: одна — обычное напоминание, несколько — серия по списку дат. */
+  private void setEditorTimes(long[] times) {
+    if (times.length == 0) {
+      reminder = 0;
+      repeatMode = 0;
+      leadChoice = -1;
+      reminderTimes = "";
+    } else if (times.length == 1) {
+      reminder = times[0];
+      if (repeatMode == ReminderPolicy.REPEAT_LIST) repeatMode = 0;
+      reminderTimes = "";
+    } else {
+      reminder = ReminderPolicy.currentInList(times, System.currentTimeMillis());
+      repeatMode = ReminderPolicy.REPEAT_LIST;
+      reminderTimes = ReminderPolicy.encodeTimes(times);
+    }
+    refreshReminder();
+    stash();
+  }
+
+  private void addReminderDate(long at) {
+    long[] times = ReminderPolicy.withTime(editorTimes(), at);
+    setEditorTimes(times);
+    if (times.length > 1) toast("Напоминания: " + ReminderPolicy.dateCount(times.length));
+  }
+
+  /** Все даты серии с галочками: снятая галочка убирает дату, «Добавить» — ещё одну. */
+  private void editReminderDates() {
+    long[] times = editorTimes();
+    long now = System.currentTimeMillis();
+    java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+    String[] labels = new String[times.length];
+    boolean[] keep = new boolean[times.length];
+    for (int i = 0; i < times.length; i++) {
+      labels[i] = ReminderBatch.label(times[i], zone) + (times[i] <= now ? " · прошло" : "");
+      keep[i] = true;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Даты напоминания")
+        .setMultiChoiceItems(labels, keep, (d, w, checked) -> keep[w] = checked)
+        .setNegativeButton("Отмена", null)
+        .setNeutralButton("Добавить", (d, w) -> datePicker(this::addReminderDate))
+        .setPositiveButton(
+            "Сохранить",
+            (d, w) -> {
+              long[] kept = new long[0];
+              for (int i = 0; i < times.length; i++)
+                if (keep[i]) kept = ReminderPolicy.withTime(kept, times[i]);
+              if (kept.length > 0 && ReminderPolicy.remaining(kept, System.currentTimeMillis()) == 0) {
+                toast("Оставьте хотя бы одну будущую дату или уберите напоминание");
+                return;
+              }
+              setEditorTimes(kept);
+            })
+        .show();
   }
 
   /** « · напомнить за 2 дня» для предложения ИИ; пусто, если интервал не предложен. */
@@ -2107,7 +2209,9 @@ public final class MainActivity extends Activity
             ? "Добавить напоминание"
             : "Напоминание: "
                 + date(reminder)
-                + (repeatMode != 0 ? ". " + ReminderPolicy.repeatLabel(repeatMode) : ""));
+                + (repeatMode == ReminderPolicy.REPEAT_LIST
+                    ? ". Всего " + ReminderPolicy.dateCount(editorTimes().length)
+                    : repeatMode != 0 ? ". " + ReminderPolicy.repeatLabel(repeatMode) : ""));
   }
 
   /**
@@ -2123,9 +2227,11 @@ public final class MainActivity extends Activity
     if (!persistEditedNote()) return;
     hideKeyboard();
     String old = prefs.getString("chatDraft.0", "");
+    // Ответ на этот запрос предложит добавить даты в эту же заметку (ChatRunner).
     prefs
         .edit()
         .putString("chatDraft.0", old.trim().isEmpty() ? query : old.trim() + "\n\n" + query)
+        .putLong("reminderSource", editing)
         .apply();
     chat = 0;
     tab = 2;
@@ -2136,66 +2242,54 @@ public final class MainActivity extends Activity
   }
 
   private void pickReminder() {
-    if (bodyField != null && ReminderBatch.manyDates(bodyField.getText().toString())) {
-      String[] labels =
-          reminder != 0
-              ? new String[] {
-                "Изменить дату и время",
-                "Повтор: " + ReminderPolicy.repeatLabel(repeatMode).toLowerCase(new Locale("ru")),
-                "Напомнить за: " + leadChoiceLabel(),
-                "Добавить в календарь",
-                "Убрать напоминание",
-                "Напоминания по всем датам в тексте"
-              }
-              : new String[] {"Выбрать дату и время", "Напоминания по всем датам в тексте"};
-      new AlertDialog.Builder(this)
-          .setTitle("Напоминание")
-          .setItems(
-              labels,
-              (d, w) -> {
-                if (w == labels.length - 1) remindersFromText();
-                else if (reminder == 0) datePicker();
-                else if (w == 0) datePicker();
-                else if (w == 1) pickRepeat();
-                else if (w == 2) pickLead();
-                else if (w == 3) addToCalendar();
-                else {
-                  reminder = 0;
-                  repeatMode = 0;
-                  leadChoice = -1;
-                  refreshReminder();
-                  stash();
-                }
-              })
-          .show();
+    boolean many = bodyField != null && ReminderBatch.manyDates(bodyField.getText().toString());
+    if (reminder == 0 && !many) {
+      datePicker();
       return;
     }
-    if (reminder != 0) {
-      new AlertDialog.Builder(this)
-          .setTitle("Напоминание")
-          .setItems(
-              new String[] {
-                "Изменить дату и время",
-                "Повтор: " + ReminderPolicy.repeatLabel(repeatMode).toLowerCase(new Locale("ru")),
-                "Напомнить за: " + leadChoiceLabel(),
-                "Добавить в календарь",
-                "Убрать напоминание"
-              },
-              (d, w) -> {
-                if (w == 0) datePicker();
-                else if (w == 1) pickRepeat();
-                else if (w == 2) pickLead();
-                else if (w == 3) addToCalendar();
-                else {
-                  reminder = 0;
-                  repeatMode = 0;
-                  leadChoice = -1;
-                  refreshReminder();
-                  stash();
-                }
-              })
-          .show();
-    } else datePicker();
+    List<String> labels = new ArrayList<>();
+    List<Runnable> actions = new ArrayList<>();
+    Runnable clear = () -> setEditorTimes(new long[0]);
+    Locale ru = new Locale("ru");
+    if (reminder == 0) {
+      labels.add("Выбрать дату и время");
+      actions.add(this::datePicker);
+    } else if (repeatMode == ReminderPolicy.REPEAT_LIST) {
+      labels.add("Даты: " + ReminderPolicy.dateCount(editorTimes().length));
+      actions.add(this::editReminderDates);
+      labels.add("Добавить дату");
+      actions.add(() -> datePicker(this::addReminderDate));
+      labels.add("Напомнить за: " + leadChoiceLabel());
+      actions.add(this::pickLead);
+      labels.add("Добавить в календарь");
+      actions.add(this::addToCalendar);
+      labels.add("Убрать все напоминания");
+      actions.add(clear);
+    } else {
+      labels.add("Изменить дату и время");
+      actions.add(this::datePicker);
+      if (!ReminderPolicy.periodic(repeatMode)) {
+        // Вторая дата превращает напоминание в серию по списку дат (одна заметка — несколько дат).
+        labels.add("Добавить ещё дату");
+        actions.add(() -> datePicker(this::addReminderDate));
+      }
+      labels.add("Повтор: " + ReminderPolicy.repeatLabel(repeatMode).toLowerCase(ru));
+      actions.add(this::pickRepeat);
+      labels.add("Напомнить за: " + leadChoiceLabel());
+      actions.add(this::pickLead);
+      labels.add("Добавить в календарь");
+      actions.add(this::addToCalendar);
+      labels.add("Убрать напоминание");
+      actions.add(clear);
+    }
+    if (many) {
+      labels.add("Напоминания по всем датам в тексте");
+      actions.add(this::remindersFromText);
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Напоминание")
+        .setItems(labels.toArray(new String[0]), (d, w) -> actions.get(w).run())
+        .show();
   }
 
   /**
@@ -2268,6 +2362,16 @@ public final class MainActivity extends Activity
   }
 
   private void datePicker() {
+    datePicker(
+        at -> {
+          reminder = at;
+          refreshReminder();
+          stash();
+        });
+  }
+
+  /** Выбор даты и времени в будущем; выбранный момент получает {@code picked}. */
+  private void datePicker(java.util.function.LongConsumer picked) {
     Calendar cal = Calendar.getInstance();
     cal.setTimeInMillis(
         reminder > System.currentTimeMillis() ? reminder : System.currentTimeMillis() + 3600000);
@@ -2287,9 +2391,7 @@ public final class MainActivity extends Activity
                           toast("Выберите время в будущем");
                           return;
                         }
-                        reminder = cal.getTimeInMillis();
-                        refreshReminder();
-                        stash();
+                        picked.accept(cal.getTimeInMillis());
                         if (Build.VERSION.SDK_INT >= 33
                             && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                                 != PackageManager.PERMISSION_GRANTED)
@@ -2345,7 +2447,8 @@ public final class MainActivity extends Activity
       return;
     }
     try {
-      long id = store.save(editing, title, body, reminder, repeatMode, leadChoice);
+      long id =
+          store.save(editing, title, body, reminder, repeatMode, leadChoice, timesFor(repeatMode));
       Note placed = store.note(id);
       if (placed != null && placed.folder != editFolder) new FolderStore(store).move(id, editFolder);
       store.image(id, noteImage);
@@ -3108,7 +3211,9 @@ public final class MainActivity extends Activity
     }
     TextView stamp =
         text(
-            n.reminder > 0 ? "Напомнить\n" + date(n.reminder) : shortDate(n.created),
+            n.reminder > 0
+                ? "Напомнить\n" + date(n.reminder) + moreDates(n.repeat, n.reminderTimes)
+                : shortDate(n.created),
             11,
             n.reminder > 0 ? GREEN : MUTED);
     if (n.image.isEmpty()) card.addView(stamp);
@@ -4185,15 +4290,39 @@ public final class MainActivity extends Activity
     List<ReminderBatch.Item> items = ReminderBatch.items(draft);
     java.time.ZoneId zone = java.time.ZoneId.systemDefault();
     Set<Integer> skip = new HashSet<>();
+    // Куда лягут даты: в заметку-источник запроса, одной новой заметкой или отдельными заметками.
+    Note target = ReminderBatch.source(draft) > 0 ? store.note(ReminderBatch.source(draft)) : null;
+    boolean into = target != null && target.trashed == 0 && ReminderBatch.canMerge(target.repeat);
+    boolean separate = ReminderBatch.separate(draft);
+    int primaryMode = into ? Store.BATCH_INTO : separate ? Store.BATCH_SEPARATE : Store.BATCH_ONE;
+    int otherMode = primaryMode == Store.BATCH_SEPARATE ? Store.BATCH_ONE : Store.BATCH_SEPARATE;
     gap(bubble, 6);
-    chatNote(bubble, "Можно создать напоминания. Нажмите на строку, чтобы исключить её");
+    chatNote(
+        bubble,
+        (into
+                ? "Даты добавятся в заметку «" + target.title + "»"
+                : separate
+                    ? "Похоже, это разные дела: по заметке на дату"
+                    : "Все даты — в одной заметке, напоминание придёт к каждой")
+            + ". Нажмите на строку, чтобы исключить её");
     gap(bubble, 4);
+    int[] chosenMode = {primaryMode};
     TextView create = compactButton("", true, () -> {});
+    TextView other = compactButton("", false, () -> {});
     Runnable refresh =
         () -> {
           int n = items.size() - skip.size();
-          create.setText(n == 0 ? "Ничего не выбрано" : "Создать: " + n);
+          create.setText(
+              n == 0
+                  ? "Ничего не выбрано"
+                  : primaryMode == Store.BATCH_INTO
+                      ? "Добавить в заметку: " + ReminderPolicy.dateCount(n)
+                      : primaryMode == Store.BATCH_ONE && n > 1
+                          ? "Одна заметка: " + ReminderPolicy.dateCount(n)
+                          : "Создать: " + n);
           create.setAlpha(n == 0 ? 0.5f : 1f);
+          other.setText(otherMode == Store.BATCH_ONE ? "Одной заметкой" : "Отдельными заметками");
+          other.setVisibility(n > 1 ? View.VISIBLE : View.GONE);
         };
     for (int i = 0; i < items.size(); i++) {
       ReminderBatch.Item item = items.get(i);
@@ -4228,27 +4357,49 @@ public final class MainActivity extends Activity
               + draft.optInt("skipped")
               + " (время уже прошло, повтор или неразборчиво)");
     gap(bubble, 6);
-    create.setOnClickListener(
-        v -> {
+    Runnable accept =
+        () -> {
           if (skip.size() >= items.size()) return;
           buzz(1);
+          int mode = chosenMode[0];
           try {
-            List<Note> made = store.acceptReminders(message, skip);
-            for (Note n : made) Reminders.schedule(getApplicationContext(), n);
+            Note before = mode == Store.BATCH_INTO ? store.note(target.id) : null;
+            List<Note> made = store.acceptReminders(message, skip, mode);
+            for (Note n : made)
+              if (before != null && n.id == before.id)
+                Reminders.scheduleEdited(getApplicationContext(), before, n);
+              else Reminders.schedule(getApplicationContext(), n);
             CalendarSync.runAsync(getApplicationContext());
             BackgroundAnalysis.enqueue(this);
             stash();
             render();
-            toast("Создано напоминаний: " + made.size());
+            toast(
+                mode == Store.BATCH_INTO
+                    ? "Даты добавлены в заметку"
+                    : made.size() == 1
+                        ? "Создана заметка с напоминаниями"
+                        : "Создано напоминаний: " + made.size());
             if (!Reminders.notificationsAllowed(this))
               toast("Уведомления выключены — напоминания не придут");
           } catch (Exception e) {
             toast("Не удалось создать напоминания или предложение уже обработано");
           }
+        };
+    create.setOnClickListener(
+        v -> {
+          chosenMode[0] = primaryMode;
+          accept.run();
+        });
+    other.setOnClickListener(
+        v -> {
+          chosenMode[0] = otherMode;
+          accept.run();
         });
     refresh.run();
+    bubble.addView(create, new LinearLayout.LayoutParams(-1, -2));
+    gap(bubble, 6);
     LinearLayout actions = row();
-    actions.addView(create, new LinearLayout.LayoutParams(0, -2, 1));
+    actions.addView(other, new LinearLayout.LayoutParams(0, -2, 1));
     actions.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
     actions.addView(
         compactButton(
@@ -4522,21 +4673,35 @@ public final class MainActivity extends Activity
       toast("Это время уже прошло");
       return;
     }
-    new AlertDialog.Builder(this)
-        .setTitle("Напомнить " + date(n.at) + "?")
-        .setMessage(
-            n.text + (reminder > 0 ? "\n\nТекущее напоминание заметки заменится." : ""))
-        .setNegativeButton("Отмена", null)
-        .setPositiveButton(
-            "Напомнить",
-            (d, w) -> {
-              reminder = n.at;
-              repeatMode = 0; // время из плана — разовое событие, прежний повтор к нему не относится
-              refreshReminder();
-              stash();
-              toast("Напоминание сохранится вместе с заметкой");
-            })
-        .show();
+    // К разовому напоминанию или списку дат время из плана можно добавить ещё одной датой.
+    boolean canAdd = reminder > 0 && !ReminderPolicy.periodic(repeatMode);
+    AlertDialog.Builder dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("Напомнить " + date(n.at) + "?")
+            .setMessage(
+                n.text
+                    + (canAdd
+                        ? "\n\nМожно добавить к датам заметки или заменить их."
+                        : reminder > 0 ? "\n\nТекущее напоминание заметки заменится." : ""))
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton(
+                canAdd ? "Заменить" : "Напомнить",
+                (d, w) -> {
+                  // Время из плана — разовое событие, прежний повтор и список к нему не относятся.
+                  setEditorTimes(new long[] {n.at});
+                  repeatMode = 0;
+                  refreshReminder();
+                  stash();
+                  toast("Напоминание сохранится вместе с заметкой");
+                });
+    if (canAdd)
+      dialog.setNeutralButton(
+          "Добавить к датам",
+          (d, w) -> {
+            addReminderDate(n.at);
+            toast("Даты сохранятся вместе с заметкой");
+          });
+    dialog.show();
   }
 
   private void savePlan(long noteId, PlanTree plan, Runnable refresh) {
@@ -7264,6 +7429,7 @@ public final class MainActivity extends Activity
                         .put("updated", n.updated)
                         .put("reminder", n.reminder)
                         .put("repeat", n.repeat)
+                        .put("reminderTimes", n.reminderTimes)
                         .put("lead", n.lead)
                         .put("folder", n.folder)
                         .put("plan", exportStore.plan(n.id))

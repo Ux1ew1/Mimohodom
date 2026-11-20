@@ -84,6 +84,12 @@ public final class SyncTest {
             && back.metadata.equals("{\"x\":1}")
             && back.folder.equals("ff"),
         "запись заметки");
+    check(back.reminderTimes == null && !note.toJson().has("reminderTimes"), "без списка дат поля нет");
+    note.reminderTimes = "[100,200]";
+    check(
+        "[100,200]".equals(SyncRecord.fromJson(new JSONObject(note.toJson().toString())).reminderTimes),
+        "список дат в записи заметки");
+    note.reminderTimes = null;
     JSONObject tomb = SyncRecord.tomb("note", "abc", 5).toJson();
     check(tomb.length() == 4 && tomb.getBoolean("deleted"), "надгробие: " + tomb);
     SyncRecord folder = new SyncRecord();
