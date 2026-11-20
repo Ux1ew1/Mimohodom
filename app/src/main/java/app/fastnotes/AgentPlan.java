@@ -15,13 +15,18 @@ public final class AgentPlan {
 
   private AgentPlan() {}
 
-  /** Снимает обёртку {@code ```json ... ```}, если модель её добавила. */
+  /**
+   * Снимает обёртку {@code ```json ... ```}, если модель её добавила, и текст вокруг объекта
+   * JSON (пояснение до или после): остаётся всё от первой «{» до последней «}».
+   */
   public static String unwrap(String text) {
     String clean = text == null ? "" : text.trim();
     if (clean.startsWith("```")) {
       int start = clean.indexOf('\n'), end = clean.lastIndexOf("```");
       if (start >= 0 && end > start) clean = clean.substring(start + 1, end);
     }
+    int open = clean.indexOf('{'), close = clean.lastIndexOf('}');
+    if (open >= 0 && close > open) clean = clean.substring(open, close + 1);
     return clean.trim();
   }
 

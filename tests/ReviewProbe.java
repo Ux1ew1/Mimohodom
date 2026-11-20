@@ -43,6 +43,8 @@ public final class ReviewProbe {
     long now = System.currentTimeMillis();
     ZoneId zone = ZoneId.of("Europe/Moscow");
     List<Note> notes = notes(now);
+    String only = System.getenv("PROBE_ONLY");
+    if (only != null && !only.isEmpty()) notes = notes.subList(0, Integer.parseInt(only));
     if (args[0].equals("payload")) {
       JSONObject payload = ReviewAnalysis.payload(notes, args[1], now, zone);
       payload = ManagerAnalysis.withContext(payload, List.of(), Map.of(), List.of());

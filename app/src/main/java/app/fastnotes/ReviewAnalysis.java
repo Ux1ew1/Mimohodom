@@ -25,7 +25,8 @@ public final class ReviewAnalysis {
             + "Выполни ОБЕ проверки в одном ответе: {\"kinds\":{...},\"actions\":[...],"
             + "\"notes\":[...]}. Массив notes должен содержать каждый входной ID, kinds — класс"
             + " каждой записи. ФОРМАТ ОТВЕТА СТРОГО: JSON одной строкой, без отступов, переносов"
-            + " строк и ```. Пустые поля, null и пустые массивы не пиши. В notes у записи только"
+            + " строк и ```. Разделы kinds, actions и notes пиши всегда (actions может быть []); внутри"
+            + " записей пустые поля, null и пустые массивы не пиши. В notes у записи только"
             + " id и нужное: title — только при needs_title=true; reminder_at, lead_minutes и"
             + " reason — только если предлагаешь напоминание; metadata — только"
             + " {\"summary\":\"до 100 символов\",\"aliases\":[до 2]}, без остальных полей"
@@ -75,9 +76,10 @@ public final class ReviewAnalysis {
     Result result = new Result();
     result.proposals = ManagerAnalysis.parse(text, notes, stacks);
     JSONObject root = new JSONObject(AgentPlan.unwrap(text));
-    // Раздел действий обязателен (новый «actions» или прежний «suggestions»), иначе формат неверный.
+    // Раздела действий может не быть: модель опускает пустой массив. Тогда предложений нет.
     JSONArray actions = root.optJSONArray("actions");
-    if (actions == null) actions = root.getJSONArray("suggestions");
+    if (actions == null) actions = root.optJSONArray("suggestions");
+    if (actions == null) actions = new JSONArray();
     if (actions.length() > 0 && result.proposals.isEmpty() && !onlyNames(actions))
       throw new Failure(
           "Модель предложила действия с неверными источниками или неполным текстом. Предложения не"
@@ -109,9 +111,12 @@ public final class ReviewAnalysis {
     if (error instanceof java.net.SocketTimeoutException) return "Сервер не ответил вовремя.";
     if (error instanceof java.net.UnknownHostException)
       return "Не удалось подключиться к Polza.AI. Проверьте интернет.";
-    if (error instanceof JSONException)
-      return "Модель вернула неверный формат ответа. Нужны оба раздела: проверка заметок и"
-                 + " предложения.";
+    if (error instanceof JSONException) {
+      String detail = error.getMessage() == null ? "" : error.getMessage();
+      if (detail.length() > 140) detail = detail.substring(0, 140) + "…";
+      return "Модель вернула неверный формат ответа"
+          + (detail.isEmpty() ? "." : " (" + detail + ").");
+    }
     String message = error.getMessage();
     if (message != null
         && (message.equals("Проверьте API-ключ и доступ к модели в настройках.")

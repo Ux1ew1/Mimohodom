@@ -96,10 +96,18 @@ public final class ReviewTest {
     check(
         fresh.proposals.size() == 1 && fresh.proposals.get(0).getString("type").equals("group"),
         "Agent actions parsed with per-note review");
-    fails(
-        response(new JSONObject().put("notes", rows).toString(), "stop"),
-        notes,
-        "Missing action section fails");
+    // 0.10.17: модель опускает пустой раздел действий — это не ошибка, предложений просто нет.
+    ReviewAnalysis.Result noActions =
+        ReviewAnalysis.parse(response(new JSONObject().put("notes", rows).toString(), "stop"), notes, NOW);
+    check(noActions.proposals.isEmpty() && noActions.notes.size() == notes.size(), "Missing action section means no proposals");
+    // Пояснение вокруг JSON не ломает разбор.
+    ReviewAnalysis.Result wrapped =
+        ReviewAnalysis.parse(
+            response("Вот ответ:\n" + new JSONObject().put("notes", rows).put("actions", new JSONArray()) + "\nГотово.", "stop"),
+            notes,
+            NOW);
+    check(wrapped.notes.size() == notes.size(), "Text around JSON is ignored");
+    check(ReviewAnalysis.error(new org.json.JSONException("JSONObject[\"notes\"] not found.")).contains("notes"), "Format error names what failed");
     check(
         ReviewAnalysis.parse(
                     response(

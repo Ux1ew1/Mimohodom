@@ -73,6 +73,9 @@ public final class Analysis {
       int end = clean.lastIndexOf("```");
       if (newline >= 0 && end > newline) clean = clean.substring(newline + 1, end).trim();
     }
+    // Пояснение до или после JSON не ломает разбор: берём от первой «{» до последней «}».
+    int open = clean.indexOf('{'), close = clean.lastIndexOf('}');
+    if (open >= 0 && close > open) clean = clean.substring(open, close + 1);
     JSONArray rows = new JSONObject(clean).getJSONArray("notes");
     Map<Long, Result> out = new HashMap<>();
     for (int i = 0; i < rows.length(); i++) {
