@@ -2547,6 +2547,7 @@ public final class MainActivity extends Activity
           Map<Long, Long> tops = manager.topMap();
           Map<Long, List<Long>> groups = manager.membersMap();
           membersCache = groups;
+          deckViews.clear();
           planCache = store.planBadges();
           questionCache = manager.questionNotes();
           List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search);
@@ -2588,6 +2589,7 @@ public final class MainActivity extends Activity
                 if (source != null) all.add(source);
               }
               LinearLayout cards = null;
+              List<View> fan = new ArrayList<>();
               for (int i = 0; i < all.size(); i++) {
                 if (i % columns == 0) {
                   cards = row();
@@ -2599,8 +2601,14 @@ public final class MainActivity extends Activity
                     new LinearLayout.LayoutParams(dp(width), card.getLayoutParams().height);
                 if (i % columns != 0) lp.leftMargin = dp(10);
                 cards.addView(card, lp);
+                fan.add(card);
               }
               listing.addView(group);
+              deckViews.put(n.id, fan);
+              if (fanOpen == n.id) {
+                fanOpen = 0;
+                fanOut(fan);
+              }
               gap(listing, 10);
             } else {
               if (line == null || occupied == columns) {
@@ -3188,9 +3196,7 @@ public final class MainActivity extends Activity
                 .add(manager.expanded(top) ? "Свернуть колоду" : "Раскрыть колоду")
                 .setOnMenuItemClickListener(
                     item -> {
-                      manager.toggle(top);
-                      search = "";
-                      render();
+                      toggleDeck(manager, top);
                       return true;
                     });
           if (top != 0 && top == n.id)
@@ -3278,26 +3284,114 @@ public final class MainActivity extends Activity
     return card;
   }
 
+  /**
+   * Свёрнутая колода (этап 8): под верхней карточкой 1–3 слоя, повёрнутые на ±2–4° и сдвинутые на
+   * ~5 dp ({@link DeckGeometry}); места снизу ровно столько, чтобы углы слоёв не обрезались.
+   */
   private View groupedCard(Note n, boolean grid, boolean expanded) {
     View card = noteCard(n, grid);
-    int layers = Math.min(3, membersOf(n.id).size());
+    int layers = DeckGeometry.layers(membersOf(n.id).size());
     if (layers == 0 || expanded) return card;
     FrameLayout stack = new FrameLayout(this);
     int height = card.getLayoutParams().height;
-    stack.setLayoutParams(new LinearLayout.LayoutParams(-1, height + dp(layers * 5)));
+    int screen = getResources().getConfiguration().screenWidthDp;
+    int columns = grid ? (screen >= 600 ? 3 : 2) : 1;
+    int widthDp = (screen - 44 - (columns - 1) * 10) / columns;
+    int heightDp = Math.round(height / getResources().getDisplayMetrics().density);
+    int extra = DeckGeometry.extra(layers, widthDp, heightDp);
+    stack.setLayoutParams(new LinearLayout.LayoutParams(-1, height + dp(extra)));
     for (int i = layers; i > 0; i--) {
       View layer = new View(this);
       GradientDrawable shape = shape(STACK_LAYER, 12);
       shape.setStroke(dp(1), STACK_LINE);
       layer.setBackground(shape);
       FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, height);
-      lp.topMargin = dp(i * 5);
-      lp.leftMargin = dp(i * 3);
-      lp.rightMargin = dp(i * 3);
+      lp.topMargin = dp(DeckGeometry.dy(i));
+      lp.leftMargin = dp(DeckGeometry.INSET);
+      lp.rightMargin = dp(DeckGeometry.INSET);
+      layer.setTranslationX(dp(DeckGeometry.dx(i)));
+      layer.setRotation(DeckGeometry.angle(i));
       stack.addView(layer, lp);
     }
     stack.addView(card, new FrameLayout.LayoutParams(-1, height));
     return stack;
+  }
+
+  /** Колода, которую только что раскрыли: при следующей отрисовке её карточки вылетают веером. */
+  private long fanOpen = 0;
+  /** Карточки раскрытых колод на экране (верхняя первой) — для анимации сворачивания. */
+  private final Map<Long, List<View>> deckViews = new HashMap<>();
+
+  private static boolean motion() {
+    return android.animation.ValueAnimator.areAnimatorsEnabled();
+  }
+
+  /**
+   * Раскрытие веером: исходные карточки стартуют из-под верхней (со сдвигом и наклоном слоя) и
+   * по очереди встают на свои места. Без анимаций в системе — сразу на местах.
+   */
+  private void fanOut(List<View> views) {
+    if (views.size() < 2 || !motion()) return;
+    View top = views.get(0);
+    for (int i = 1; i < views.size(); i++) views.get(i).setAlpha(0f);
+    top.post(
+        () -> {
+          int[] from = new int[2], at = new int[2];
+          top.getLocationOnScreen(from);
+          for (int i = 1; i < views.size(); i++) {
+            View v = views.get(i);
+            v.getLocationOnScreen(at);
+            v.setTranslationX(from[0] - at[0]);
+            v.setTranslationY(from[1] - at[1] + dp(DeckGeometry.STEP));
+            v.setRotation(DeckGeometry.fanAngle(i));
+            v.animate()
+                .translationX(0)
+                .translationY(0)
+                .rotation(0)
+                .alpha(1f)
+                .setStartDelay(DeckGeometry.delay(i))
+                .setDuration(DeckGeometry.FAN_MS)
+                .setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
+                .start();
+          }
+        });
+  }
+
+  /** «Раскрыть/Свернуть колоду»: сворачивание сначала собирает карточки под верхнюю, потом перерисовка. */
+  private void toggleDeck(ManagerStore manager, long top) {
+    boolean wasExpanded = manager.expanded(top);
+    List<View> views = deckViews.get(top);
+    Runnable apply =
+        () -> {
+          manager.toggle(top);
+          if (!wasExpanded) fanOpen = top;
+          search = "";
+          render();
+        };
+    if (!wasExpanded || views == null || views.size() < 2 || !motion()) {
+      apply.run();
+      return;
+    }
+    View first = views.get(0);
+    int[] to = new int[2], at = new int[2];
+    first.getLocationOnScreen(to);
+    int last = views.size() - 1;
+    for (int i = 1; i <= last; i++) {
+      View v = views.get(i);
+      v.getLocationOnScreen(at);
+      android.view.ViewPropertyAnimator gather =
+          v.animate()
+              .translationX(to[0] - at[0])
+              .translationY(to[1] - at[1] + dp(DeckGeometry.STEP))
+              .rotation(DeckGeometry.fanAngle(i))
+              .alpha(0f)
+              .setStartDelay(DeckGeometry.delay(last - i + 1))
+              .setDuration(DeckGeometry.FAN_MS - 80)
+              .setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f));
+      // Первая исходная уходит последней: по её окончании колода сворачивается в базе.
+      if (i == 1) gather.withEndAction(apply);
+      gather.start();
+    }
   }
 
   /** Текст предложения; для уточнения впереди название заметки, о которой вопрос. */
