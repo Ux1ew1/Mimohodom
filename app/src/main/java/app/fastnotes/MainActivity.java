@@ -6923,7 +6923,10 @@ public final class MainActivity extends Activity
         secondary(content, "Максимальная длина ответа");
         Spinner tokens = new Spinner(this);
         String[] choices = {
-          "Коротко — до 300 токенов", "Обычно — до 2000 токенов", "Подробно — до 3000 токенов"
+          "Коротко — до 300 токенов",
+          "Обычно — до 2000 токенов",
+          "Подробно — до 3000 токенов",
+          "Без ограничения — сколько нужно модели"
         };
         tokens.setAdapter(
             new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, choices));
@@ -6934,6 +6937,12 @@ public final class MainActivity extends Activity
             tokens,
             position ->
                 prefs.edit().putInt("maxTokens", ManagerAnalysis.ANSWER_TOKENS[position]).apply());
+        chatNote(
+            content,
+            "Тот же предел берёт фоновая проверка заметок (не меньше 1600). «Без ограничения» нужен"
+                + " моделям, которые сначала «размышляют» (например, Qwen3.8 Max): такой ответ"
+                + " может стоить в разы дороже, а Polza.AI может заранее придержать на балансе"
+                + " крупную сумму.");
         gap(content, 12);
         secondary(
             content,

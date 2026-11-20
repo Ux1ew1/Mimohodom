@@ -72,8 +72,8 @@ final class ManagerJob {
         ManagerAnalysis.withContext(
             payload, manager.knownGroups(batch), manager.answers(batch), stacks);
     // Потолок ответа — по настройке «Максимальная длина ответа», но не меньше 1600.
-    payload.put(
-        "max_tokens",
+    ManagerAnalysis.limit(
+        payload,
         ManagerAnalysis.reviewTokens(
             context.getSharedPreferences("settings", 0).getInt("maxTokens", 0)));
     JSONObject response = Polza.request("chat/completions", key, payload);

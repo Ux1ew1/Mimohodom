@@ -117,6 +117,14 @@ public final class ManagerTest {
     check(ManagerAnalysis.answerMode(300) == 0 && ManagerAnalysis.answerMode(600) == 1 && ManagerAnalysis.answerMode(1200) == 2, "Spinner position");
     check(ManagerAnalysis.reviewTokens(300) == 1600, "Review never below 1600");
     check(ManagerAnalysis.reviewTokens(0) == 2000 && ManagerAnalysis.reviewTokens(3000) == 3000, "Review follows the setting");
+    // «Без ограничения»: max_tokens в запросе нет.
+    check(ManagerAnalysis.answerTokens(ManagerAnalysis.UNLIMITED) == ManagerAnalysis.UNLIMITED, "Unlimited kept");
+    check(ManagerAnalysis.answerMode(ManagerAnalysis.UNLIMITED) == 3, "Unlimited is the fourth option");
+    check(ManagerAnalysis.reviewTokens(ManagerAnalysis.UNLIMITED) == ManagerAnalysis.UNLIMITED, "Review unlimited too");
+    JSONObject open = ManagerAnalysis.limit(ManagerAnalysis.payload(notes, "m"), ManagerAnalysis.UNLIMITED);
+    check(!open.has("max_tokens"), "Unlimited request has no max_tokens");
+    check(ManagerAnalysis.limit(open, 2000).getInt("max_tokens") == 2000, "Limit put back");
+    check(ManagerAnalysis.atLeast(ManagerAnalysis.UNLIMITED, 3000) == ManagerAnalysis.UNLIMITED && ManagerAnalysis.atLeast(2000, 3000) == 3000, "At least keeps unlimited");
     JSONArray sent =
         new JSONArray(payload.getJSONArray("messages").getJSONObject(1).getString("content"));
     check(

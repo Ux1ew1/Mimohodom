@@ -188,8 +188,10 @@ public final class ChatRunner {
                       clean,
                       picked.isEmpty()
                           // Пачка напоминаний длиннее обычного ответа: блок не должен оборваться.
-                          ? (ReminderBatch.wants(query) ? Math.max(maxTokens, 3000) : maxTokens)
-                          : ChatImages.answerTokens(maxTokens),
+                          ? (ReminderBatch.wants(query)
+                              ? ManagerAnalysis.atLeast(maxTokens, 3000)
+                              : maxTokens)
+                          : maxTokens <= 0 ? maxTokens : ChatImages.answerTokens(maxTokens),
                       guidance,
                       parts,
                       picked.isEmpty() ? "" : ChatImages.questionHint());

@@ -30,28 +30,50 @@ public final class ManagerAnalysis {
   /** Наименьший потолок ответа проверки (платится только использованное). */
   public static final int MAX_TOKENS = 1600;
 
-  /** Настройка «Максимальная длина ответа»: коротко, обычно, подробно (просьба пользователя 20.11). */
-  public static final int[] ANSWER_TOKENS = {300, 2000, 3000};
+  /** «Без ограничения»: в запросе нет max_tokens, предел ставит сама модель. */
+  public static final int UNLIMITED = -1;
 
   /**
-   * Потолок ответа ИИ-чата по сохранённой настройке. Прежние значения переводятся: 600 («Обычно»
-   * до 0.10.15) — в 2000, 1200 («Подробно») — в 3000; без настройки — «Обычно».
+   * Настройка «Максимальная длина ответа»: коротко, обычно, подробно, без ограничения (просьбы
+   * пользователя 20.11).
+   */
+  public static final int[] ANSWER_TOKENS = {300, 2000, 3000, UNLIMITED};
+
+  /**
+   * Потолок ответа ИИ-чата по сохранённой настройке; {@link #UNLIMITED} — без потолка. Прежние
+   * значения переводятся: 600 («Обычно» до 0.10.15) — в 2000, 1200 («Подробно») — в 3000; без
+   * настройки — «Обычно».
    */
   public static int answerTokens(int stored) {
+    if (stored == UNLIMITED) return UNLIMITED;
     if (stored > 0 && stored <= ANSWER_TOKENS[0]) return ANSWER_TOKENS[0];
     if (stored == 1200 || stored >= ANSWER_TOKENS[2]) return ANSWER_TOKENS[2];
     return ANSWER_TOKENS[1];
   }
 
-  /** Номер режима в списке настройки (0 — коротко, 1 — обычно, 2 — подробно). */
+  /** Номер режима в списке настройки (0 — коротко, 1 — обычно, 2 — подробно, 3 — без ограничения). */
   public static int answerMode(int stored) {
     int tokens = answerTokens(stored);
-    return tokens == ANSWER_TOKENS[0] ? 0 : tokens == ANSWER_TOKENS[2] ? 2 : 1;
+    for (int i = 0; i < ANSWER_TOKENS.length; i++) if (ANSWER_TOKENS[i] == tokens) return i;
+    return 1;
   }
 
-  /** Потолок ответа фоновой проверки: как у чата, но не меньше {@link #MAX_TOKENS}. */
+  /** Потолок ответа фоновой проверки: как у чата, но не меньше {@link #MAX_TOKENS}; без ограничения — нет. */
   public static int reviewTokens(int stored) {
-    return Math.max(MAX_TOKENS, answerTokens(stored));
+    int tokens = answerTokens(stored);
+    return tokens == UNLIMITED ? UNLIMITED : Math.max(MAX_TOKENS, tokens);
+  }
+
+  /** Ставит потолок ответа в запрос или убирает его для режима без ограничения. */
+  public static JSONObject limit(JSONObject payload, int tokens) throws JSONException {
+    if (tokens > 0) payload.put("max_tokens", tokens);
+    else payload.remove("max_tokens");
+    return payload;
+  }
+
+  /** Потолок не меньше {@code minimum}, а без ограничения — так и остаётся без ограничения. */
+  public static int atLeast(int tokens, int minimum) {
+    return tokens == UNLIMITED ? UNLIMITED : Math.max(tokens, minimum);
   }
 
   static final String PROMPT =
