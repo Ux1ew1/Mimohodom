@@ -108,6 +108,15 @@ public final class QuestionsTest {
     check(ProgressCheck.canPostpone(future, 0) && !ProgressCheck.canPostpone(future, ReminderPolicy.REPEAT_LIST)
         && !ProgressCheck.canPostpone(0, 0), "only single reminders move");
 
+    // Ежедневный обход дел
+    long morning = at(zone, 2026, 11, 20, 9, 0), evening = at(zone, 2026, 11, 20, 20, 0);
+    long todayNum = java.time.LocalDate.of(2026, 11, 20).toEpochDay();
+    check(ProgressCheck.nextDaily(morning, 18 * 60, -1, zone) == at(zone, 2026, 11, 20, 18, 0), "today when ahead");
+    check(ProgressCheck.nextDaily(evening, 18 * 60, -1, zone) == at(zone, 2026, 11, 21, 18, 0), "tomorrow when passed");
+    check(ProgressCheck.nextDaily(morning, 18 * 60, todayNum, zone) == at(zone, 2026, 11, 21, 18, 0), "once a day");
+    check(ProgressCheck.nextDaily(morning, 99999, -1, zone) == at(zone, 2026, 11, 20, 23, 59), "minutes clamped");
+    check(ProgressCheck.left(0) == 4 && ProgressCheck.left(3) == 1 && ProgressCheck.left(9) == 0, "left today");
+
     System.out.println("QuestionsTest: " + count + " checks passed");
   }
 }

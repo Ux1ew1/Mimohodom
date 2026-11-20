@@ -44,6 +44,26 @@ public final class ProgressCheck {
     public long nextAsk;
   }
 
+  /** Сколько дел спрашивать за один ежедневный обход (с учётом общего лимита в сутки). */
+  public static final int PER_RUN = 2;
+
+  /**
+   * Время ежедневного обхода дел: сегодня в {@code minutes} от полуночи, если оно ещё впереди и
+   * сегодня обхода не было ({@code lastDay} — номер дня, {@code LocalDate.toEpochDay}), иначе завтра.
+   */
+  public static long nextDaily(long now, int minutes, long lastDay, ZoneId zone) {
+    int at = Math.max(0, Math.min(minutes, 24 * 60 - 1));
+    java.time.LocalDate today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate();
+    long slot = today.atTime(at / 60, at % 60).atZone(zone).toInstant().toEpochMilli();
+    if (slot > now && today.toEpochDay() != lastDay) return slot;
+    return today.plusDays(1).atTime(at / 60, at % 60).atZone(zone).toInstant().toEpochMilli();
+  }
+
+  /** Сколько ещё чатов помощник может начать сегодня. */
+  public static int left(int startedToday) {
+    return Math.max(0, MAX_PER_DAY - startedToday);
+  }
+
   /** Можно ли сегодня начать ещё один чат: начатых помощником сегодня меньше {@link #MAX_PER_DAY}. */
   public static boolean allowed(int startedToday) {
     return startedToday < MAX_PER_DAY;
@@ -115,7 +135,7 @@ public final class ProgressCheck {
   /** Ответ помощника на выбранный вариант; что предложить дальше, решает вызывающий. */
   public static String reply(String answer, boolean canPostpone) {
     return switch (answer) {
-      case DONE -> "Отлично! Убрать заметку в корзину?";
+      case DONE -> "Отлично! Отметить выполненным или убрать заметку в корзину?";
       case DROP -> "Понял. Убрать заметку в корзину?";
       case LATER ->
           canPostpone

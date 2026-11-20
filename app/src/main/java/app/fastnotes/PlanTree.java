@@ -328,6 +328,20 @@ public final class PlanTree {
     return count;
   }
 
+  /**
+   * «Выполнено» на ответ «Сделано» (этап 5): отмечает все шаги и «что взять». Возвращает, сколько
+   * пунктов отмечено сейчас.
+   */
+  public int completeAll() {
+    int changed = 0;
+    for (Node n : all())
+      if (n.checkable() && !n.done) {
+        n.done = true;
+        changed++;
+      }
+    return changed;
+  }
+
   /** «План 3/8» для карточки заметки; пусто, если плана нет. */
   public String badge() {
     if (nodes.isEmpty()) return "";

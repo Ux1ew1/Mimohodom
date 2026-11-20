@@ -4674,7 +4674,8 @@ public final class MainActivity extends Activity
       else {
         reply = ProgressCheck.reply(answer, postpone);
         if (answer.equals(ProgressCheck.DONE) || answer.equals(ProgressCheck.DROP))
-          next = new JSONObject().put("kind", "progress_trash").put("note", noteId);
+          next =
+              new JSONObject().put("kind", "progress_trash").put("note", noteId).put("answer", answer);
         else if (answer.equals(ProgressCheck.LATER) && postpone)
           next = new JSONObject().put("kind", "progress_later").put("note", noteId);
       }
@@ -4698,6 +4699,52 @@ public final class MainActivity extends Activity
     if (kind.equals("progress") || n == null || n.trashed > 0) return;
     gap(bubble, 6);
     LinearLayout row = row();
+    if (kind.equals("progress_trash") && ProgressCheck.DONE.equals(draft.optString("answer"))) {
+      // «Сделано»: «Выполнено» оставляет заметку и отмечает все пункты её плана.
+      PlanTree plan = PlanTree.parse(store.plan(noteId));
+      boolean planOpen = plan.checkable() > plan.done();
+      row.addView(
+          compactButton(
+              "Выполнено",
+              true,
+              () -> {
+                store.dismissDraft(message);
+                PlanTree fresh = PlanTree.parse(store.plan(noteId));
+                int marked = fresh.completeAll();
+                if (marked > 0) {
+                  try {
+                    store.savePlan(noteId, fresh.toJson());
+                  } catch (Exception e) {
+                    toast("Не удалось отметить план");
+                  }
+                }
+                stash();
+                render();
+                toast(marked > 0 ? "План выполнен: " + fresh.badge() : "Отмечено: выполнено");
+              }),
+          new LinearLayout.LayoutParams(0, -2, 1));
+      row.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+      row.addView(
+          compactButton(
+              "В корзину",
+              false,
+              () -> {
+                store.dismissDraft(message);
+                List<Long> gone = store.trash(noteId, false);
+                for (long g : gone) Reminders.cancel(this, g);
+                if (!gone.isEmpty()) CalendarSync.runAsync(this);
+                stash();
+                render();
+                toast(gone.isEmpty() ? "Заметка уже в корзине" : "Заметка в корзине. Вернуть её можно 30 дней");
+              }),
+          new LinearLayout.LayoutParams(0, -2, 1));
+      bubble.addView(row);
+      if (planOpen) {
+        gap(bubble, 4);
+        chatNote(bubble, "«Выполнено» отметит все пункты плана (" + plan.badge() + ")");
+      }
+      return;
+    }
     if (kind.equals("progress_trash")) {
       row.addView(
           compactButton(
@@ -7024,6 +7071,13 @@ public final class MainActivity extends Activity
     TextView every = button("", false, () -> {});
     TextView now = button("Спросить сейчас", false, () -> {});
     TextView status = text("", 13, MUTED);
+    TextView howItWorks =
+        text(
+            "Каждый день в это время помощник смотрит дела со сроком в ближайшие два дня или давно"
+                + " без движения и спрашивает «Как продвигается?» — без запросов к ИИ. Вопросы о"
+                + " планах от ИИ — с выбранной частотой. Всего не больше 4 чатов в день.",
+            13,
+            MUTED);
     Runnable refresh =
         () -> {
           boolean on = ask.isChecked();
@@ -7031,17 +7085,18 @@ public final class MainActivity extends Activity
           time.setText(
               String.format(Locale.US, "Время вопроса: около %02d:%02d", minutes / 60, minutes % 60));
           every.setText(
-              "Как часто: " + CheckIn.everyLabel(CheckInJob.every(this)).toLowerCase(new Locale("ru")));
+              "Вопросы от ИИ: " + CheckIn.everyLabel(CheckInJob.every(this)).toLowerCase(new Locale("ru")));
           String report =
               !on || LocalLlm.cloudBackground(this)
                   ? CheckInJob.status(this)
-                  : "На паузе, пока выбран GGUF: вопросы идут через Polza.AI.";
+                  : "Вопросы от ИИ на паузе, пока выбран GGUF. «Как продвигается?» работает.";
           status.setText(report);
           status.setVisibility(on && !report.isEmpty() ? View.VISIBLE : View.GONE);
           int visible = on ? View.VISIBLE : View.GONE;
           time.setVisibility(visible);
           every.setVisibility(visible);
           now.setVisibility(visible);
+          howItWorks.setVisibility(visible);
         };
     ask.setOnCheckedChangeListener(
         (v, checked) -> {
@@ -7123,14 +7178,7 @@ public final class MainActivity extends Activity
         });
     now.setOnClickListener(
         v -> {
-          if (!LocalLlm.cloudBackground(this)) {
-            toast("Сейчас выбран GGUF: вопросы идут через Polza.AI.");
-            return;
-          }
-          if (!credentialsReady()) {
-            toast("Сначала укажите ключ и модель Polza.AI в разделе «ИИ».");
-            return;
-          }
+          // «Как продвигается?» не нужен ключ; вопрос от ИИ без ключа объяснит статус.
           now.setEnabled(false);
           now.setText("Составляю вопрос…");
           Context app = getApplicationContext();
@@ -7184,9 +7232,16 @@ public final class MainActivity extends Activity
                 + " ответите в чате.\n\n"
                 + "Каждый вопрос — один платный запрос к Polza.AI с коротким ответом. Повторов после"
                 + " ошибки нет: следующая попытка в следующий срок или кнопкой «Спросить сейчас»."
-                + " Работает при Polza.AI и Gemini Nano; при GGUF на паузе."));
+                + " Работает при Polza.AI и Gemini Nano; при GGUF на паузе.\n\n"
+                + "«Как продвигается?» — отдельно: каждый день в выбранное время помощник смотрит дела"
+                + " со сроком в ближайшие два дня (или только что прошедшим) и дела, которые неделю"
+                + " не трогали, и спрашивает о них с кнопками «Сделано / В процессе / Отложить / Не"
+                + " актуально». Запроса к ИИ нет, ключ не нужен. О каждом деле — не чаще раза в три"
+                + " дня."));
     content.addView(time);
     content.addView(every);
+    gap(content, 6);
+    content.addView(howItWorks);
     gap(content, 6);
     content.addView(status);
     gap(content, 6);

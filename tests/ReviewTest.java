@@ -47,7 +47,7 @@ public final class ReviewTest {
     check(
         data.getJSONObject(0).has("created") && data.getJSONObject(0).has("has_reminder"),
         "Reminder context supplied");
-    check(payload.getInt("max_tokens") == 1200, "Shared response budget retained");
+    check(payload.getInt("max_tokens") == 1600, "Shared response budget retained");
     String instruction = payload.getJSONArray("messages").getJSONObject(0).getString("content");
     check(
         instruction.contains("ОБЕ проверки")

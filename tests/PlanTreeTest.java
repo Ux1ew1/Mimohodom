@@ -137,6 +137,14 @@ public final class PlanTreeTest {
     check(PlanTree.line(back.nodes.get(0), zone).startsWith("12 июн"), "line time: " + PlanTree.line(back.nodes.get(0), zone));
     check(back.outline(zone).get(2).startsWith("☑ Забронировать базу (Аня)"), "outline: " + back.outline(zone).get(2));
 
+    // «Выполнено»: все шаги и «что взять» отмечены, остальные виды не трогаются
+    PlanTree finished = PlanTree.parse(t.toJson());
+    int open = finished.checkable() - finished.done();
+    check(finished.completeAll() == open && open > 0, "complete all marks open items");
+    check(finished.done() == finished.checkable(), "everything done");
+    check(finished.completeAll() == 0, "second time nothing to do");
+    check(finished.badge().equals("План 6/6"), "badge after complete: " + finished.badge());
+
     System.out.println("PlanTree tests passed: " + count);
   }
 }

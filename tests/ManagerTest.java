@@ -107,7 +107,7 @@ public final class ManagerTest {
     row.put("type", "link");
     check(parse(row, notes).size() == 1, "Truncated source allowed for links");
     JSONObject payload = ManagerAnalysis.payload(notes, "test");
-    check(payload.getInt("max_tokens") == 1200, "Existing background output budget preserved");
+    check(payload.getInt("max_tokens") == ManagerAnalysis.MAX_TOKENS && ManagerAnalysis.MAX_TOKENS == 1600, "Review output budget 1600 (stage 5 headroom)");
     JSONArray sent =
         new JSONArray(payload.getJSONArray("messages").getJSONObject(1).getString("content"));
     check(
