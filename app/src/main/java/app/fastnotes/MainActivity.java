@@ -99,8 +99,14 @@ public final class MainActivity extends Activity
   }
 
   /** Тема окна и системных панелей под выбранную палитру (значки панелей светлые на тёмном). */
+  /** Фон страницы: у новой заметки лист на весь экран (как карточка), у остальных — бумажный. */
+  private int pageColor() {
+    return "home".equals(page) ? SURFACE : PAPER;
+  }
+
   private void applySystemBars() {
-    getWindow().setBackgroundDrawable(new ColorDrawable(PAPER));
+    int background = pageColor();
+    getWindow().setBackgroundDrawable(new ColorDrawable(background));
     if (Build.VERSION.SDK_INT >= 30) {
       WindowInsetsController controller = getWindow().getInsetsController();
       if (controller != null) {
@@ -115,8 +121,8 @@ public final class MainActivity extends Activity
       int light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
       if (Build.VERSION.SDK_INT >= 26) light |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
       decor.setSystemUiVisibility(dark ? flags & ~light : flags | light);
-      getWindow().setStatusBarColor(PAPER);
-      getWindow().setNavigationBarColor(PAPER);
+      getWindow().setStatusBarColor(background);
+      getWindow().setNavigationBarColor(background);
     }
   }
   private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -128,6 +134,8 @@ public final class MainActivity extends Activity
   private FrameLayout frame, dock;
   private int lastDockTab = -2;
   private View dockFade;
+  /** Запас под плавающей панелью у нижней полосы новой заметки; без клавиатуры. */
+  private View dockSpace;
   private int navInset;
   private boolean keyboardUp, searchOpen, focusEditor, focusSearch;
   private Runnable closeSearch;
@@ -854,10 +862,11 @@ public final class MainActivity extends Activity
     bodyField = null;
     chatInput = null;
     if (suggestionsPopup != null) suggestionsPopup.dismiss();
+    dockSpace = null;
     root = column();
-    root.setBackgroundColor(PAPER);
+    root.setBackgroundColor(pageColor());
     frame = new FrameLayout(this);
-    frame.setBackgroundColor(PAPER);
+    frame.setBackgroundColor(pageColor());
     frame.addView(root, new FrameLayout.LayoutParams(-1, -1));
     setContentView(frame);
     applySystemBars();
@@ -890,8 +899,9 @@ public final class MainActivity extends Activity
     content = column();
     // Плавающая нижняя панель перекрывает низ страницы, поэтому внизу оставляем под неё место.
     boolean notesList = "notes".equals(page);
-    content.setPadding(
-        dp(22), dp(8), dp(22), notesList ? 0 : dp("chat".equals(page) ? 16 : 100));
+    // У новой заметки место под панелью держит её нижняя полоса со значками (dockSpace).
+    boolean compactBottom = "chat".equals(page) || "home".equals(page);
+    content.setPadding(dp(22), dp(8), dp(22), notesList ? 0 : dp(compactBottom ? 16 : 100));
     if ("notes".equals(page) || "chat".equals(page)) {
       root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
     } else root.addView(scroll(content), new LinearLayout.LayoutParams(-1, 0, 1));
@@ -1083,10 +1093,18 @@ public final class MainActivity extends Activity
     FrameLayout.LayoutParams fade = (FrameLayout.LayoutParams) dockFade.getLayoutParams();
     fade.height = dp(110) + navInset;
     dockFade.setLayoutParams(fade);
+    boolean home = "home".equals(page);
     dock.setVisibility(visible ? View.VISIBLE : View.GONE);
-    dockFade.setVisibility(visible ? View.VISIBLE : View.GONE);
+    // У новой заметки под панелью сплошная полоса, градиент там не нужен.
+    dockFade.setVisibility(visible && !home ? View.VISIBLE : View.GONE);
+    if (dockSpace != null) {
+      // Панель: 46 dp значок + 9 + 9 отступ, над краем 16 dp; ещё 8 dp зазора до полосы.
+      ViewGroup.LayoutParams space = dockSpace.getLayoutParams();
+      space.height = keyboardUp ? 0 : dp(88);
+      dockSpace.setLayoutParams(space);
+    }
     // Пока открыта клавиатура, панели нет, и запас под неё внизу страницы не нужен.
-    if (content != null && !"notes".equals(page) && !"chat".equals(page))
+    if (content != null && !"notes".equals(page) && !"chat".equals(page) && !home)
       content.setPadding(
           content.getPaddingLeft(),
           content.getPaddingTop(),
@@ -1599,14 +1617,22 @@ public final class MainActivity extends Activity
       toolbar.setPadding(dp(22), dp(4), dp(22), dp(4));
       root.addView(toolbar, 0);
     } else {
+      // Новая заметка — лист на весь экран: сверху только сегодняшняя дата и значки.
       FrameLayout bar = (FrameLayout) topBar(false, false, true);
-      TextView screen = text("Новая заметка", 20, INK);
-      screen.setTypeface(null, Typeface.BOLD);
-      bar.addView(
-          screen, new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL));
+      String today =
+          new java.text.SimpleDateFormat("EEEE, d MMMM", new Locale("ru")).format(new Date());
+      if (!today.isEmpty()) today = Character.toUpperCase(today.charAt(0)) + today.substring(1);
+      TextView screen = text(today, 13, MUTED);
+      screen.setSingleLine(true);
+      screen.setEllipsize(TextUtils.TruncateAt.END);
+      FrameLayout.LayoutParams screenParams =
+          new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL);
+      screenParams.rightMargin = dp(96);
+      bar.addView(screen, screenParams);
       content.addView(bar, new LinearLayout.LayoutParams(-1, dp(44)));
       gap(content, 12);
     }
+    boolean fullPage = id == 0;
     if (id > 0) heading("Ваша заметка", "");
     String p = draftPrefix();
     noteImage = prefs.getString(p + "image", note == null ? "" : note.image);
@@ -1616,38 +1642,62 @@ public final class MainActivity extends Activity
       selectedImageFor = id;
     }
     // Название, текст и значки действий лежат на одном листе с тенью.
+    // У открытой заметки — лист с рамкой и тенью; у новой рамки нет, лист — вся страница.
     LinearLayout sheet = column();
-    GradientDrawable sheetBackground = shape(SURFACE, 14);
-    sheetBackground.setStroke(dp(1), STROKE);
-    sheet.setBackground(sheetBackground);
-    sheet.setElevation(dp(6));
-    titleField = input("Название — необязательно", false);
+    if (!fullPage) {
+      GradientDrawable sheetBackground = shape(SURFACE, 14);
+      sheetBackground.setStroke(dp(1), STROKE);
+      sheet.setBackground(sheetBackground);
+      sheet.setElevation(dp(6));
+    }
+    boolean large = prefs.getBoolean("large", false);
+    titleField = input(fullPage ? "Название" : "Название — необязательно", false);
     titleField.setBackground(null);
-    titleField.setTypeface(null, Typeface.BOLD);
-    titleField.setTextSize(prefs.getBoolean("large", false) ? 22 : 20);
-    titleField.setPadding(dp(16), dp(16), dp(16), dp(10));
+    if (fullPage) {
+      titleField.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+      titleField.setTextSize(large ? 32 : 30);
+      titleField.setPadding(0, 0, 0, dp(4));
+    } else {
+      titleField.setTypeface(null, Typeface.BOLD);
+      titleField.setTextSize(large ? 22 : 20);
+      titleField.setPadding(dp(16), dp(16), dp(16), dp(10));
+    }
     titleField.setText(prefs.getString(p + "title", note == null ? "" : note.title));
     titleField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(160)});
     sheet.addView(titleField, new LinearLayout.LayoutParams(-1, -2));
-    View titleRule = new View(this);
-    titleRule.setBackgroundColor(LINE);
-    LinearLayout.LayoutParams titleRuleParams = new LinearLayout.LayoutParams(-1, dp(1));
-    titleRuleParams.leftMargin = dp(16);
-    titleRuleParams.rightMargin = dp(16);
-    sheet.addView(titleRule, titleRuleParams);
+    if (fullPage) {
+      TextView hint =
+          text("Можно без названия — возьмём первую строку. Черновик сохраняется сам.", 12, MUTED);
+      sheet.addView(hint);
+      gap(sheet, 10);
+    } else {
+      View titleRule = new View(this);
+      titleRule.setBackgroundColor(LINE);
+      LinearLayout.LayoutParams titleRuleParams = new LinearLayout.LayoutParams(-1, dp(1));
+      titleRuleParams.leftMargin = dp(16);
+      titleRuleParams.rightMargin = dp(16);
+      sheet.addView(titleRule, titleRuleParams);
+    }
     bodyField = input("Что хочется запомнить?", true);
     bodyField.setBackground(null);
-    bodyField.setPadding(dp(16), dp(12), dp(16), dp(16));
-    bodyField.setMinLines(10);
-    bodyField.setMinHeight(dp(280));
+    if (fullPage) {
+      bodyField.setPadding(0, dp(4), 0, dp(16));
+      bodyField.setLineSpacing(dp(3), 1f);
+      bodyField.setMinHeight(dp(160));
+    } else {
+      bodyField.setPadding(dp(16), dp(12), dp(16), dp(16));
+      bodyField.setMinLines(10);
+      bodyField.setMinHeight(dp(280));
+    }
     bodyField.setText(prefs.getString(p + "body", note == null ? "" : note.body));
     bodyField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(100000)});
-    sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, -2));
+    // Новая заметка: текст занимает всё свободное место, касание в любом месте ставит курсор.
+    sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, fullPage ? 0 : -2, fullPage ? 1 : 0));
     if (!noteImage.isEmpty()) {
       List<String> images = ImageList.parse(noteImage);
       selectedImage = Math.max(0, Math.min(selectedImage, images.size() - 1));
       LinearLayout imageBox = column();
-      imageBox.setPadding(dp(12), 0, dp(12), dp(10));
+      imageBox.setPadding(fullPage ? 0 : dp(12), 0, fullPage ? 0 : dp(12), dp(10));
       imageBox.addView(imageStrip(images));
       gap(imageBox, 6);
       LinearLayout imageBar = row();
@@ -1674,7 +1724,7 @@ public final class MainActivity extends Activity
     }
     View footerRule = new View(this);
     footerRule.setBackgroundColor(LINE);
-    sheet.addView(footerRule, new LinearLayout.LayoutParams(-1, dp(1)));
+    if (!fullPage) sheet.addView(footerRule, new LinearLayout.LayoutParams(-1, dp(1)));
     reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
     repeatMode = prefs.getInt(p + "repeat", note == null ? 0 : note.repeat);
     reminderTimes = prefs.getString(p + "times", note == null ? "" : note.reminderTimes);
@@ -1684,6 +1734,9 @@ public final class MainActivity extends Activity
       editFolder = FolderPolicy.ALL;
     LinearLayout footer = row();
     footer.setPadding(dp(12), dp(10), dp(12), dp(10));
+    footer.setGravity(Gravity.CENTER_VERTICAL);
+    // У новой заметки значки прокручиваются вбок, чтобы длинные подписи не сдвигали «Сохранить».
+    LinearLayout tools = fullPage ? row() : footer;
     ImageView imageTool = new ImageView(this);
     imageTool.setScaleType(ImageView.ScaleType.CENTER);
     imageTool.setImageDrawable(new Glyph("image", GREEN, 20));
@@ -1696,7 +1749,7 @@ public final class MainActivity extends Activity
           buzz(0);
           pickImage(false);
         });
-    footer.addView(imageTool, new LinearLayout.LayoutParams(dp(40), dp(40)));
+    tools.addView(imageTool, new LinearLayout.LayoutParams(dp(40), dp(40)));
     reminderButton = text("", 13, GREEN);
     reminderButton.setTypeface(null, Typeface.BOLD);
     reminderButton.setGravity(Gravity.CENTER);
@@ -1716,7 +1769,7 @@ public final class MainActivity extends Activity
     refreshReminder();
     LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(-2, dp(40));
     reminderParams.leftMargin = dp(8);
-    footer.addView(reminderButton, reminderParams);
+    tools.addView(reminderButton, reminderParams);
     TextView folderButton = text("", 13, GREEN);
     folderButton.setTypeface(null, Typeface.BOLD);
     folderButton.setGravity(Gravity.CENTER);
@@ -1750,10 +1803,33 @@ public final class MainActivity extends Activity
         });
     LinearLayout.LayoutParams folderParams = new LinearLayout.LayoutParams(-2, dp(40));
     folderParams.leftMargin = dp(8);
-    footer.addView(folderButton, folderParams);
+    tools.addView(folderButton, folderParams);
+    if (fullPage) {
+      // Сводка видео — значок в полосе вместо отдельной большой кнопки под листом.
+      if (!LocalLlm.enabled(this)) {
+        ImageView videoTool = new ImageView(this);
+        videoTool.setScaleType(ImageView.ScaleType.CENTER);
+        videoTool.setImageDrawable(new Glyph("video", GREEN, 20));
+        videoTool.setBackground(ripple(LIME, 10));
+        videoTool.setContentDescription("Сводка видео YouTube");
+        videoTool.setFocusable(true);
+        videoTool.setOnClickListener(
+            v -> {
+              buzz(0);
+              askVideoLink();
+            });
+        LinearLayout.LayoutParams videoParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        videoParams.leftMargin = dp(8);
+        tools.addView(videoTool, videoParams);
+      }
+      HorizontalScrollView toolScroll = new HorizontalScrollView(this);
+      toolScroll.setHorizontalScrollBarEnabled(false);
+      toolScroll.addView(tools);
+      footer.addView(toolScroll, new LinearLayout.LayoutParams(0, -2, 1));
+    }
     if (id == 0) {
       // Компактная кнопка сохранения в правом краю нижней полосы листа.
-      footer.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+      if (!fullPage) footer.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
       TextView save = text("Сохранить", 14, WHITE);
       save.setTypeface(null, Typeface.BOLD);
       save.setGravity(Gravity.CENTER);
@@ -1766,10 +1842,25 @@ public final class MainActivity extends Activity
             buzz(0);
             saveNote();
           });
-      footer.addView(save, new LinearLayout.LayoutParams(-2, dp(40)));
+      LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(-2, dp(40));
+      if (fullPage) saveParams.leftMargin = dp(8);
+      footer.addView(save, saveParams);
     }
-    sheet.addView(footer);
-    content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
+    if (fullPage) {
+      // Полоса значков прижата к низу экрана над плавающей панелью, а с клавиатурой — над ней.
+      LinearLayout strip = column();
+      strip.setBackgroundColor(pageColor());
+      strip.addView(footerRule, new LinearLayout.LayoutParams(-1, dp(1)));
+      footer.setPadding(dp(10), dp(8), dp(16), dp(8));
+      strip.addView(footer, new LinearLayout.LayoutParams(-1, -2));
+      dockSpace = new View(this);
+      strip.addView(dockSpace, new LinearLayout.LayoutParams(-1, keyboardUp ? 0 : dp(88)));
+      root.addView(strip, new LinearLayout.LayoutParams(-1, -2));
+      content.addView(sheet, new LinearLayout.LayoutParams(-1, 0, 1));
+    } else {
+      sheet.addView(footer);
+      content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
+    }
     if (id > 0) questionSection(id);
     if (id > 0) planSection(id);
     if (note != null && note.suggestion > 0) {
@@ -1815,16 +1906,10 @@ public final class MainActivity extends Activity
               }));
       content.addView(proposal);
     }
-    if (id == 0 && !LocalLlm.enabled(this)) {
-      gap(content, 12);
-      content.addView(button("Сводка видео YouTube", false, this::askVideoLink));
+    if (!fullPage) {
+      gap(content, 16);
+      secondary(content, "Изменения сохраняются при выходе из заметки.");
     }
-    gap(content, 16);
-    secondary(
-        content,
-        id == 0
-            ? "Без названия? Возьмём первую строку.\nЧерновик сохраняется на устройстве."
-            : "Изменения сохраняются при выходе из заметки.");
     editorActive = true;
     watch(titleField, this::stash);
     watch(bodyField, this::stash);
