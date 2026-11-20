@@ -98,6 +98,11 @@ public final class ChatRunner {
             if (fresh && image.equals(settings.getString("chatImage." + chat, "")))
               settings.edit().remove("chatImage." + chat).apply();
             changed();
+            long planNote = store.chatNote(chat);
+            if (planNote > 0) {
+              planReply(store, chat, planNote, key, model, query, history);
+              return;
+            }
             List<String> contents = new ArrayList<>();
             for (int i = 0; i < history.length(); i++)
               contents.add(history.getJSONObject(i).getString("content"));
@@ -303,5 +308,54 @@ public final class ChatRunner {
             changed();
           }
         });
+  }
+
+  /**
+   * Ответ в чате по заметке (docs/AGENT-PLANNER.md, 2.5): агент видит свежий текст заметки и её
+   * план, задаёт вопрос с вариантами или присылает план. План не записывается сам — он ложится в
+   * черновик сообщения, сохраняет его пользователь кнопкой.
+   */
+  private static void planReply(
+      Store store, long chat, long noteId, String key, String model, String query, JSONArray history)
+      throws Exception {
+    Note note = store.note(noteId);
+    if (note == null) throw new java.io.IOException("Заметка этого чата удалена.");
+    java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+    PlanTree current = PlanTree.parse(store.plan(noteId));
+    JSONArray past = new JSONArray();
+    for (int i = 0; i < history.length(); i++) {
+      JSONObject h = history.getJSONObject(i);
+      past.put(
+          new JSONObject()
+              .put("role", h.getString("role"))
+              .put("content", ChatImages.split(h.getString("content")).text));
+    }
+    JSONObject payload =
+        PlanChat.payload(
+            model, note.title, note.body, current, past, query, System.currentTimeMillis(), zone);
+    JSONObject response = store.complete(key, payload);
+    JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
+    String text = choice.getJSONObject("message").optString("content", "");
+    if (text.trim().isEmpty())
+      throw new java.io.IOException("Модель вернула пустой ответ. Попробуйте ещё раз.");
+    if ("length".equals(choice.optString("finish_reason")) && !text.trim().endsWith("}"))
+      throw new java.io.IOException(
+          "Ответ модели оборвался. Попросите план короче или выберите другую модель.");
+    PlanChat.Reply reply = PlanChat.parse(text, zone);
+    JSONObject draft = null;
+    if (reply.plan != null) {
+      reply.plan.keepDone(current);
+      draft = new JSONObject().put("plan", reply.plan.toJson()).put("note", noteId);
+    }
+    if (!store.chatExists(chat)) return;
+    store.message(chat, "assistant", PlanChat.store(reply), new JSONArray(), draft);
+    StringBuilder used = new StringBuilder(store.localMode() ? "Локальная модель" : "Чат по заметке");
+    JSONObject tokens = response.optJSONObject("usage");
+    if (tokens != null && tokens.has("total_tokens"))
+      used.append(" · ").append(tokens.optInt("total_tokens")).append(" токенов");
+    if (tokens != null && tokens.has("cost_rub"))
+      used.append(" · ").append(tokens.optString("cost_rub")).append(" ₽");
+    usage = used.toString();
+    usageChat = chat;
   }
 }

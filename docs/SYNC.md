@@ -67,7 +67,7 @@ HTTP/1.1 по TCP, порт по умолчанию 47616 (если занят �
 
 Общие поля: `kind` (`note`/`folder`/`chat`/`message`/`stack`), `uid`, `ts`, `deleted`. Неизвестный `kind` получатель пропускает. Удалённая запись содержит только эти четыре поля (надгробие).
 
-`note`: `title`, `body`, `created`, `updated`, `reminder`, `repeat`, `lead`, `images` (массив имён файлов), `folder` (`uid` папки или пустая строка), `titleAuto` (bool), `aiChecked` (bool), `metadata` (строка JSON).
+`note`: `title`, `body`, `created`, `updated`, `reminder`, `repeat`, `lead`, `images` (массив имён файлов), `folder` (`uid` папки или пустая строка), `titleAuto` (bool), `aiChecked` (bool), `metadata` (строка JSON), `plan` (строка JSON дерева плана, Android 0.10.6+; поле необязательное: если его нет, получатель свой план не меняет; компьютер пока не хранит и не отправляет).
 
 `folder`: `name`, `key`, `created`, `auto` (bool).
 

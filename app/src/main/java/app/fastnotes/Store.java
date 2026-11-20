@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 11);
+    super(context, name, null, 12);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -79,6 +79,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addSync(db);
     addChatSync(db);
     addSuggestionLead(db);
+    addPlans(db);
   }
 
   @Override
@@ -95,6 +96,30 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 9) addSync(db);
     if (oldV < 10) addChatSync(db);
     if (oldV < 11) addSuggestionLead(db);
+    if (oldV < 12) addPlans(db);
+  }
+
+  /**
+   * Дерево плана у заметки (JSON PlanTree, пусто — плана нет) и привязка чата к заметке (0 — обычный
+   * чат). Безопасно вызывается повторно.
+   */
+  private void addPlans(SQLiteDatabase db) {
+    if (!hasColumn(db, "plan"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN plan TEXT NOT NULL DEFAULT ''");
+    if (!hasColumn(db, "chats", "note"))
+      db.execSQL("ALTER TABLE chats ADD COLUMN note INTEGER NOT NULL DEFAULT 0");
+    // Отметка в плане уходит в обмен, но не сдвигает время правки заметки: иначе каждая галочка
+    // поднимала бы заметку в списке и заново отправляла её на фоновую проверку ИИ.
+    String stamp =
+        "UPDATE sync_meta SET seq=seq+1,hlc=max(hlc+1,CAST((julianday('now')-2440587.5)*86400000"
+            + " AS INTEGER)) WHERE id=1;";
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS notes_sync_plan AFTER UPDATE OF plan ON notes WHEN"
+            + " new.sync_seq=old.sync_seq AND new.plan<>old.plan BEGIN "
+            + stamp
+            + "UPDATE notes SET uid=CASE WHEN new.uid='' THEN lower(hex(randomblob(16))) ELSE"
+            + " new.uid END,sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq"
+            + " FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
   }
 
   /** За сколько минут ИИ предлагает напомнить. Безопасно вызывается повторно. */
@@ -755,12 +780,71 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     return getWritableDatabase().insertOrThrow("chats", null, v);
   }
 
+  /** Сохранённый план заметки (JSON PlanTree) или пустая строка. */
+  public String plan(long note) {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery("SELECT plan FROM notes WHERE id=?", new String[] {"" + note})) {
+      return c.moveToFirst() ? c.getString(0) : "";
+    }
+  }
+
+  /**
+   * Записывает план. Время правки заметки не трогаем; в обмен заметку отправит триггер
+   * {@code notes_sync_plan}.
+   */
+  public void savePlan(long note, String plan) {
+    ContentValues v = new ContentValues();
+    v.put("plan", plan == null ? "" : plan);
+    if (getWritableDatabase().update("notes", v, "id=?", new String[] {"" + note}) != 1)
+      throw new IllegalStateException("Заметка уже удалена");
+  }
+
+  /** Отметки «План 3/8» всех заметок с планом одним запросом — для списка заметок. */
+  public Map<Long, String> planBadges() {
+    Map<Long, String> out = new HashMap<>();
+    try (Cursor c =
+        getReadableDatabase().rawQuery("SELECT id,plan FROM notes WHERE plan<>''", null)) {
+      while (c.moveToNext()) {
+        String badge = PlanTree.parse(c.getString(1)).badge();
+        if (!badge.isEmpty()) out.put(c.getLong(0), badge);
+      }
+    }
+    return out;
+  }
+
+  /** Чат по заметке, если он уже есть, иначе 0. */
+  public long noteChat(long note) {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT id FROM chats WHERE note=? ORDER BY id LIMIT 1", new String[] {"" + note})) {
+      return c.moveToFirst() ? c.getLong(0) : 0;
+    }
+  }
+
+  public long newNoteChat(long note, String title) {
+    long id = newChat(title);
+    getWritableDatabase().execSQL("UPDATE chats SET note=? WHERE id=?", new Object[] {note, id});
+    return id;
+  }
+
+  /** Заметка, к которой привязан чат, или 0. */
+  public long chatNote(long chat) {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery("SELECT note FROM chats WHERE id=?", new String[] {"" + chat})) {
+      return c.moveToFirst() ? c.getLong(0) : 0;
+    }
+  }
+
   public List<String[]> chats() {
     List<String[]> out = new ArrayList<>();
     try (Cursor c =
         getReadableDatabase()
-            .rawQuery("SELECT id,title,created FROM chats ORDER BY id DESC", null)) {
-      while (c.moveToNext()) out.add(new String[] {c.getString(0), c.getString(1), c.getString(2)});
+            .rawQuery("SELECT id,title,created,note FROM chats ORDER BY id DESC", null)) {
+      while (c.moveToNext())
+        out.add(new String[] {c.getString(0), c.getString(1), c.getString(2), c.getString(3)});
     }
     return out;
   }

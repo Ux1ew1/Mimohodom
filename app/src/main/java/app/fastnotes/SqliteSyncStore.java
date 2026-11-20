@@ -191,7 +191,8 @@ public final class SqliteSyncStore implements SyncStore {
                 "SELECT n.uid,n.title,n.body,n.created,n.updated,n.reminder,n.repeat_mode,"
                     + "n.lead_minutes,n.image,n.title_auto,"
                     + "(n.ai_checked=n.updated AND n.ai_failed=0 AND n.ai_checked<>0),n.metadata,"
-                    + "n.sync_ts,n.sync_seq,ifnull((SELECT uid FROM folders f WHERE f.id=n.folder),'')"
+                    + "n.sync_ts,n.sync_seq,ifnull((SELECT uid FROM folders f WHERE f.id=n.folder),''),"
+                    + "n.plan"
                     + " FROM notes n WHERE n.sync_seq>? AND n.sync_seq<=? AND n.sync_from<>?"
                     + " ORDER BY n.sync_seq LIMIT ?",
                 new String[] {"" + since, "" + snapshot, exclude, "" + (limit + 1)})) {
@@ -211,6 +212,7 @@ public final class SqliteSyncStore implements SyncStore {
         r.metadata = c.getString(11);
         r.ts = c.getLong(12);
         r.folder = c.getString(14);
+        r.plan = c.getString(15);
         items.add(new Item(c.getLong(13), r));
       }
     }
@@ -434,6 +436,7 @@ public final class SqliteSyncStore implements SyncStore {
     v.put("suggestion", 0);
     v.put("suggestion_reason", "");
     v.put("suggestion_lead", -1);
+    if (r.plan != null) v.put("plan", r.plan);
     v.put("metadata", metadata);
     v.put("search_text", Metadata.searchText(Metadata.read(metadata)));
     v.put("sync_ts", r.ts);

@@ -20,6 +20,8 @@ public final class SyncRecord {
   public int repeat, lead = -1;
   public List<String> images = new ArrayList<>();
   public boolean titleAuto, aiChecked;
+  /** План заметки (JSON PlanTree). null — поля не было в записи: старая версия, свой план не трогаем. */
+  public String plan;
   // папка
   public String name = "", key = "";
   public boolean auto;
@@ -86,7 +88,8 @@ public final class SyncRecord {
           .put("folder", folder)
           .put("titleAuto", titleAuto)
           .put("aiChecked", aiChecked)
-          .put("metadata", metadata);
+          .put("metadata", metadata)
+          .putOpt("plan", plan);
     } catch (JSONException e) {
       throw new IllegalStateException(e);
     }
@@ -115,6 +118,7 @@ public final class SyncRecord {
     r.titleAuto = o.optBoolean("titleAuto", false);
     r.aiChecked = o.optBoolean("aiChecked", false);
     r.metadata = o.optString("metadata", "");
+    r.plan = o.has("plan") ? o.optString("plan", "") : null;
     r.name = o.optString("name", "");
     r.key = o.optString("key", "");
     r.auto = o.optBoolean("auto", false);

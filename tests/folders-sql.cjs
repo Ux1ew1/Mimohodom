@@ -100,6 +100,14 @@ db.exec(lead[0]);
 check(db.prepare("SELECT suggestion_lead FROM notes WHERE id=1").get().suggestion_lead === -1, "Old notes have no suggested lead");
 check(method(store, "void onCreate(SQLiteDatabase db)").includes("addSuggestionLead(db)"), "Fresh install also gets the column");
 check(/oldV < 11\)\s*addSuggestionLead\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 10 -> 11 adds the column");
-check(/super\(context, name, null, 11\)/.test(store), "Database version is 11");
+// Версия 12: план у заметки (дерево PlanTree) и привязка чата к заметке.
+const plans = statements(method(store, "void addPlans(SQLiteDatabase db)"));
+check(plans.length === 2, "Read actual plan migration SQL");
+for (const sql of plans) db.exec(sql);
+check(db.prepare("SELECT plan FROM notes WHERE id=1").get().plan === "", "Old notes have no plan");
+check(db.prepare("PRAGMA table_info(chats)").all().some(c => c.name === "note"), "Chats have note column");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addPlans(db)"), "Fresh install also gets plans");
+check(/oldV < 12\)\s*addPlans\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 11 -> 12 adds plans");
+check(/super\(context, name, null, 12\)/.test(store), "Database version is 12");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

@@ -258,4 +258,28 @@ const meta = db => db.prepare('SELECT * FROM sync_meta WHERE id=1').get();
   db.prepare("INSERT INTO stack_sync(top,members,ts,seq) VALUES('t','a,b',1,1)").run();
   check(db.prepare('SELECT count(*) c FROM stack_sync').get().c === 1, 'таблица stack_sync создана');
 }
+// ---- План заметки (SQLite 12): отметка уходит в обмен, время правки не сдвигается ----
+{
+  const db = build(false);
+  runSync(db);
+  runChatSync(db);
+  const plans = statements(method('void addPlans(SQLiteDatabase db)'));
+  check(plans.filter(x => x.sql.includes('CREATE TRIGGER')).length === 1, 'триггер плана есть');
+  for (const st of plans) db.exec(st.sql);
+  for (const st of plans) if (st.sql.includes('CREATE TRIGGER')) db.exec(st.sql); // повторно безопасно
+  db.prepare('INSERT INTO notes(title,body,created,updated,metadata,search_text) VALUES(?,?,?,?,?,?)').run('Выезд', 'база', 10, 10, '{}', 'база');
+  stampPending(db);
+  const before = db.prepare('SELECT * FROM notes WHERE id=1').get();
+  db.prepare('UPDATE notes SET plan=? WHERE id=1').run('{"v":1}');
+  let after = db.prepare('SELECT * FROM notes WHERE id=1').get();
+  check(after.sync_seq > before.sync_seq && after.sync_seq === meta(db).seq, 'правка плана нумеруется для обмена');
+  check(after.updated === before.updated, 'правка плана не сдвигает время правки заметки');
+  const seq = meta(db).seq;
+  db.prepare('UPDATE notes SET plan=? WHERE id=1').run('{"v":1}');
+  check(meta(db).seq === seq, 'тот же план — без новой метки');
+  db.prepare('UPDATE notes SET plan=?,sync_seq=?,sync_from=? WHERE id=1').run('{"v":2}', 999, 'peer');
+  after = db.prepare('SELECT * FROM notes WHERE id=1').get();
+  check(meta(db).seq === seq && after.sync_from === 'peer', 'план от другого устройства не перенумеровывается');
+  check(db.prepare('PRAGMA table_info(chats)').all().some(c => c.name === 'note'), 'чат знает свою заметку');
+}
 console.log(`sync-sql OK (${count} проверок)`);

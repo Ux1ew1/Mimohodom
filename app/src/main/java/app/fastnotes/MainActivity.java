@@ -1699,6 +1699,7 @@ public final class MainActivity extends Activity
     }
     sheet.addView(footer);
     content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
+    if (id > 0) planSection(id);
     if (note != null && note.suggestion > 0) {
       gap(content, 12);
       LinearLayout proposal = column();
@@ -2207,6 +2208,7 @@ public final class MainActivity extends Activity
           Map<Long, Long> tops = manager.topMap();
           Map<Long, List<Long>> groups = manager.membersMap();
           membersCache = groups;
+          planCache = store.planBadges();
           List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search);
           visibleNotes.clear();
           for (Note n : found) {
@@ -2276,6 +2278,7 @@ public final class MainActivity extends Activity
             }
           }
           membersCache = null;
+          planCache = null;
         };
     refresh.run();
     watch(
@@ -2395,6 +2398,16 @@ public final class MainActivity extends Activity
 
   /** Состав стопок на время построения списка; вне его {@code null} и карточки спрашивают базу. */
   private Map<Long, List<Long>> membersCache;
+
+  /** Отметки «План 3/8» на время построения списка; вне его {@code null} и карточка читает базу. */
+  private Map<Long, String> planCache;
+
+  private String planBadge(long id) {
+    Map<Long, String> cache = planCache;
+    if (cache == null) return PlanTree.parse(store.plan(id)).badge();
+    String found = cache.get(id);
+    return found == null ? "" : found;
+  }
 
   private List<Long> membersOf(long id) {
     Map<Long, List<Long>> cache = membersCache;
@@ -2828,6 +2841,8 @@ public final class MainActivity extends Activity
     body.setEllipsize(TextUtils.TruncateAt.END);
     card.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
     gap(card, 12);
+    String planned = planBadge(n.id);
+    if (!planned.isEmpty()) card.addView(text(planned, 11, GREEN));
     if (n.suggestion > 0) {
       TextView suggestion = text("Есть предложение ИИ", 11, GREEN);
       card.addView(suggestion);
@@ -3282,10 +3297,18 @@ public final class MainActivity extends Activity
             if (!term.isEmpty() && !c[1].toLowerCase(Locale.ROOT).contains(term)) continue;
             any = true;
             long id = Long.parseLong(c[0]);
+            // Чаты, начатые помощником, — фиолетовые, как его итоги; чаты по заметке подписаны.
+            boolean byAgent = CheckInJob.isCheckInChat(this, id);
+            boolean byNote = c.length > 3 && !"0".equals(c[3]);
             LinearLayout item = row();
             item.setPadding(dp(12), dp(6), dp(4), dp(6));
-            item.setBackground(shape(SURFACE, 10));
+            item.setBackground(shape(byAgent ? STACK_BG : SURFACE, 10));
             LinearLayout words = column();
+            if (byAgent || byNote) {
+              TextView origin = text(byAgent ? "От помощника" : "По заметке", 10, byAgent ? STACK_FG : GREEN);
+              origin.setTypeface(null, Typeface.BOLD);
+              words.addView(origin);
+            }
             TextView title = text(c[1], 14, INK);
             title.setMaxLines(2);
             title.setEllipsize(TextUtils.TruncateAt.END);
@@ -3413,12 +3436,41 @@ public final class MainActivity extends Activity
       actions.addView(chatMenu(chat));
     }
     content.addView(actions);
+    long planNote = chat > 0 ? store.chatNote(chat) : 0;
+    Note planOf = planNote > 0 ? store.note(planNote) : null;
+    if (planOf != null) {
+      // Чат по заметке: ссылка на неё под заголовком.
+      TextView link = text("По заметке: " + planOf.title + "  ›", 12, GREEN);
+      link.setSingleLine(true);
+      link.setEllipsize(TextUtils.TruncateAt.END);
+      link.setPadding(dp(8), dp(4), dp(8), dp(4));
+      link.setBackground(ripple(LIME, 8));
+      link.setFocusable(true);
+      link.setOnClickListener(
+          v -> {
+            buzz(0);
+            openNote(planNote);
+          });
+      content.addView(link, new LinearLayout.LayoutParams(-2, -2));
+    }
     gap(content, 6);
     LinearLayout messages = column();
     ScrollView scroller = scroll(messages);
     content.addView(scroller, new LinearLayout.LayoutParams(-1, 0, 1));
     JSONArray history = chat == 0 ? new JSONArray() : store.messages(chat);
-    if (history.length() == 0) {
+    if (history.length() == 0 && planOf != null) {
+      gap(messages, 12);
+      chatNote(messages, "Агент задаст несколько вопросов по задаче и соберёт план.");
+      gap(messages, 6);
+      messages.addView(
+          compactButton(
+              "Разобрать план",
+              true,
+              () -> {
+                chatInput.setText(PlanChat.START);
+                send();
+              }));
+    } else if (history.length() == 0) {
       gap(messages, 12);
       TextView title = text("Память, с которой\nможно поговорить.", 20, INK);
       title.setTypeface(Typeface.create("serif", Typeface.NORMAL));
@@ -3453,6 +3505,8 @@ public final class MainActivity extends Activity
         // Факты «запомнил» и итог хранятся в тексте сообщения; текст показываем без служебных меток.
         ChatImages.Split pictures = ChatImages.split(m.getString("content"));
         ChatMemo.Split part = ChatMemo.split(pictures.text);
+        // Варианты ответа агента в чате по заметке хранятся служебной строкой в конце текста.
+        PlanChat.Split asked = user ? null : PlanChat.split(part.text);
         LinearLayout bubble = column();
         bubble.setPadding(dp(11), dp(7), dp(11), dp(8));
         bubble.setBackground(shape(user ? LIME : part.recap ? RECAP_BG : SURFACE, 10));
@@ -3464,7 +3518,8 @@ public final class MainActivity extends Activity
         TextView body = text("", 14, INK);
         body.setLineSpacing(dp(2), 1);
         body.setTextIsSelectable(true);
-        String shown = part.recap ? part.text.replaceFirst("^Итог\\.?\\s*", "") : part.text;
+        String said = asked == null ? part.text : asked.text;
+        String shown = part.recap ? said.replaceFirst("^Итог\\.?\\s*", "") : said;
         body.setText(linkedAnswer(shown, m.getJSONArray("sources")));
         body.setMovementMethod(LinkMovementMethod.getInstance());
         if (!pictures.images.isEmpty()) {
@@ -3481,8 +3536,27 @@ public final class MainActivity extends Activity
             bubble.addView(memory);
           }
         }
+        if (asked != null
+            && !asked.options.isEmpty()
+            && i == history.length() - 1
+            && ChatRunner.running == 0) {
+          gap(bubble, 6);
+          for (String option : asked.options) {
+            bubble.addView(
+                compactButton(
+                    option,
+                    false,
+                    () -> {
+                      chatInput.setText(option);
+                      send();
+                    }));
+            gap(bubble, 4);
+          }
+        }
         String draftJson = m.optString("draft", "");
-        if (!user && !draftJson.isEmpty() && ReminderBatch.isBatch(new JSONObject(draftJson))) {
+        if (!user && !draftJson.isEmpty() && new JSONObject(draftJson).has("plan")) {
+          planDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
+        } else if (!user && !draftJson.isEmpty() && ReminderBatch.isBatch(new JSONObject(draftJson))) {
           reminderBatchView(bubble, m.getLong("id"), new JSONObject(draftJson));
         } else if (!user && !draftJson.isEmpty()) {
           JSONObject draft = new JSONObject(draftJson);
@@ -3852,6 +3926,262 @@ public final class MainActivity extends Activity
 
   private boolean sendPlain;
 
+  /** Открывает чат по заметке; новый чат сразу просит агента начать разбор. */
+  private void openPlanChat(long noteId) {
+    stash();
+    if ("edit".equals(page) && !persistEditedNote()) return;
+    Note n = store.note(noteId);
+    if (n == null) return;
+    long id = store.noteChat(noteId);
+    boolean fresh = id == 0;
+    if (fresh) id = store.newNoteChat(noteId, "План: " + n.title);
+    hideKeyboard();
+    chat = id;
+    page = "chat";
+    tab = 2;
+    render();
+    if (fresh && chatInput != null) {
+      chatInput.setText(PlanChat.START);
+      send();
+    }
+  }
+
+  /** Блок «План» под листом редактора: пункты с галочками, правка долгим нажатием. */
+  private void planSection(long noteId) {
+    gap(content, 12);
+    LinearLayout box = column();
+    content.addView(box);
+    Runnable[] fill = new Runnable[1];
+    fill[0] =
+        () -> {
+          box.removeAllViews();
+          PlanTree plan = PlanTree.parse(store.plan(noteId));
+          java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+          LinearLayout head = row();
+          head.setGravity(Gravity.CENTER_VERTICAL);
+          TextView title = text(plan.isEmpty() ? "План" : plan.badge(), 15, GREEN);
+          title.setTypeface(null, Typeface.BOLD);
+          if (Build.VERSION.SDK_INT >= 28) title.setAccessibilityHeading(true);
+          head.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+          head.addView(
+              compactButton(
+                  plan.isEmpty() ? "Разобрать план" : "Обсудить", plan.isEmpty(), () -> openPlanChat(noteId)));
+          box.addView(head);
+          if (plan.isEmpty()) {
+            chatNote(
+                box,
+                "Агент спросит о том, чего не хватает (сроки, люди, что взять) и соберёт шаги.");
+            return;
+          }
+          gap(box, 6);
+          LinearLayout card = column();
+          card.setPadding(dp(6), dp(6), dp(6), dp(6));
+          card.setBackground(shape(SURFACE, 12));
+          planRows(card, plan, plan.nodes, 0, noteId, zone, fill[0]);
+          box.addView(card);
+          gap(box, 6);
+          box.addView(
+              compactButton(
+                  "＋ Пункт",
+                  false,
+                  () ->
+                      askPlanText(
+                          "Новый пункт",
+                          "",
+                          "Добавить",
+                          text -> {
+                            if (plan.add(null, PlanTree.STEP, text) != null)
+                              savePlan(noteId, plan, fill[0]);
+                          })));
+        };
+    fill[0].run();
+  }
+
+  private void planRows(
+      LinearLayout into,
+      PlanTree plan,
+      List<PlanTree.Node> list,
+      int level,
+      long noteId,
+      java.time.ZoneId zone,
+      Runnable refresh) {
+    for (PlanTree.Node n : list) {
+      LinearLayout line = row();
+      line.setPadding(dp(6 + 18 * level), dp(7), dp(6), dp(7));
+      TextView mark = text(n.checkable() ? (n.done ? "☑" : "☐") : "•", 16, n.done ? MUTED : GREEN);
+      mark.setMinWidth(dp(24));
+      line.addView(mark);
+      String shown =
+          (PlanTree.STEP.equals(n.kind) ? "" : PlanTree.label(n.kind) + ": ")
+              + PlanTree.line(n, zone);
+      TextView words = text(shown, 14, n.done ? MUTED : INK);
+      if (n.done) words.setPaintFlags(words.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
+      line.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+      line.setBackground(ripple(SURFACE, 8));
+      line.setFocusable(true);
+      line.setContentDescription(
+          (n.checkable() ? (n.done ? "Сделано: " : "Не сделано: ") : "") + shown);
+      line.setOnClickListener(
+          v -> {
+            buzz(0);
+            if (n.checkable()) {
+              plan.toggle(n.id);
+              savePlan(noteId, plan, refresh);
+            } else if (PlanTree.TIME.equals(n.kind) && n.at > 0) remindFromPlan(n);
+            else planNodeMenu(plan, n, noteId, refresh);
+          });
+      line.setOnLongClickListener(
+          v -> {
+            buzz(0);
+            planNodeMenu(plan, n, noteId, refresh);
+            return true;
+          });
+      into.addView(line);
+      planRows(into, plan, n.children, level + 1, noteId, zone, refresh);
+    }
+  }
+
+  private void planNodeMenu(PlanTree plan, PlanTree.Node n, long noteId, Runnable refresh) {
+    List<String> labels = new ArrayList<>();
+    List<Runnable> actions = new ArrayList<>();
+    if (PlanTree.TIME.equals(n.kind) && n.at > 0) {
+      labels.add("Напомнить в это время");
+      actions.add(() -> remindFromPlan(n));
+    }
+    labels.add("Изменить");
+    actions.add(
+        () ->
+            askPlanText(
+                "Пункт плана",
+                n.text,
+                "Сохранить",
+                text -> {
+                  if (plan.edit(n.id, text)) savePlan(noteId, plan, refresh);
+                }));
+    labels.add("Добавить пункт внутрь");
+    actions.add(
+        () ->
+            askPlanText(
+                "Новый пункт",
+                "",
+                "Добавить",
+                text -> {
+                  if (plan.add(n.id, PlanTree.STEP, text) != null) savePlan(noteId, plan, refresh);
+                  else toast("Глубже трёх уровней план не вкладывается");
+                }));
+    labels.add("Удалить");
+    actions.add(
+        () -> {
+          plan.remove(n.id);
+          savePlan(noteId, plan, refresh);
+        });
+    new AlertDialog.Builder(this)
+        .setTitle(n.text)
+        .setItems(labels.toArray(new String[0]), (d, which) -> actions.get(which).run())
+        .show();
+  }
+
+  /** Время из плана становится напоминанием заметки только по нажатию пользователя. */
+  private void remindFromPlan(PlanTree.Node n) {
+    if (n.at <= System.currentTimeMillis()) {
+      toast("Это время уже прошло");
+      return;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Напомнить " + date(n.at) + "?")
+        .setMessage(
+            n.text + (reminder > 0 ? "\n\nТекущее напоминание заметки заменится." : ""))
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton(
+            "Напомнить",
+            (d, w) -> {
+              reminder = n.at;
+              repeatMode = 0; // время из плана — разовое событие, прежний повтор к нему не относится
+              refreshReminder();
+              stash();
+              toast("Напоминание сохранится вместе с заметкой");
+            })
+        .show();
+  }
+
+  private void savePlan(long noteId, PlanTree plan, Runnable refresh) {
+    try {
+      store.savePlan(noteId, plan.toJson());
+    } catch (Exception e) {
+      toast(e.getMessage() == null ? "Не удалось сохранить план" : e.getMessage());
+    }
+    refresh.run();
+  }
+
+  private void askPlanText(
+      String title, String initial, String action, java.util.function.Consumer<String> done) {
+    EditText field = input("Текст пункта", false);
+    field.setText(initial);
+    field.setSelection(field.getText().length());
+    FrameLayout holder = new FrameLayout(this);
+    holder.setPadding(dp(20), dp(8), dp(20), 0);
+    holder.addView(field, new FrameLayout.LayoutParams(-1, -2));
+    new AlertDialog.Builder(this)
+        .setTitle(title)
+        .setView(holder)
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton(
+            action,
+            (d, w) -> {
+              String text = field.getText().toString().trim();
+              if (!text.isEmpty()) done.accept(text);
+            })
+        .show();
+  }
+
+  /** Черновик плана в ответе агента: пункты текстом и «Сохранить план». */
+  private void planDraftView(LinearLayout bubble, long message, JSONObject draft) {
+    long noteId = draft.optLong("note");
+    PlanTree plan = PlanTree.parse(draft.optString("plan"));
+    gap(bubble, 6);
+    chatNote(bubble, "Черновик плана");
+    List<String> lines = plan.outline(java.time.ZoneId.systemDefault());
+    StringBuilder shown = new StringBuilder();
+    for (int k = 0; k < lines.size() && k < 40; k++) shown.append(k > 0 ? "\n" : "").append(lines.get(k));
+    if (lines.size() > 40) shown.append("\n… ещё ").append(lines.size() - 40);
+    TextView outline = text(shown.toString(), 13, INK);
+    outline.setLineSpacing(dp(2), 1);
+    outline.setTextIsSelectable(true);
+    bubble.addView(outline);
+    gap(bubble, 6);
+    LinearLayout row = row();
+    row.addView(
+        compactButton(
+            "Сохранить план",
+            true,
+            () -> {
+              try {
+                // Отметки, поставленные после ответа агента, не теряются.
+                plan.keepDone(PlanTree.parse(store.plan(noteId)));
+                store.savePlan(noteId, plan.toJson());
+                store.dismissDraft(message);
+                toast("План сохранён в заметке");
+              } catch (Exception e) {
+                toast(e.getMessage() == null ? "Не удалось сохранить план" : e.getMessage());
+              }
+              stash();
+              render();
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    row.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+    row.addView(
+        compactButton(
+            "Не сохранять",
+            false,
+            () -> {
+              store.dismissDraft(message);
+              stash();
+              render();
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    bubble.addView(row);
+  }
+
   private void send() {
     String query = chatInput.getText().toString().trim();
     String image = prefs.getString("chatImage." + chat, "");
@@ -3905,7 +4235,11 @@ public final class MainActivity extends Activity
       return;
     }
     List<String> videoLinks = YoutubeLink.all(query);
-    if (!local && !sendPlain && image.isEmpty() && !videoLinks.isEmpty()) {
+    if (!local
+        && !sendPlain
+        && image.isEmpty()
+        && !videoLinks.isEmpty()
+        && (chat == 0 || store.chatNote(chat) == 0)) {
       final String asked = query;
       offerVideoSummary(
           videoLinks,
@@ -6497,6 +6831,7 @@ public final class MainActivity extends Activity
                         .put("repeat", n.repeat)
                         .put("lead", n.lead)
                         .put("folder", n.folder)
+                        .put("plan", exportStore.plan(n.id))
                         .put("metadata", Metadata.read(n.metadata)));
               JSONArray folderList = new JSONArray();
               for (FolderStore.Folder f : new FolderStore(exportStore).list())
