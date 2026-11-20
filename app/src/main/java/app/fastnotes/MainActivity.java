@@ -15,6 +15,7 @@ import android.view.*;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.*;
@@ -98,12 +99,12 @@ public final class MainActivity extends Activity
     }
   }
 
-  /** Тема окна и системных панелей под выбранную палитру (значки панелей светлые на тёмном). */
-  /** Фон страницы: у новой заметки лист на весь экран (как карточка), у остальных — бумажный. */
+  /** Фон страницы: у новой заметки и ленты чатов — белый лист на весь экран, у остальных — бумажный. */
   private int pageColor() {
-    return "home".equals(page) ? SURFACE : PAPER;
+    return "home".equals(page) || "chats".equals(page) ? SURFACE : PAPER;
   }
 
+  /** Тема окна и системных панелей под выбранную палитру (значки панелей светлые на тёмном). */
   private void applySystemBars() {
     int background = pageColor();
     getWindow().setBackgroundDrawable(new ColorDrawable(background));
@@ -182,6 +183,11 @@ public final class MainActivity extends Activity
               });
       };
   private String search = "", chatSearch = "";
+  /** Лента чатов: открыт ли поиск, фильтр, развёрнут ли «Помощник» и ответ из его карточки. */
+  private boolean chatSearchOpen, helperOpen;
+  private int chatFilter = ChatFeed.ALL;
+  private long helperReplyChat;
+  private String helperReply = "";
   /** Открытая папка в списке заметок (0 — «Все заметки») и папка заметки в редакторе. */
   private long folder = 0, editFolder = 0;
   private final List<Note> visibleNotes = new ArrayList<>();
@@ -863,6 +869,12 @@ public final class MainActivity extends Activity
     chatInput = null;
     if (suggestionsPopup != null) suggestionsPopup.dismiss();
     dockSpace = null;
+    if (!"chats".equals(page)) {
+      // Поиск и ответ в карточке помощника живут, пока открыта лента чатов.
+      chatSearchOpen = false;
+      helperReplyChat = 0;
+      helperReply = "";
+    }
     root = column();
     root.setBackgroundColor(pageColor());
     frame = new FrameLayout(this);
@@ -1008,7 +1020,8 @@ public final class MainActivity extends Activity
     dockFade = new View(this);
     dockFade.setBackground(
         new GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM, new int[] {PAPER & 0x00FFFFFF, PAPER}));
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[] {pageColor() & 0x00FFFFFF, pageColor()}));
     frame.addView(dockFade, new FrameLayout.LayoutParams(-1, dp(110), Gravity.BOTTOM));
     dock = new FrameLayout(this);
     GradientDrawable background = shape(DOCK, 20);
@@ -4107,85 +4120,580 @@ public final class MainActivity extends Activity
     return out;
   }
 
+  /** Страница «Чаты» (0.10.22): заголовок, «Спросить у заметок…», фильтры, лента по дням. */
   private void chats() {
-    content.addView(topBar(true, true, true), new LinearLayout.LayoutParams(-1, dp(44)));
-    gap(content, 8);
-    content.addView(
-        compactButton(
-            "Новый чат",
-            true,
+    FrameLayout bar = (FrameLayout) topBar(false, false, true);
+    TextView heading = text("Чаты", 30, INK);
+    heading.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+    if (Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
+    bar.addView(
+        heading, new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL));
+    View findButton =
+        barIcon(
+            "search",
+            "Поиск по чатам",
             () -> {
-              // Черновик нового чата (текст и приложенные картинки) сохраняется, пока его не
-              // отправят или не уберут вручную: тихо стирать вложения нельзя, их файлы осиротеют.
-              chat = 0;
-              page = "chat";
+              chatSearchOpen = true;
               render();
-            }));
-    gap(content, 12);
-    chatNote(content, "История чатов");
-    gap(content, 6);
+            });
+    FrameLayout.LayoutParams findParams =
+        new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.CENTER_VERTICAL);
+    findParams.rightMargin = dp(96);
+    bar.addView(findButton, findParams);
+    content.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
+    gap(content, 4);
+
+    EditText find = null;
+    if (chatSearchOpen || !chatSearch.isEmpty()) {
+      LinearLayout box = row();
+      box.setGravity(Gravity.CENTER_VERTICAL);
+      box.setPadding(dp(14), 0, dp(6), 0);
+      GradientDrawable boxBackground = shape(SURFACE, 12);
+      boxBackground.setStroke(dp(1), LINE);
+      box.setBackground(boxBackground);
+      ImageView glass = new ImageView(this);
+      glass.setImageDrawable(new Glyph("search", MUTED, 20));
+      box.addView(glass, new LinearLayout.LayoutParams(dp(20), dp(20)));
+      find = new EditText(this);
+      find.setBackground(null);
+      find.setHint("Поиск по чатам");
+      find.setContentDescription("Поиск по чатам");
+      find.setHintTextColor(MUTED);
+      find.setTextColor(INK);
+      find.setTextSize(15);
+      find.setSingleLine(true);
+      find.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+      find.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+      find.setPadding(dp(8), 0, dp(8), 0);
+      find.setText(chatSearch);
+      find.setOnEditorActionListener(
+          (v, action, event) -> {
+            hideKeyboard();
+            return true;
+          });
+      box.addView(find, new LinearLayout.LayoutParams(0, -1, 1));
+      ImageView clear = new ImageView(this);
+      clear.setScaleType(ImageView.ScaleType.CENTER);
+      clear.setImageDrawable(new Glyph("close", GREEN, 18));
+      clear.setBackground(ripple(LIME, 10));
+      clear.setContentDescription("Закрыть поиск");
+      clear.setOnClickListener(
+          v -> {
+            buzz(0);
+            chatSearch = "";
+            chatSearchOpen = false;
+            hideKeyboard();
+            render();
+          });
+      box.addView(clear, new LinearLayout.LayoutParams(dp(32), dp(32)));
+      content.addView(box, new LinearLayout.LayoutParams(-1, dp(44)));
+      gap(content, 10);
+      if (chatSearchOpen && chatSearch.isEmpty()) {
+        EditText target = find;
+        target.post(
+            () -> {
+              target.requestFocus();
+              getSystemService(InputMethodManager.class).showSoftInput(target, 0);
+            });
+      }
+    }
+
+    // «Спросить у заметок…» начинает новый чат. Черновик нового чата (текст и картинки)
+    // сохраняется, пока его не отправят или не уберут вручную: файлы вложений нельзя осиротить.
+    LinearLayout ask = row();
+    ask.setGravity(Gravity.CENTER_VERTICAL);
+    ask.setPadding(dp(16), 0, dp(7), 0);
+    GradientDrawable askBackground = shape(PAPER, 12);
+    askBackground.setStroke(dp(1), LINE);
+    ask.setBackground(askBackground);
+    ask.setForeground(ripple(android.graphics.Color.TRANSPARENT, 12));
+    TextView askText = text("Спросить у заметок…", 15, MUTED);
+    askText.setSingleLine(true);
+    ask.addView(askText, new LinearLayout.LayoutParams(0, -2, 1));
+    ImageView askGo = new ImageView(this);
+    askGo.setScaleType(ImageView.ScaleType.CENTER);
+    askGo.setImageDrawable(new Glyph("send", WHITE, 18));
+    askGo.setBackground(shape(FILL, 10));
+    askGo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+    ask.addView(askGo, new LinearLayout.LayoutParams(dp(36), dp(36)));
+    ask.setContentDescription("Новый чат: спросить у заметок");
+    ask.setFocusable(true);
+    ask.setOnClickListener(
+        v -> {
+          buzz(0);
+          chat = 0;
+          page = "chat";
+          render();
+        });
+    content.addView(ask, new LinearLayout.LayoutParams(-1, dp(50)));
+    gap(content, 14);
+
+    List<ChatFeed.Row> rows = store.chatFeed();
     LinearLayout listing = column();
-    content.addView(listing);
-    EditText find = searchField;
+    long[] hidden = {0};
+    String[] term = {chatSearch.trim().toLowerCase(Locale.ROOT)};
     Runnable refresh =
         () -> {
           listing.removeAllViews();
-          String term = chatSearch.trim().toLowerCase(Locale.ROOT);
+          long now = System.currentTimeMillis();
+          ZoneId zone = ZoneId.systemDefault();
+          String group = null;
           boolean any = false;
-          for (String[] c : store.chats()) {
-            if (!term.isEmpty() && !c[1].toLowerCase(Locale.ROOT).contains(term)) continue;
-            any = true;
-            long id = Long.parseLong(c[0]);
-            // Чаты, начатые помощником, — фиолетовые, как его итоги; чаты по заметке подписаны.
-            // Происхождение хранится в chats.origin и приходит с компьютера вместе с чатом.
-            String origin = c.length > 4 ? ChatOrigin.clean(c[4]) : ChatOrigin.USER;
-            boolean byAgent = ChatOrigin.AGENT.equals(origin);
-            boolean byNote = !byAgent && (ChatOrigin.NOTE.equals(origin) || (c.length > 3 && !"0".equals(c[3])));
-            LinearLayout item = row();
-            item.setPadding(dp(12), dp(6), dp(4), dp(6));
-            item.setBackground(shape(byAgent ? STACK_BG : SURFACE, 10));
-            LinearLayout words = column();
-            if (byAgent || byNote) {
-              TextView mark =
-                  text(ChatOrigin.label(byAgent ? ChatOrigin.AGENT : ChatOrigin.NOTE), 10, byAgent ? STACK_FG : GREEN);
-              mark.setTypeface(null, Typeface.BOLD);
-              words.addView(mark);
+          for (ChatFeed.Row r : rows) {
+            if (!term[0].isEmpty() && !r.title.toLowerCase(Locale.ROOT).contains(term[0])) continue;
+            if (!ChatFeed.matches(chatFilter, r) || (helperOpen && r.id == hidden[0])) continue;
+            String g = ChatFeed.group(r.time, now, zone);
+            if (!g.equals(group)) {
+              TextView label = text(g, 12, MUTED);
+              label.setTypeface(null, Typeface.BOLD);
+              label.setPadding(0, dp(any ? 18 : 6), 0, dp(4));
+              if (Build.VERSION.SDK_INT >= 28) label.setAccessibilityHeading(true);
+              listing.addView(label);
+              group = g;
+            } else {
+              View rule = new View(this);
+              rule.setBackgroundColor(LINE);
+              LinearLayout.LayoutParams ruleParams = new LinearLayout.LayoutParams(-1, dp(1));
+              ruleParams.leftMargin = dp(52);
+              listing.addView(rule, ruleParams);
             }
-            TextView title = text(c[1], 14, INK);
-            title.setMaxLines(2);
-            title.setEllipsize(TextUtils.TruncateAt.END);
-            words.addView(title);
-            gap(words, 2);
-            chatNote(words, date(Long.parseLong(c[2])));
-            words.setOnClickListener(
-                v -> {
-                  buzz(0);
-                  chat = id;
-                  page = "chat";
-                  render();
-                });
-            words.setFocusable(true);
-            item.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
-            item.addView(chatMenu(id));
-            listing.addView(item);
-            gap(listing, 5);
+            listing.addView(chatFeedRow(r, now, zone));
+            any = true;
           }
           if (!any) {
             gap(listing, 12);
             secondary(
                 listing,
-                term.isEmpty()
-                    ? "Первый разговор ещё впереди.\nОтветы будут ссылаться на ваши заметки."
-                    : "Чатов с такими словами нет.");
+                !term[0].isEmpty()
+                    ? "Чатов с такими словами нет."
+                    : rows.isEmpty()
+                        ? "Первый разговор ещё впереди.\nОтветы будут ссылаться на ваши заметки."
+                        : "Здесь пока пусто.");
           }
         };
+    content.addView(chatFilters(rows, hidden, refresh));
+    gap(content, 4);
+    content.addView(listing);
     refresh.run();
-    watch(
-        find,
-        () -> {
-          chatSearch = find.getText().toString();
+    if (find != null) {
+      EditText field = find;
+      watch(
+          field,
+          () -> {
+            chatSearch = field.getText().toString();
+            term[0] = chatSearch.trim().toLowerCase(Locale.ROOT);
+            refresh.run();
+          });
+    }
+  }
+
+  /** Строка ленты: значок вида чата, название, строка последнего сообщения и время. */
+  private View chatFeedRow(ChatFeed.Row r, long now, ZoneId zone) {
+    boolean agent = ChatFeed.byAgent(r), note = ChatFeed.byNote(r), waiting = ChatFeed.awaits(r);
+    LinearLayout item = row();
+    item.setGravity(Gravity.TOP);
+    item.setPadding(0, dp(12), 0, dp(12));
+    item.setBackground(ripple(android.graphics.Color.TRANSPARENT, 10));
+    ImageView icon = new ImageView(this);
+    icon.setScaleType(ImageView.ScaleType.CENTER);
+    GradientDrawable tile = shape(agent ? STACK_BG : note ? PAPER : LIME, 12);
+    if (note) tile.setStroke(dp(1), LINE);
+    icon.setBackground(tile);
+    icon.setImageDrawable(
+        new Glyph(agent ? "spark" : note ? "notes" : "chat", agent ? STACK_FG : GREEN, 20));
+    icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+    item.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40)));
+    LinearLayout words = column();
+    LinearLayout top = row();
+    TextView title = text(r.title, 15, INK);
+    title.setTypeface(null, Typeface.BOLD);
+    title.setSingleLine(true);
+    title.setEllipsize(TextUtils.TruncateAt.END);
+    top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+    TextView when = text(ChatFeed.time(r.time, now, zone), 12, waiting ? STACK_FG : MUTED);
+    if (waiting) when.setTypeface(null, Typeface.BOLD);
+    LinearLayout.LayoutParams whenParams = new LinearLayout.LayoutParams(-2, -2);
+    whenParams.leftMargin = dp(8);
+    top.addView(when, whenParams);
+    words.addView(top);
+    String said = ChatFeed.preview(r.body);
+    String line =
+        waiting
+            ? "Помощник ждёт ответа"
+            : said.isEmpty() ? "" : ("user".equals(r.role) ? "Вы: " : "") + said;
+    if (!line.isEmpty()) {
+      gap(words, 3);
+      TextView preview = text(line, 13, waiting ? STACK_FG : MUTED);
+      preview.setSingleLine(true);
+      preview.setEllipsize(TextUtils.TruncateAt.END);
+      words.addView(preview);
+    }
+    LinearLayout.LayoutParams wordsParams = new LinearLayout.LayoutParams(0, -2, 1);
+    wordsParams.leftMargin = dp(12);
+    item.addView(words, wordsParams);
+    item.setContentDescription(
+        (agent ? "Чат помощника: " : note ? "Чат по заметке: " : "Чат: ")
+            + r.title
+            + (line.isEmpty() ? "" : ". " + line)
+            + ". "
+            + ChatFeed.time(r.time, now, zone));
+    item.setFocusable(true);
+    item.setOnClickListener(
+        v -> {
+          buzz(0);
+          chat = r.id;
+          page = "chat";
+          render();
+        });
+    item.setOnLongClickListener(
+        v -> {
+          buzz(0);
+          showChatMenu(item, r.id);
+          return true;
+        });
+    return item;
+  }
+
+  /**
+   * Фильтры ленты и «Помощник». Нажатие на «Помощник» разворачивает его в карточку от края до
+   * края поверх остальных фильтров (вопрос помощника с ответами кнопками), повторное — сворачивает.
+   */
+  private View chatFilters(List<ChatFeed.Row> rows, long[] hidden, Runnable refresh) {
+    List<ChatFeed.Row> waiting = new ArrayList<>(), agent = new ArrayList<>();
+    for (ChatFeed.Row r : rows) {
+      if (ChatFeed.byAgent(r)) agent.add(r);
+      if (ChatFeed.awaits(r)) waiting.add(r);
+    }
+    FrameLayout box = new FrameLayout(this);
+    LinearLayout chips = row();
+    String[] names = {"Все", "Мои", "По заметкам"};
+    int[] filters = {ChatFeed.ALL, ChatFeed.MINE, ChatFeed.NOTES};
+    String closedText = waiting.isEmpty() ? "Помощник" : "Помощник · " + waiting.size();
+    TextView placeholder = null;
+    for (int i = 0; i < names.length; i++) {
+      if (i == 2 && !agent.isEmpty()) {
+        // Место под «Помощником»: невидимая копия подписи той же ширины, что и свёрнутая карточка.
+        placeholder = text(closedText, 13, STACK_FG);
+        placeholder.setTypeface(null, Typeface.BOLD);
+        placeholder.setSingleLine(true);
+        placeholder.setGravity(Gravity.CENTER_VERTICAL);
+        placeholder.setPadding(dp(12), 0, dp(32), 0);
+        placeholder.setVisibility(View.INVISIBLE);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(36));
+        p.leftMargin = dp(6);
+        chips.addView(placeholder, p);
+      }
+      int filter = filters[i];
+      boolean active = chatFilter == filter;
+      TextView chip = text(names[i], 13, active ? WHITE : GREEN);
+      chip.setTypeface(null, Typeface.BOLD);
+      chip.setSingleLine(true);
+      chip.setGravity(Gravity.CENTER);
+      chip.setPadding(dp(12), 0, dp(12), 0);
+      chip.setBackground(ripple(active ? FILL : LIME, 10));
+      chip.setSelected(active);
+      chip.setFocusable(true);
+      chip.setContentDescription("Показать: " + names[i] + (active ? ", выбрано" : ""));
+      chip.setOnClickListener(
+          v -> {
+            buzz(0);
+            chatFilter = filter;
+            render();
+          });
+      LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(36));
+      if (i > 0) p.leftMargin = dp(6);
+      chips.addView(chip, p);
+    }
+    box.addView(chips, new FrameLayout.LayoutParams(-2, dp(36)));
+    LinearLayout.LayoutParams boxParams = new LinearLayout.LayoutParams(-1, dp(36));
+    if (placeholder == null) {
+      box.setLayoutParams(boxParams);
+      return box;
+    }
+
+    // Карточка помощника: строка-заголовок (она же свёрнутая кнопка) и содержимое.
+    ChatFeed.Row shown = helperReplyChat == 0 && !waiting.isEmpty() ? waiting.get(0) : null;
+    hidden[0] = helperReplyChat != 0 ? helperReplyChat : shown == null ? 0 : shown.id;
+    LinearLayout card = column();
+    GradientDrawable cardBackground = shape(STACK_BG, 10);
+    card.setBackground(cardBackground);
+    LinearLayout header = row();
+    header.setGravity(Gravity.CENTER_VERTICAL);
+    header.setPadding(dp(12), 0, dp(10), 0);
+    header.setBackground(ripple(android.graphics.Color.TRANSPARENT, 10));
+    TextView label = text(closedText, 13, STACK_FG);
+    label.setTypeface(null, Typeface.BOLD);
+    label.setSingleLine(true);
+    label.setEllipsize(TextUtils.TruncateAt.END);
+    header.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+    long now = System.currentTimeMillis();
+    TextView meta =
+        text(shown == null ? "" : ChatFeed.time(shown.time, now, ZoneId.systemDefault()), 12, STACK_FG);
+    LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(-2, -2);
+    metaParams.leftMargin = dp(6);
+    header.addView(meta, metaParams);
+    ImageView chevron = new ImageView(this);
+    chevron.setScaleType(ImageView.ScaleType.CENTER);
+    chevron.setImageDrawable(new Glyph("down", STACK_FG, 16));
+    LinearLayout.LayoutParams chevronParams = new LinearLayout.LayoutParams(dp(16), dp(16));
+    chevronParams.leftMargin = dp(6);
+    header.addView(chevron, chevronParams);
+    card.addView(header, new LinearLayout.LayoutParams(-1, dp(36)));
+
+    LinearLayout body = column();
+    body.setPadding(dp(14), 0, dp(14), dp(14));
+    int deep = dark ? INK : 0xFF3E2352;
+    if (helperReplyChat != 0) {
+      TextView reply = text(helperReply, 14, deep);
+      reply.setLineSpacing(dp(2), 1);
+      body.addView(reply);
+      gap(body, 10);
+      LinearLayout actions = row();
+      actions.addView(helperPill("Открыть чат", false, () -> openChatFromHelper(helperReplyChat)));
+      body.addView(actions);
+    } else if (shown != null) {
+      PlanChat.Split asked = PlanChat.split(ChatMemo.split(ChatImages.split(shown.body).text).text);
+      TextView question = text(asked.text.isEmpty() ? shown.title : asked.text, 15, deep);
+      question.setTypeface(null, Typeface.BOLD);
+      question.setLineSpacing(dp(2), 1);
+      body.addView(question);
+      gap(body, 10);
+      LinearLayout actions = row();
+      if (ChatFeed.progress(shown)) {
+        String[] answers = {ProgressCheck.DONE, ProgressCheck.ACTIVE, ProgressCheck.LATER};
+        for (int i = 0; i < answers.length; i++) {
+          String answer = answers[i];
+          TextView pill = helperPill(answer, i == 0, () -> answerFromHelper(shown.id, answer));
+          LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(36));
+          if (i > 0) p.leftMargin = dp(8);
+          actions.addView(pill, p);
+        }
+        body.addView(actions);
+        gap(body, 6);
+        LinearLayout more = row();
+        more.addView(
+            helperPill(
+                ProgressCheck.DROP, null, () -> answerFromHelper(shown.id, ProgressCheck.DROP)));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(36));
+        p.leftMargin = dp(8);
+        more.addView(helperPill("Открыть чат", null, () -> openChatFromHelper(shown.id)), p);
+        body.addView(more);
+      } else {
+        actions.addView(helperPill("Ответить", true, () -> openChatFromHelper(shown.id)));
+        body.addView(actions);
+      }
+    } else {
+      body.addView(text("Новых вопросов нет.", 13, deep));
+    }
+    // Следующий вопрос или последний чат помощника — строкой внизу карточки.
+    ChatFeed.Row next = null;
+    for (ChatFeed.Row r : waiting) if (r.id != hidden[0]) { next = r; break; }
+    if (next == null) for (ChatFeed.Row r : agent) if (r.id != hidden[0]) { next = r; break; }
+    if (next != null) {
+      View rule = new View(this);
+      rule.setBackgroundColor(STACK_LINE);
+      LinearLayout.LayoutParams ruleParams = new LinearLayout.LayoutParams(-1, 1);
+      ruleParams.topMargin = dp(12);
+      body.addView(rule, ruleParams);
+      int more = 0;
+      for (ChatFeed.Row r : waiting) if (r.id != hidden[0]) more++;
+      ChatFeed.Row target = next;
+      TextView link =
+          text(
+              (more > 1 ? "Ещё вопросов: " + more + " · «" : "Ещё от помощника: «")
+                  + target.title
+                  + "» · "
+                  + ChatFeed.time(target.time, now, ZoneId.systemDefault()),
+              12,
+              STACK_FG);
+      link.setSingleLine(true);
+      link.setEllipsize(TextUtils.TruncateAt.END);
+      link.setMinHeight(dp(36));
+      link.setGravity(Gravity.CENTER_VERTICAL);
+      link.setBackground(ripple(android.graphics.Color.TRANSPARENT, 8));
+      link.setFocusable(true);
+      link.setOnClickListener(
+          v -> {
+            buzz(0);
+            openChatFromHelper(target.id);
+          });
+      body.addView(link, new LinearLayout.LayoutParams(-1, -2));
+    }
+    card.addView(body, new LinearLayout.LayoutParams(-1, -2));
+    FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(0, dp(36));
+    card.setVisibility(View.INVISIBLE);
+    box.addView(card, cardParams);
+    box.setLayoutParams(boxParams);
+
+    String openText = shown == null && helperReplyChat == 0 ? "Помощник" : "Помощник спрашивает";
+    HelperMotion motion =
+        new HelperMotion(box, chips, placeholder, card, body, header, label, meta, chevron,
+            cardBackground, closedText, openText);
+    header.setFocusable(true);
+    header.setOnClickListener(
+        v -> {
+          buzz(0);
+          helperOpen = !helperOpen;
+          if (!helperOpen && helperReplyChat != 0) {
+            helperReplyChat = 0;
+            helperReply = "";
+          }
+          motion.set(helperOpen, true);
           refresh.run();
         });
+    // Мерить можно только после первой разметки: до неё ширина нулевая, и карточка осталась бы
+    // невидимой. Меряем один раз, когда у строки фильтров появилась ширина.
+    box.addOnLayoutChangeListener(
+        new View.OnLayoutChangeListener() {
+          @Override
+          public void onLayoutChange(
+              View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+            if (motion.full != 0 || v.getWidth() == 0) return;
+            v.removeOnLayoutChangeListener(this);
+            v.post(motion::place);
+          }
+        });
+    return box;
+  }
+
+  private TextView helperPill(String label, Boolean primary, Runnable click) {
+    TextView pill = text(label, 13, Boolean.TRUE.equals(primary) ? SURFACE : STACK_FG);
+    pill.setTypeface(null, Typeface.BOLD);
+    pill.setSingleLine(true);
+    pill.setGravity(Gravity.CENTER);
+    pill.setMinHeight(dp(36));
+    pill.setPadding(dp(primary == null ? 4 : 14), 0, dp(primary == null ? 4 : 14), 0);
+    int fill =
+        primary == null
+            ? android.graphics.Color.TRANSPARENT
+            : primary ? STACK_FG : SURFACE;
+    pill.setBackground(ripple(fill, 10));
+    pill.setFocusable(true);
+    pill.setOnClickListener(
+        v -> {
+          buzz(0);
+          click.run();
+        });
+    return pill;
+  }
+
+  private void openChatFromHelper(long id) {
+    helperReplyChat = 0;
+    helperReply = "";
+    chat = id;
+    page = "chat";
+    render();
+  }
+
+  /** Ответ кнопкой из блока помощника: тот же путь, что и в чате, ответ помощника — в карточке. */
+  private void answerFromHelper(long id, String answer) {
+    String reply = answerProgressIn(id, answer);
+    if (reply == null) {
+      toast("На этот вопрос уже ответили");
+      render();
+      return;
+    }
+    helperReplyChat = id;
+    helperReply = reply;
+    render();
+  }
+
+  /**
+   * Разворот «Помощника»: от места кнопки среди фильтров до всей ширины и высоты карточки за
+   * 260 мс, быстро в начале и мягко к концу; фильтры гаснут, содержимое проявляется к концу.
+   */
+  private final class HelperMotion {
+    final FrameLayout box;
+    final View chips, placeholder, card, body, header, meta, chevron;
+    final TextView label;
+    final GradientDrawable background;
+    final String closedText, openText;
+    int full, left, width, openHeight;
+    float fraction = -1;
+    android.animation.ValueAnimator running;
+
+    HelperMotion(
+        FrameLayout box,
+        View chips,
+        View placeholder,
+        View card,
+        View body,
+        View header,
+        TextView label,
+        View meta,
+        View chevron,
+        GradientDrawable background,
+        String closedText,
+        String openText) {
+      this.box = box;
+      this.chips = chips;
+      this.placeholder = placeholder;
+      this.card = card;
+      this.body = body;
+      this.header = header;
+      this.label = label;
+      this.meta = meta;
+      this.chevron = chevron;
+      this.background = background;
+      this.closedText = closedText;
+      this.openText = openText;
+    }
+
+    /** Меряет место после разметки: ширину страницы, кнопку и высоту раскрытой карточки. */
+    void place() {
+      full = box.getWidth();
+      if (full == 0) return;
+      left = placeholder.getLeft();
+      width = placeholder.getWidth();
+      ViewGroup.LayoutParams bodyParams = body.getLayoutParams();
+      bodyParams.width = full;
+      body.setLayoutParams(bodyParams);
+      body.measure(
+          View.MeasureSpec.makeMeasureSpec(full, View.MeasureSpec.EXACTLY),
+          View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+      openHeight = dp(36) + body.getMeasuredHeight();
+      apply(helperOpen ? 1 : 0);
+      card.setVisibility(View.VISIBLE);
+    }
+
+    void apply(float f) {
+      fraction = f;
+      int closed = dp(36);
+      FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) card.getLayoutParams();
+      lp.leftMargin = Math.round(left * (1 - f));
+      lp.width = Math.round(width + (full - width) * f);
+      lp.height = Math.round(closed + (openHeight - closed) * f);
+      card.setLayoutParams(lp);
+      ViewGroup.LayoutParams outer = box.getLayoutParams();
+      outer.height = lp.height;
+      box.setLayoutParams(outer);
+      chips.setAlpha(Math.max(0f, 1f - f * 1.6f));
+      chips.setVisibility(f >= 1f ? View.INVISIBLE : View.VISIBLE);
+      float shown = Math.max(0f, Math.min(1f, (f - 0.4f) / 0.6f));
+      body.setAlpha(shown);
+      meta.setAlpha(shown);
+      meta.setVisibility(f > 0.5f ? View.VISIBLE : View.GONE);
+      label.setText(f > 0.5f ? openText : closedText);
+      chevron.setRotation(180f * f);
+      background.setCornerRadius(dp(10) + dp(2) * f);
+      header.setContentDescription(
+          (f > 0.5f ? openText + ", свернуть" : closedText + ", развернуть"));
+    }
+
+    void set(boolean open, boolean animated) {
+      if (full == 0) return;
+      if (running != null) running.cancel();
+      float target = open ? 1 : 0;
+      if (!animated || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+        apply(target);
+        return;
+      }
+      running = android.animation.ValueAnimator.ofFloat(Math.max(0, fraction), target);
+      running.setDuration(260);
+      running.setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f));
+      running.addUpdateListener(a -> apply((float) a.getAnimatedValue()));
+      running.start();
+    }
   }
 
   private TextView chatMenu(long id) {
@@ -4195,9 +4703,13 @@ public final class MainActivity extends Activity
     menu.setMinHeight(dp(36));
     menu.setMinWidth(dp(40));
     menu.setContentDescription("Меню чата");
-    menu.setOnClickListener(
-        v -> {
-          PopupMenu popup = new PopupMenu(this, menu);
+    menu.setOnClickListener(v -> showChatMenu(menu, id));
+    return menu;
+  }
+
+  /** Меню чата: заметка из диалога или удаление. В ленте чатов открывается долгим нажатием. */
+  private void showChatMenu(View anchor, long id) {
+          PopupMenu popup = new PopupMenu(this, anchor);
           popup.getMenu().add(0, 1, 0, "Создать заметку из диалога");
           popup.getMenu().add(0, 2, 1, "Удалить чат");
           popup.setOnMenuItemClickListener(
@@ -4248,8 +4760,6 @@ public final class MainActivity extends Activity
                 return true;
               });
           popup.show();
-        });
-    return menu;
   }
 
   private void chatPage() {
@@ -4829,20 +5339,35 @@ public final class MainActivity extends Activity
    * ответ обработан здесь.
    */
   private boolean answerProgress(String query) {
+    if (chat == 0) return false;
+    String reply = answerProgressIn(chat, query);
+    if (reply == null) return false;
+    chatInput.setText("");
+    stash();
+    render();
+    return true;
+  }
+
+  /**
+   * Записывает ответ кнопкой на «Как продвигается?» в чат {@code chatId} и ответ помощника.
+   * Возвращает текст ответа помощника или null, если последнее сообщение — не такой вопрос.
+   * Вызывается и из чата, и из блока помощника на странице «Чаты».
+   */
+  private String answerProgressIn(long chatId, String query) {
     String answer = ProgressCheck.option(query);
-    if (chat == 0 || answer.isEmpty()) return false;
+    if (chatId == 0 || answer.isEmpty()) return null;
     try {
-      JSONArray history = store.messages(chat);
-      if (history.length() == 0) return false;
+      JSONArray history = store.messages(chatId);
+      if (history.length() == 0) return null;
       JSONObject last = history.getJSONObject(history.length() - 1);
       String draftJson = last.optString("draft", "");
-      if (!"assistant".equals(last.optString("role")) || draftJson.isEmpty()) return false;
+      if (!"assistant".equals(last.optString("role")) || draftJson.isEmpty()) return null;
       JSONObject draft = new JSONObject(draftJson);
-      if (!"progress".equals(draft.optString("kind"))) return false;
+      if (!"progress".equals(draft.optString("kind"))) return null;
       long noteId = draft.optLong("note");
       Note n = store.note(noteId);
       store.dismissDraft(last.getLong("id"));
-      store.message(chat, "user", answer, new JSONArray());
+      store.message(chatId, "user", answer, new JSONArray());
       long now = System.currentTimeMillis();
       prefs.edit().putLong(CheckInJob.progressKey(noteId), ProgressCheck.nextAsk(answer, now)).apply();
       boolean alive = n != null && n.trashed == 0;
@@ -4860,13 +5385,10 @@ public final class MainActivity extends Activity
       }
       JSONArray sources =
           alive ? new JSONArray().put(new JSONObject().put("id", noteId).put("title", n.title)) : new JSONArray();
-      store.message(chat, "assistant", reply, sources, next);
-      chatInput.setText("");
-      stash();
-      render();
-      return true;
+      store.message(chatId, "assistant", reply, sources, next);
+      return reply;
     } catch (Exception e) {
-      return false;
+      return null;
     }
   }
 
@@ -8075,6 +8597,13 @@ public final class MainActivity extends Activity
       c.translate(getBounds().left, getBounds().top);
       c.scale(getBounds().width() / 24f, getBounds().height() / 24f);
       switch (name) {
+        case "down" -> {
+          Path down = new Path();
+          down.moveTo(6, 9);
+          down.lineTo(12, 15);
+          down.lineTo(18, 9);
+          c.drawPath(down, paint);
+        }
         case "check" -> {
           Path check = new Path();
           check.moveTo(4, 12);

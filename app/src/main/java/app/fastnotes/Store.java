@@ -1192,6 +1192,40 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     return out;
   }
 
+  /**
+   * Лента чатов: каждый чат с последним сообщением (текст, роль, черновик), временем последней
+   * активности и числом ответов пользователя; свежие сверху.
+   */
+  public List<ChatFeed.Row> chatFeed() {
+    List<ChatFeed.Row> out = new ArrayList<>();
+    String last = "FROM messages m WHERE m.chat=c.id ORDER BY m.created DESC, m.id DESC LIMIT 1";
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT c.id,c.title,c.created,c.note,c.origin,"
+                    + "(SELECT body " + last + "),(SELECT role " + last + "),(SELECT draft " + last
+                    + "),COALESCE((SELECT MAX(created) FROM messages m WHERE m.chat=c.id),c.created) AS t,"
+                    + "(SELECT count(*) FROM messages m WHERE m.chat=c.id AND m.role='user')"
+                    + " FROM chats c ORDER BY t DESC, c.id DESC",
+                null)) {
+      while (c.moveToNext()) {
+        ChatFeed.Row r = new ChatFeed.Row();
+        r.id = c.getLong(0);
+        r.title = c.isNull(1) ? "" : c.getString(1);
+        r.created = c.getLong(2);
+        r.note = c.isNull(3) ? 0 : c.getLong(3);
+        r.origin = c.isNull(4) ? ChatOrigin.USER : c.getString(4);
+        r.body = c.isNull(5) ? "" : c.getString(5);
+        r.role = c.isNull(6) ? "" : c.getString(6);
+        r.draft = c.isNull(7) ? "" : c.getString(7);
+        r.time = c.getLong(8);
+        r.userMessages = c.getInt(9);
+        out.add(r);
+      }
+    }
+    return out;
+  }
+
   public void deleteChat(long id) {
     getWritableDatabase().delete("chats", "id=?", new String[] {"" + id});
   }
