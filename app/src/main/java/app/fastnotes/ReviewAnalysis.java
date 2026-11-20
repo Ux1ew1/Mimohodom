@@ -68,8 +68,8 @@ public final class ReviewAnalysis {
     JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
     if ("length".equals(choice.optString("finish_reason")))
       throw new Failure(
-          "Ответ модели оборвался по лимиту длины. Выберите «Подробно» в настройках ИИ или"
-              + " другую модель.");
+          "Ответ модели оборвался по лимиту длины. Выберите «Подробно» или «Без ограничения» в"
+              + " настройках ИИ или другую модель.");
     String text = choice.getJSONObject("message").optString("content", "");
     if (text.trim().isEmpty())
       throw new Failure("Модель вернула пустой ответ. Попробуйте другую модель.");
@@ -104,6 +104,28 @@ public final class ReviewAnalysis {
     public Failure(String message) {
       super(message);
     }
+  }
+
+  /**
+   * Сколько ушло на запрос — для истории проверок: « Токенов: запрос 2718, ответ 498 из 1600 (из них
+   * размышление 300) · 0,06 ₽.». {@code limit} — потолок ответа из запроса (≤ 0 — без ограничения).
+   * Без раздела usage в ответе — пустая строка.
+   */
+  public static String usage(JSONObject response, int limit) {
+    JSONObject u = response == null ? null : response.optJSONObject("usage");
+    if (u == null) return "";
+    int in = u.optInt("prompt_tokens", -1), out = u.optInt("completion_tokens", -1);
+    if (in < 0 && out < 0) return "";
+    StringBuilder s = new StringBuilder(" Токенов: запрос ").append(in < 0 ? "?" : "" + in);
+    s.append(", ответ ").append(out < 0 ? "?" : "" + out);
+    s.append(limit > 0 ? " из " + limit : " (без ограничения)");
+    JSONObject details = u.optJSONObject("completion_tokens_details");
+    int thinking = details == null ? 0 : details.optInt("reasoning_tokens", 0);
+    if (thinking > 0) s.append(", из них размышление ").append(thinking);
+    double cost = u.optDouble("cost_rub", Double.NaN);
+    if (!Double.isNaN(cost))
+      s.append(" · ").append(String.format(new java.util.Locale("ru"), "%.2f", cost)).append(" ₽");
+    return s.append('.').toString();
   }
 
   public static String error(Exception error) {

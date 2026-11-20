@@ -176,14 +176,19 @@ public final class BackgroundAnalysis extends JobService {
               "chat/completions",
               key,
               Analysis.payload(claimed, model, System.currentTimeMillis(), ZoneId.systemDefault()));
-      String text =
-          response
-              .getJSONArray("choices")
-              .getJSONObject(0)
-              .getJSONObject("message")
-              .getString("content");
-      Map<Long, Analysis.Result> results =
-          Analysis.parse(text, claimed, System.currentTimeMillis());
+      String used = ReviewAnalysis.usage(response, 1200);
+      Map<Long, Analysis.Result> results;
+      try {
+        String text =
+            response
+                .getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content");
+        results = Analysis.parse(text, claimed, System.currentTimeMillis());
+      } catch (Exception e) {
+        throw new ReviewAnalysis.Failure(ReviewAnalysis.error(e) + used);
+      }
       long firstSuggestion = 0;
       int applied = 0;
       synchronized (COMMIT_LOCK) {
@@ -196,7 +201,7 @@ public final class BackgroundAnalysis extends JobService {
               firstSuggestion = n.id;
           }
         }
-        status("Проверено заметок: " + applied + ". Предложения доступны в заметках.");
+        status("Проверено заметок: " + applied + ". Предложения доступны в заметках." + used);
         if (firstSuggestion != 0) notifySuggestion(firstSuggestion, store.pendingSuggestions());
       }
     } catch (Exception e) {

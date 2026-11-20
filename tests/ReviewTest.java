@@ -108,6 +108,20 @@ public final class ReviewTest {
             NOW);
     check(wrapped.notes.size() == notes.size(), "Text around JSON is ignored");
     check(ReviewAnalysis.error(new org.json.JSONException("JSONObject[\"notes\"] not found.")).contains("notes"), "Format error names what failed");
+    // Токены и цена для истории проверок.
+    JSONObject paid =
+        new JSONObject()
+            .put("usage",
+                new JSONObject()
+                    .put("prompt_tokens", 2718)
+                    .put("completion_tokens", 1600)
+                    .put("completion_tokens_details", new JSONObject().put("reasoning_tokens", 1450))
+                    .put("cost_rub", "0.05613728"));
+    String used = ReviewAnalysis.usage(paid, 1600);
+    check(used.equals(" Токенов: запрос 2718, ответ 1600 из 1600, из них размышление 1450 · 0,06 ₽."), "usage line: " + used);
+    check(ReviewAnalysis.usage(paid, 0).contains("(без ограничения)"), "unlimited shown");
+    check(ReviewAnalysis.usage(new JSONObject(), 1600).isEmpty(), "no usage, no line");
+    check(ReviewAnalysis.usage(new JSONObject().put("usage", new JSONObject().put("completion_tokens", 7)), 1600).equals(" Токенов: запрос ?, ответ 7 из 1600."), "partial usage");
     check(
         ReviewAnalysis.parse(
                     response(

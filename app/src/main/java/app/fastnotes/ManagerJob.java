@@ -77,22 +77,28 @@ final class ManagerJob {
         ManagerAnalysis.reviewTokens(
             context.getSharedPreferences("settings", 0).getInt("maxTokens", 0)));
     JSONObject response = Polza.request("chat/completions", key, payload);
+    // Сколько токенов ушло — в историю проверок, и при успехе, и при ошибке разбора.
+    String used = ReviewAnalysis.usage(response, payload.optInt("max_tokens", 0));
     List<JSONObject> proposals;
     Map<Long, Analysis.Result> results = Collections.emptyMap();
-    if (perNote) {
-      ReviewAnalysis.Result parsed =
-          ReviewAnalysis.parse(response, batch, stacks, System.currentTimeMillis());
-      proposals = parsed.proposals;
-      results = parsed.notes;
-    } else {
-      JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
-      if ("length".equals(choice.optString("finish_reason")))
-        throw new ReviewAnalysis.Failure(
-            "Ответ модели оборвался по лимиту длины. Выберите «Подробно» в настройках ИИ или"
-                + " другую модель.");
-      proposals =
-          ManagerAnalysis.parse(
-              choice.getJSONObject("message").getString("content"), batch, stacks);
+    try {
+      if (perNote) {
+        ReviewAnalysis.Result parsed =
+            ReviewAnalysis.parse(response, batch, stacks, System.currentTimeMillis());
+        proposals = parsed.proposals;
+        results = parsed.notes;
+      } else {
+        JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
+        if ("length".equals(choice.optString("finish_reason")))
+          throw new ReviewAnalysis.Failure(
+              "Ответ модели оборвался по лимиту длины. Выберите «Подробно» или «Без"
+                  + " ограничения» в настройках ИИ или другую модель.");
+        proposals =
+            ManagerAnalysis.parse(
+                choice.getJSONObject("message").getString("content"), batch, stacks);
+      }
+    } catch (Exception e) {
+      throw new ReviewAnalysis.Failure(ReviewAnalysis.error(e) + used);
     }
     // Класс каждой записи (info/simple/event/complex) приходит в том же ответе, без запроса.
     Set<Long> batchIds = new HashSet<>();
@@ -142,7 +148,8 @@ final class ManagerJob {
                   : "")
               + (perNote && outcome.reviewed < batch.size()
                   ? " Часть записей изменилась во время запроса; их правки сохранены."
-                  : ""));
+                  : "")
+              + used);
       if (outcome.added + outcome.reminders > 0) notify(context, outcome.added + outcome.reminders);
     }
   }
