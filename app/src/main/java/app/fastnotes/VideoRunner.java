@@ -148,6 +148,15 @@ public final class VideoRunner {
 
   public static synchronized boolean start(
       Context c, List<String> links, String key, String model) {
+    return start(c, links, key, model, 0);
+  }
+
+  /**
+   * {@code chat} — чат, откуда пришла ссылка: туда кладётся ответ со ссылкой на заметку (0 — не в
+   * чат).
+   */
+  public static synchronized boolean start(
+      Context c, List<String> links, String key, String model, long chat) {
     if (running || links.isEmpty()) return false;
     running = true;
     total = links.size();
@@ -190,6 +199,7 @@ public final class VideoRunner {
               } catch (Exception e) {
                 error = "Не удалось сохранить сводку видео.";
               } finally {
+                if (chat > 0) answerInChat(app, chat);
                 running = false;
                 new Handler(Looper.getMainLooper())
                     .post(
@@ -202,6 +212,39 @@ public final class VideoRunner {
             "video-summary")
         .start();
     return true;
+  }
+
+  /** Кладёт в чат итог: ссылки на созданные заметки с краткой выжимкой или текст ошибки. */
+  private static void answerInChat(Context app, long chat) {
+    try (Store db = new Store(app)) {
+      if (!db.chatExists(chat)) return;
+      org.json.JSONArray sources = new org.json.JSONArray();
+      StringBuilder text = new StringBuilder();
+      List<Long> ids = new ArrayList<>(created);
+      for (long id : ids) {
+        Note n = db.note(id);
+        if (n == null) continue;
+        if (text.length() > 0) text.append("\n\n");
+        text.append("Сводка видео готова и сохранена заметкой [[note:").append(id).append("]]." + "\n\n")
+            .append(Retrieval.excerpt(n.body, "", 600));
+        sources.put(new org.json.JSONObject().put("id", id).put("title", n.title));
+      }
+      for (long id : new ArrayList<>(existing)) {
+        Note n = db.note(id);
+        if (n == null) continue;
+        if (text.length() > 0) text.append("\n\n");
+        text.append("Это видео уже есть в заметках: [[note:").append(id).append("]].");
+        sources.put(new org.json.JSONObject().put("id", id).put("title", n.title));
+      }
+      if (!error.isEmpty()) {
+        if (text.length() > 0) text.append("\n\n");
+        text.append(error);
+      }
+      if (text.length() == 0) return;
+      db.message(chat, "assistant", text.toString(), sources);
+      ChatRunner.changed();
+    } catch (Exception ignored) {
+    }
   }
 
   static String message(Exception e, int done, int total) {

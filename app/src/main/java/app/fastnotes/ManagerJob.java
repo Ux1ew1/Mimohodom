@@ -64,6 +64,8 @@ final class ManagerJob {
             ? ReviewAnalysis.payload(
                 batch, model, System.currentTimeMillis(), ZoneId.systemDefault())
             : ManagerAnalysis.payload(batch, model);
+    payload =
+        ManagerAnalysis.withContext(payload, manager.knownGroups(batch), manager.answers(batch));
     JSONObject response = Polza.request("chat/completions", key, payload);
     List<JSONObject> proposals;
     Map<Long, Analysis.Result> results = Collections.emptyMap();

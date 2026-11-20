@@ -1336,12 +1336,30 @@ public final class MainActivity extends Activity
       TextView name = text(proposalLabel(type), 14, INK);
       name.setTypeface(null, Typeface.BOLD);
       words.addView(name);
-      TextView reason = text(p.optString("reason"), 12, MUTED);
-      reason.setMaxLines(3);
+      TextView reason = text(proposalReason(p), 12, MUTED);
+      reason.setMaxLines(type.equals("clarify") ? 5 : 3);
       reason.setEllipsize(TextUtils.TruncateAt.END);
       words.addView(reason);
       top.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
       item.addView(top);
+      if (type.equals("clarify")) {
+        LinearLayout options = column();
+        options.setPadding(dp(48), dp(8), 0, 0);
+        clarifyOptions(
+            options,
+            p,
+            manager,
+            () -> {
+              suggestionsPopup.dismiss();
+              render();
+            });
+        item.addView(options);
+        items.addView(item);
+        View clarifyRule = new View(this);
+        clarifyRule.setBackgroundColor(LINE);
+        items.addView(clarifyRule, new LinearLayout.LayoutParams(-1, dp(1)));
+        continue;
+      }
       boolean ready = false;
       try {
         ready = manager.summaryProgress(p.optLong("id")).optBoolean("ready");
@@ -1687,7 +1705,12 @@ public final class MainActivity extends Activity
       pad(proposal, 14);
       proposal.setBackground(shape(LIME, 12));
       secondary(
-          proposal, "Предложение ИИ: " + date(note.suggestion) + "\n" + note.suggestionReason);
+          proposal,
+          "Предложение ИИ: "
+              + date(note.suggestion)
+              + suggestedLeadNote(note.suggestionLead)
+              + "\n"
+              + note.suggestionReason);
       gap(proposal, 8);
       proposal.addView(
           button(
@@ -1699,6 +1722,7 @@ public final class MainActivity extends Activity
                   return;
                 }
                 reminder = note.suggestion;
+                if (note.suggestionLead >= 0) leadChoice = note.suggestionLead;
                 refreshReminder();
                 stash();
                 if (Build.VERSION.SDK_INT >= 33
@@ -1717,6 +1741,10 @@ public final class MainActivity extends Activity
                 proposal.setVisibility(View.GONE);
               }));
       content.addView(proposal);
+    }
+    if (id == 0 && !LocalLlm.enabled(this)) {
+      gap(content, 12);
+      content.addView(button("Сводка видео YouTube", false, this::askVideoLink));
     }
     gap(content, 16);
     secondary(
@@ -1833,6 +1861,15 @@ public final class MainActivity extends Activity
 
   private String reminderLabel() {
     return reminder == 0 ? "" : date(reminder) + (repeatMode != 0 ? "  ↻" : "");
+  }
+
+  /** « · напомнить за 2 дня» для предложения ИИ; пусто, если интервал не предложен. */
+  private String suggestedLeadNote(int lead) {
+    if (lead < 0) return "";
+    for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
+      if (Reminders.LEAD_MINUTES[i] == lead)
+        return " · напомнить " + LEAD_LABELS[i].toLowerCase(new Locale("ru"));
+    return "";
   }
 
   private String leadChoiceLabel() {
@@ -2422,6 +2459,23 @@ public final class MainActivity extends Activity
     LinearLayout.LayoutParams suggestParams = new LinearLayout.LayoutParams(-2, -2);
     suggestParams.leftMargin = dp(8);
     chips.addView(suggest, suggestParams);
+    TextView videoChip = text("Сводка видео", 14, GREEN);
+    videoChip.setTypeface(null, Typeface.BOLD);
+    videoChip.setGravity(Gravity.CENTER);
+    videoChip.setPadding(dp(12), dp(8), dp(14), dp(8));
+    videoChip.setCompoundDrawablesWithIntrinsicBounds(new Glyph("video", GREEN, 18), null, null, null);
+    videoChip.setCompoundDrawablePadding(dp(6));
+    videoChip.setBackground(ripple(LIME, 18));
+    videoChip.setFocusable(true);
+    videoChip.setContentDescription("Сделать сводку видео YouTube по ссылке");
+    videoChip.setOnClickListener(
+        v -> {
+          buzz(0);
+          askVideoLink();
+        });
+    LinearLayout.LayoutParams videoParams = new LinearLayout.LayoutParams(-2, -2);
+    videoParams.leftMargin = dp(8);
+    chips.addView(videoChip, videoParams);
     scroller.addView(chips);
     return scroller;
   }
@@ -2842,11 +2896,57 @@ public final class MainActivity extends Activity
     return stack;
   }
 
+  /** Текст предложения; для уточнения впереди название заметки, о которой вопрос. */
+  private String proposalReason(JSONObject p) {
+    String reason = p.optString("reason");
+    if (!p.optString("type").equals("clarify")) return reason;
+    JSONArray sources = p.optJSONArray("sources");
+    Note n = sources == null || sources.length() == 0 ? null : store.note(sources.optJSONObject(0).optLong("id"));
+    return n == null ? reason : "«" + n.title + "»: " + reason;
+  }
+
+  /** Варианты ответа на уточняющий вопрос ИИ: выбранный запоминается и учитывается при проверке. */
+  private void clarifyOptions(
+      LinearLayout parent, JSONObject p, ManagerStore manager, Runnable after) {
+    JSONArray options = p.optJSONArray("options");
+    for (int i = 0; options != null && i < options.length(); i++) {
+      String option = options.optString(i);
+      parent.addView(
+          button(
+              option,
+              false,
+              () -> {
+                if (manager.answerClarify(p.optLong("id"), option)) toast("Запомнил: " + option);
+                else toast("Запись уже изменилась");
+                after.run();
+              }));
+      gap(parent, 6);
+    }
+    JSONArray sources = p.optJSONArray("sources");
+    long noteId = sources == null || sources.length() == 0 ? 0 : sources.optJSONObject(0).optLong("id");
+    if (noteId > 0)
+      parent.addView(
+          quietAction(
+              "Открыть заметку",
+              () -> {
+                if (suggestionsPopup != null) suggestionsPopup.dismiss();
+                openNote(noteId);
+              }));
+    parent.addView(
+        quietAction(
+            "Не нужно",
+            () -> {
+              manager.state(p.optLong("id"), "dismissed");
+              after.run();
+            }));
+  }
+
   private String proposalLabel(String type) {
     return switch (type) {
       case "merge" -> "Готовый общий текст";
       case "link" -> "Общая тема";
       case "task" -> "Идея для дела";
+      case "clarify" -> "Уточните";
       default -> "Стоит уточнить";
     };
   }
@@ -2965,7 +3065,13 @@ public final class MainActivity extends Activity
       label.setTypeface(null, Typeface.BOLD);
       card.addView(label);
       gap(card, 6);
-      card.addView(text(p.optString("reason"), 14, MUTED));
+      card.addView(text(proposalReason(p), 14, MUTED));
+      if (type.equals("clarify")) {
+        gap(card, 8);
+        clarifyOptions(card, p, manager, this::render);
+        content.addView(card);
+        continue;
+      }
       if (type.equals("link"))
         secondary(card, "ИИ подготовит выжимку отдельным платным запросом. Исходники сохранятся.");
       if (type.equals("merge"))
@@ -3333,6 +3439,11 @@ public final class MainActivity extends Activity
                   chatInput.requestFocus();
                 }));
         gap(messages, 5);
+      }
+      if (!LocalLlm.enabled(this)) {
+        messages.addView(compactButton("Сводка видео YouTube", false, this::askVideoLink));
+        gap(messages, 5);
+        chatNote(messages, "Или просто пришлите ссылку на видео в чат.");
       }
     }
     for (int i = 0; i < history.length(); i++)
@@ -3739,6 +3850,8 @@ public final class MainActivity extends Activity
     return out;
   }
 
+  private boolean sendPlain;
+
   private void send() {
     String query = chatInput.getText().toString().trim();
     String image = prefs.getString("chatImage." + chat, "");
@@ -3791,6 +3904,30 @@ public final class MainActivity extends Activity
           .show();
       return;
     }
+    List<String> videoLinks = YoutubeLink.all(query);
+    if (!local && !sendPlain && image.isEmpty() && !videoLinks.isEmpty()) {
+      final String asked = query;
+      offerVideoSummary(
+          videoLinks,
+          () -> {
+            sendPlain = true;
+            send();
+          },
+          () -> {
+            chatInput.setText("");
+            prefs.edit().remove("chatDraft." + chat).apply();
+            hideKeyboard();
+            render();
+          },
+          "Отправить как вопрос",
+          () -> {
+            if (chat == 0) chat = store.newChat(Note.autoTitle("", asked));
+            store.message(chat, "user", asked, new JSONArray());
+            return chat;
+          });
+      return;
+    }
+    sendPlain = false;
     if (chat == 0) {
       chat = store.newChat(Note.autoTitle("", query));
       if (!image.isEmpty())
@@ -4458,6 +4595,71 @@ public final class MainActivity extends Activity
    * {@code started} вызывается после запуска (например, очистить поле ввода).
    */
   private void offerVideoSummary(List<String> links, Runnable keep, Runnable started) {
+    offerVideoSummary(links, keep, started, "Сохранить как есть", null);
+  }
+
+  /** Окно для вставки ссылки на видео: кнопка «Сводка видео» в заметках и при записи. */
+  private void askVideoLink() {
+    if (LocalLlm.enabled(this)) {
+      toast("Сводку видео делает Polza.AI. Выберите облачный режим в настройках.");
+      return;
+    }
+    EditText field = new EditText(this);
+    field.setHint("https://www.youtube.com/watch?v=…");
+    field.setSingleLine(true);
+    field.setInputType(android.text.InputType.TYPE_TEXT_VARIATION_URI);
+    try {
+      android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
+      android.content.ClipData clip = clipboard == null ? null : clipboard.getPrimaryClip();
+      CharSequence pasted =
+          clip == null || clip.getItemCount() == 0 ? null : clip.getItemAt(0).coerceToText(this);
+      if (pasted != null && !YoutubeLink.all(pasted.toString()).isEmpty())
+        field.setText(pasted.toString().trim());
+    } catch (RuntimeException ignored) {
+    }
+    FrameLayout box = new FrameLayout(this);
+    box.setPadding(dp(22), dp(8), dp(22), 0);
+    box.addView(field);
+    new AlertDialog.Builder(this)
+        .setTitle("Сводка видео YouTube")
+        .setMessage("Вставьте ссылку на видео, и ИИ сделает по нему заметку.")
+        .setView(box)
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton(
+            "Дальше",
+            (d, w) -> {
+              List<String> links = YoutubeLink.all(field.getText().toString());
+              if (links.isEmpty()) {
+                toast("Не нашёл ссылку на видео YouTube");
+                return;
+              }
+              offerVideoSummary(
+                  links,
+                  null,
+                  null,
+                  "",
+                  "chat".equals(page)
+                      ? () -> {
+                        if (chat == 0) chat = store.newChat("Сводка видео");
+                        store.message(chat, "user", String.join("\n", links), new JSONArray());
+                        return chat;
+                      }
+                      : null);
+            })
+        .show();
+  }
+
+  /**
+   * {@code keepLabel} — подпись кнопки, которая вызывает {@code keep}; пусто или {@code keep == null}
+   * — кнопки нет. {@code chatFor} вызывается перед запуском и возвращает номер чата, куда
+   * положить итог (null — не в чат).
+   */
+  private void offerVideoSummary(
+      List<String> links,
+      Runnable keep,
+      Runnable started,
+      String keepLabel,
+      java.util.function.LongSupplier chatFor) {
     if (VideoRunner.running) {
       toast("Сводка видео уже готовится. Подождите её завершения.");
       return;
@@ -4475,7 +4677,7 @@ public final class MainActivity extends Activity
               "Сводку видео делает модель Polza.AI. Укажите API-ключ в настройках или сохраните"
                   + " ссылку как обычную заметку.")
           .setNeutralButton("Отмена", null)
-          .setNegativeButton("Сохранить как есть", (d, w) -> keep.run())
+          .setNegativeButton(keep == null ? null : keepLabel, keep == null ? null : (d, w) -> keep.run())
           .setPositiveButton("Настройки", (d, w) -> navigate(3))
           .show();
       return;
@@ -4493,11 +4695,12 @@ public final class MainActivity extends Activity
                 + VideoAnalysis.DEFAULT_MODEL
                 + ". Результат появится отдельной заметкой; повтор после ошибки — только вручную.")
         .setNeutralButton("Отмена", null)
-        .setNegativeButton("Сохранить как есть", (d, w) -> keep.run())
+        .setNegativeButton(keep == null ? null : keepLabel, keep == null ? null : (d, w) -> keep.run())
         .setPositiveButton(
             "Сделать сводку",
             (d, w) -> {
-              if (VideoRunner.start(this, links, apiKey, model)) {
+              long into = chatFor == null ? 0 : chatFor.getAsLong();
+              if (VideoRunner.start(this, links, apiKey, model, into)) {
                 if (started != null) started.run();
                 toast("Видео отправлено на анализ. Это может занять до минуты.");
               }
@@ -4856,7 +5059,10 @@ public final class MainActivity extends Activity
     "За 30 минут",
     "За 1 час",
     "За 2 часа",
-    "За 1 день"
+    "За 1 день",
+    "За 2 дня",
+    "За 3 дня",
+    "За неделю"
   };
   private static final int MODE_POLZA = 0, MODE_NANO = 1, MODE_GGUF = 2;
   private EditText keyField, modelField;
@@ -6430,6 +6636,15 @@ public final class MainActivity extends Activity
           c.drawPath(star, paint);
           c.drawLine(19, 2, 19, 6, paint);
           c.drawLine(17, 4, 21, 4, paint);
+        }
+        case "video" -> {
+          c.drawRoundRect(2, 5, 22, 19, 4, 4, paint);
+          Path play = new Path();
+          play.moveTo(10, 9);
+          play.lineTo(15.5f, 12);
+          play.lineTo(10, 15);
+          play.close();
+          c.drawPath(play, paint);
         }
         case "plus" -> {
           c.drawRoundRect(3, 3, 21, 21, 5, 5, paint);

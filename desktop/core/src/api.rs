@@ -193,6 +193,7 @@ pub fn dispatch(app: &Arc<App>, cmd: &str, args: Value) -> Result<Value> {
             }
         }
         // ---------- настройки ----------
+        "app_version" => Ok(json!(env!("CARGO_PKG_VERSION").replace('-', "."))),
         "setting_get" => Ok(json!(app.store.lock().unwrap().setting(&s(&args, "key")))),
         "setting_set" => {
             app.store.lock().unwrap().set_setting(&s(&args, "key"), &s(&args, "value"))?;

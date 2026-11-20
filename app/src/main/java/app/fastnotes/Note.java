@@ -12,6 +12,8 @@ public final class Note {
   /** Своё «напомнить за N минут» или -1, если действует общая настройка. */
   public int lead = -1;
   public String suggestionReason = "";
+  /** За сколько минут ИИ предлагает напомнить о предложенном событии; -1 — без предложения. */
+  public int suggestionLead = -1;
   /** Номер папки или {@link FolderPolicy#ALL}, если заметка лежит только в «Все заметки». */
   public long folder;
 

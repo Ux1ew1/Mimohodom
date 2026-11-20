@@ -96,6 +96,36 @@ public final class AnalysisTest {
                     .getString("content"))
             .getJSONObject(0);
     check(context.getString("text").length() <= 1200, "Input fragment bounded");
+    // Плавающее напоминание: ИИ предлагает, за сколько напомнить
+    String leadRow =
+        new JSONObject()
+            .put(
+                "notes",
+                new JSONArray()
+                    .put(
+                        new JSONObject()
+                            .put("id", 1)
+                            .put("title", "")
+                            .put("reminder_at", "2026-11-10T18:00:00+03:00")
+                            .put("lead_minutes", 2880)
+                            .put("reason", "Оплатить до 10 ноября")))
+            .toString();
+    note.body = "Оплатить налог до 10 ноября";
+    check(Analysis.parse(leadRow, notes, now).get(1L).lead == 2880, "Two days lead accepted");
+    check(
+        Analysis.parse(valid, notes, now).get(1L).lead == -1,
+        "No lead from the model means the general setting");
+    String shortLead = leadRow.replace("2026-11-10T18:00:00+03:00", "2026-11-06T18:00:00+03:00");
+    check(Analysis.parse(shortLead, notes, now).get(1L).lead == 1440, "Lead shortened to stay in the future");
+    String oddLead = leadRow.replace("2880", "7");
+    check(Analysis.parse(oddLead, notes, now).get(1L).lead == -1, "Unknown lead rejected");
+    check(
+        Analysis.payload(notes, "test", now, ZoneId.of("UTC"))
+            .getJSONArray("messages")
+            .getJSONObject(0)
+            .getString("content")
+            .contains("lead_minutes"),
+        "Prompt asks for lead");
     System.out.println("PASS: " + count + " background analysis checks");
   }
 }

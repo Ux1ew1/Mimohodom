@@ -16,7 +16,7 @@ public final class Reminders {
   public static final String DIGEST_CHANNEL = "digest";
   public static final String ACTION_SNOOZE = "app.fastnotes.SNOOZE";
   public static final String ACTION_DIGEST = "app.fastnotes.DIGEST";
-  public static final int[] LEAD_MINUTES = {0, 5, 10, 15, 30, 60, 120, 1440};
+  public static final int[] LEAD_MINUTES = ReminderPolicy.LEADS;
   private static final String SNOOZED = "snoozedReminders";
 
   public static int leadMinutes(Context c) {

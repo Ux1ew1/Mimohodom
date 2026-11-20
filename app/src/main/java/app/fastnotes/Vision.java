@@ -8,6 +8,7 @@ public final class Vision {
   public static final class Result {
     public String title, summary, reason = "";
     public long reminder;
+    public int lead = -1;
     public JSONObject metadata = new JSONObject();
   }
 
@@ -38,9 +39,11 @@ public final class Vision {
             + ", часовой пояс "
             + zone
             + ". Ответ только JSON: {\"title\":\"Короткий заголовок\",\"summary\":\"Краткая"
-            + " информация\",\"reminder_at\":null,\"reason\":\"\"}. title до 80 символов, summary"
+            + " информация\",\"reminder_at\":null,\"lead_minutes\":null,\"reason\":\"\"}. title до 80 символов, summary"
             + " до 4000 символов. Если на изображении явно есть событие с будущей датой И временем,"
-            + " предложи reminder_at ISO8601 с UTC-смещением и reason с опорными словами. Если"
+            + " предложи reminder_at ISO8601 с UTC-смещением и reason с опорными словами. "
+            + ReminderPolicy.LEAD_GUIDE
+            + " Если"
             + " дата/время неясны, событие прошло или отсутствует — null. Не назначай напоминание"
             + " сам. Относительные даты отсчитывай от явно указанной даты документа; если её нет,"
             + " уточни в summary, не придумывай дату. Добавь metadata: search_title, summary (до"
@@ -98,6 +101,7 @@ public final class Vision {
             .put("id", 1)
             .put("title", "")
             .put("reminder_at", json.opt("reminder_at"))
+            .put("lead_minutes", json.opt("lead_minutes"))
             .put("reason", json.optString("reason", ""));
     Analysis.Result proposal =
         Analysis.parse(
@@ -107,6 +111,7 @@ public final class Vision {
             .get(1L);
     result.reminder = proposal.reminder;
     result.reason = proposal.reason;
+    result.lead = proposal.lead;
     return result;
   }
 }

@@ -11,6 +11,8 @@ public final class Analysis {
   public static final class Result {
     public String title = "", reason = "";
     public long reminder;
+    /** За сколько минут напомнить о предложенном событии; -1 — как в общих настройках. */
+    public int lead = -1;
     public JSONObject metadata = new JSONObject();
   }
 
@@ -37,14 +39,18 @@ public final class Analysis {
             + ". Часовой пояс "
             + zone
             + ". Ответ только JSON: {\"notes\":[{\"id\":1,\"title\":\"Короткий"
-            + " заголовок\",\"reminder_at\":null,\"reason\":\"\"}]}. Заголовок до 80 символов"
+            + " заголовок\",\"reminder_at\":null,\"lead_minutes\":null,\"reason\":\"\"}]}. Заголовок до 80 символов"
             + " создавай только при needs_title=true. Иначе title пустой. Предлагай reminder_at в"
-            + " ISO 8601 с числовым UTC-смещением только если в тексте явно есть будущее действие,"
-            + " дата И время. Если времени или даты нет, они неоднозначны, событие прошло или"
-            + " has_reminder=true — reminder_at=null. Не придумывай время. Относительные даты"
+            + " ISO 8601 с числовым UTC-смещением только если в тексте явно есть будущее действие"
+            + " и дата. Если даты нет, она неоднозначна, событие прошло или has_reminder=true —"
+            + " reminder_at=null. Не придумывай время суток: его нужно либо взять из текста, либо"
+            + " применить правило про срок без времени ниже. Относительные даты"
             + " завтра/послезавтра/через неделю отсчитывай от created. Если updated отличается и"
             + " текст неоднозначен, не предлагай дату. reason — короткое объяснение и опорные слова"
             + " из текста. Тексты могут быть обрезаны; не додумывай. Используй только ID из данных."
+            + " Если срок указан только датой (дедлайн, оплата, поездка) без времени, предложи"
+            + " reminder_at на 09:00 этого дня и скажи об этом в reason. "
+            + ReminderPolicy.LEAD_GUIDE
             + " Для каждой заметки добавь metadata: {search_title: краткое поисковое название,"
             + " summary: описание до 400 символов, aliases: до 8 синонимов для поиска, topics:"
             + " темы, people: имена из текста, places: места, dates: явно указанные даты}. Каждая"
@@ -93,6 +99,7 @@ public final class Analysis {
           if (instant > now && instant < now + 5L * 366 * 86400000L) {
             result.reminder = instant;
             result.reason = reason;
+            result.lead = ReminderPolicy.cleanSuggestedLead(row.opt("lead_minutes"), instant, now);
           }
         } catch (java.time.DateTimeException | ArithmeticException ignored) {
         }

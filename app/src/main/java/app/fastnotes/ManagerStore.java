@@ -145,10 +145,107 @@ public final class ManagerStore {
     }
   }
 
+  /**
+   * Группы записей, которые уже предлагались (ждут ответа, отклонены или приняты), пока их записи
+   * не менялись. Нужны, чтобы не предлагать одно и то же в другом виде.
+   */
+  public List<Set<Long>> knownGroups() {
+    List<Set<Long>> out = new ArrayList<>();
+    try (Cursor c =
+        db.rawQuery(
+            "SELECT data FROM manager_proposals WHERE state IN"
+                + " ('pending','reviewed','dismissed','accepted')",
+            null)) {
+      while (c.moveToNext()) {
+        try {
+          JSONObject p = new JSONObject(c.getString(0));
+          String type = p.optString("type");
+          if (!type.equals("link") && !type.equals("merge")) continue;
+          if (!current(p)) continue;
+          Set<Long> ids = new TreeSet<>();
+          JSONArray sources = p.getJSONArray("sources");
+          for (int i = 0; i < sources.length(); i++) ids.add(sources.getJSONObject(i).getLong("id"));
+          out.add(ids);
+        } catch (Exception ignored) {
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Известные группы, в которых хотя бы две записи из переданных: для подсказки модели. */
+  public List<Set<Long>> knownGroups(List<Note> batch) {
+    Set<Long> ids = new HashSet<>();
+    for (Note n : batch) ids.add(n.id);
+    List<Set<Long>> out = new ArrayList<>();
+    for (Set<Long> group : knownGroups()) {
+      Set<Long> inside = new TreeSet<>(group);
+      inside.retainAll(ids);
+      if (inside.size() >= 2) out.add(inside);
+    }
+    return out;
+  }
+
+  /** Новая группа пересекается с уже предлагавшейся не меньше чем по двум записям. */
+  static boolean overlaps(Set<Long> group, List<Set<Long>> known) {
+    for (Set<Long> old : known) {
+      int shared = 0;
+      for (long id : group) if (old.contains(id)) shared++;
+      if (shared >= 2) return true;
+    }
+    return false;
+  }
+
+  /** Ответы пользователя на уточняющие вопросы по заметкам из пачки: номер заметки → ответ. */
+  public Map<Long, String> answers(List<Note> batch) {
+    Set<Long> ids = new HashSet<>();
+    for (Note n : batch) ids.add(n.id);
+    Map<Long, String> out = new LinkedHashMap<>();
+    try (Cursor c =
+        db.rawQuery(
+            "SELECT data FROM manager_proposals WHERE state='accepted' AND identity LIKE"
+                + " 'clarify|%'",
+            null)) {
+      while (c.moveToNext()) {
+        try {
+          JSONObject p = new JSONObject(c.getString(0));
+          String answer = p.optString("_answer", "");
+          long id = p.getJSONArray("sources").getJSONObject(0).getLong("id");
+          if (!answer.isEmpty() && ids.contains(id) && current(p)) out.put(id, answer);
+        } catch (Exception ignored) {
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Пользователь выбрал вариант ответа на уточнение: запоминаем его и закрываем предложение. */
+  public boolean answerClarify(long id, String answer) {
+    db.beginTransaction();
+    try (Cursor c =
+        db.rawQuery(
+            "SELECT data FROM manager_proposals WHERE id=? AND state='pending'",
+            new String[] {"" + id})) {
+      if (!c.moveToFirst()) return false;
+      JSONObject data = new JSONObject(c.getString(0)).put("_answer", answer.trim());
+      ContentValues v = new ContentValues();
+      v.put("data", data.toString());
+      v.put("state", "accepted");
+      boolean done = db.update("manager_proposals", v, "id=?", new String[] {"" + id}) == 1;
+      db.setTransactionSuccessful();
+      return done;
+    } catch (JSONException e) {
+      return false;
+    } finally {
+      db.endTransaction();
+    }
+  }
+
   public int finish(long run, List<Note> notes, List<JSONObject> proposals) throws Exception {
     db.beginTransaction();
     try {
       int added = 0;
+      List<Set<Long>> known = knownGroups();
       for (JSONObject p : proposals) {
         if (!current(p)) continue;
         if (p.getString("type").equals("merge") || p.getString("type").equals("link")) {
@@ -159,6 +256,10 @@ public final class ManagerStore {
             distinctGroups.add(group == 0 ? id : group);
           }
           if (distinctGroups.size() < 2) continue;
+          Set<Long> ids = new TreeSet<>();
+          for (int i = 0; i < sources.length(); i++) ids.add(sources.getJSONObject(i).getLong("id"));
+          if (overlaps(ids, known)) continue;
+          known.add(ids);
         }
         ContentValues v = new ContentValues();
         v.put("identity", p.getString("identity"));

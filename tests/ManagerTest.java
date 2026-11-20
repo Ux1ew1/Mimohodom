@@ -37,6 +37,37 @@ public final class ManagerTest {
         "Order independent deduplication");
     row.put("sources", new JSONArray("[1,99]"));
     check(parse(row, notes).isEmpty(), "Invented source rejected");
+
+    // Уточняющий вопрос: одна запись и 2–4 варианта ответа
+    JSONObject ask =
+        new JSONObject()
+            .put("type", "clarify")
+            .put("sources", new JSONArray("[1]"))
+            .put("reason", "Что это за запись?")
+            .put("options", new JSONArray("[\"Список покупок\",\"Про карту\",\"Список покупок\"]"));
+    List<JSONObject> asked = parse(ask, notes);
+    check(asked.size() == 1, "Clarify accepted without title and body");
+    check(asked.get(0).getJSONArray("options").length() == 2, "Duplicate options removed");
+    check(asked.get(0).getString("identity").startsWith("clarify|1:"), "Clarify identity per note");
+    ask.put("options", new JSONArray("[\"Только один\"]"));
+    check(parse(ask, notes).isEmpty(), "One option is not a question");
+    ask.put("options", new JSONArray("[\"Да\",\"Нет\"]")).put("sources", new JSONArray("[1,2]"));
+    check(parse(ask, notes).isEmpty(), "Clarify is about one note");
+    ask.put("sources", new JSONArray("[1]")).put("reason", "я".repeat(301));
+    check(parse(ask, notes).isEmpty(), "Long question rejected");
+
+    // Подсказка модели: прошлые группы и ответы пользователя
+    JSONObject base = ManagerAnalysis.payload(notes, "m");
+    ManagerAnalysis.withContext(
+        base, Arrays.asList(new TreeSet<>(Arrays.asList(1L, 2L))), Map.of(1L, "Список покупок"));
+    String system = base.getJSONArray("messages").getJSONObject(0).getString("content");
+    check(system.contains("[[1,2]]"), "Known groups handed to the model");
+    check(system.contains("Список покупок"), "User answers handed to the model");
+    check(system.contains("clarify"), "Prompt describes clarifying questions");
+    check(
+        ManagerAnalysis.payload(notes, "m").getJSONArray("messages").getJSONObject(0)
+            .getString("content").contains("название магазина"),
+        "Prompt rejects grouping by shared brand");
     row.put("sources", new JSONArray("[1,1]"));
     check(parse(row, notes).isEmpty(), "Duplicate source rejected");
     row.put("sources", new JSONArray("[1]"));

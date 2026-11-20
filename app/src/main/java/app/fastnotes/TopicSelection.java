@@ -84,22 +84,28 @@ public final class TopicSelection {
   public static List<JSONObject> proposals(List<Note> batch, List<JSONObject> model)
       throws Exception {
     List<JSONObject> out = new ArrayList<>();
-    // The whole chosen neighbourhood is offered for review, never a changing arbitrary pair.
-    for (JSONObject p : model)
-      if (!p.optString("type").equals("link") && !p.optString("type").equals("merge")) {
-        if (out.size() < 3) out.add(p);
-      }
-    if (batch.size() > 1) {
+    JSONObject first = null;
+    for (JSONObject p : model) {
+      boolean stack = p.optString("type").equals("link") || p.optString("type").equals("merge");
+      if (stack) {
+        if (first == null) first = p;
+      } else if (out.size() < 3) out.add(p);
+    }
+    // Стопку предлагаем только по выводу модели и только из тех записей, которые она назвала:
+    // одного сходства слов мало (общий магазин или оператор ещё не делают записи одной темой).
+    if (first != null) {
       JSONArray ids = new JSONArray();
-      for (Note n : batch) ids.put(n.id);
+      JSONArray sources = first.getJSONArray("sources");
+      for (int i = 0; i < sources.length(); i++) ids.put(sources.getJSONObject(i).getLong("id"));
+      String reason = first.optString("reason", "").trim();
       JSONObject group =
           new JSONObject()
               .put("type", "link")
               .put("sources", ids)
               .put(
                   "reason",
-                  "Найдены похожие записи. Проверьте состав: их можно собрать в одну стопку с"
-                      + " выжимкой ИИ.");
+                  (reason.isEmpty() ? "Записи об одном и том же." : reason)
+                      + " Проверьте состав: их можно собрать в одну стопку с выжимкой ИИ.");
       out.addAll(
           ManagerAnalysis.parse(
               new JSONObject().put("suggestions", new JSONArray().put(group)).toString(), batch));

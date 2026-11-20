@@ -93,5 +93,13 @@ check(db.prepare('SELECT count(*) AS n FROM notes').get().n === 5, 'Deleting a f
 check(db.prepare('SELECT count(*) AS n FROM notes WHERE folder=?').all(work)[0].n === 0, 'No note points at a deleted folder');
 check(db.prepare('SELECT folder FROM notes WHERE id=1').get().folder === 0, 'Notes return to All notes');
 check(db.prepare('SELECT count(*) AS n FROM notes WHERE folder=?').get(videos).n === 2, 'Other folders are untouched');
+// Версия 11: за сколько минут ИИ предлагает напомнить (Store.addSuggestionLead).
+const lead = statements(method(store, "void addSuggestionLead(SQLiteDatabase db)"));
+check(lead.length === 1 && lead[0].includes("suggestion_lead INTEGER NOT NULL DEFAULT -1"), "Read actual suggestion lead migration SQL");
+db.exec(lead[0]);
+check(db.prepare("SELECT suggestion_lead FROM notes WHERE id=1").get().suggestion_lead === -1, "Old notes have no suggested lead");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addSuggestionLead(db)"), "Fresh install also gets the column");
+check(/oldV < 11\)\s*addSuggestionLead\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 10 -> 11 adds the column");
+check(/super\(context, name, null, 11\)/.test(store), "Database version is 11");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

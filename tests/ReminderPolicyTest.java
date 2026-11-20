@@ -184,6 +184,21 @@ public final class ReminderPolicyTest {
         ReminderPolicy.upcomingToday(meeting, at(zu, 2026, 11, 16, 8, 0), zu),
         "unadvanced event stays in today's digest");
 
+    // «За сколько напомнить», предложенное моделью
+    long deadline = at(zu, 2026, 11, 20, 18, 0), today = at(zu, 2026, 11, 13, 10, 0);
+    check(ReminderPolicy.cleanSuggestedLead(2880, deadline, today) == 2880, "two days lead accepted");
+    check(ReminderPolicy.cleanSuggestedLead(10080, deadline, today) == 10080, "week lead fits");
+    check(ReminderPolicy.cleanSuggestedLead(7, deadline, today) == -1, "unknown lead rejected");
+    check(ReminderPolicy.cleanSuggestedLead(null, deadline, today) == -1, "missing lead is default");
+    check(ReminderPolicy.cleanSuggestedLead("1440", deadline, today) == -1, "text lead rejected");
+    check(ReminderPolicy.cleanSuggestedLead(1.5, deadline, today) == -1, "fractional lead rejected");
+    long soon = at(zu, 2026, 11, 14, 12, 0);
+    check(ReminderPolicy.cleanSuggestedLead(4320, soon, today) == 1440, "too long lead is shortened");
+    check(ReminderPolicy.cleanSuggestedLead(10080, today + 20 * 60_000L, today) == 15, "lead shortened to 15 min");
+    check(ReminderPolicy.cleanSuggestedLead(60, today + 30 * 60_000L, today) == 30, "lead shortened to 30 min");
+    check(ReminderPolicy.cleanSuggestedLead(1440, today + 60_000L, today) == 0, "lead shortened to zero");
+    check(ReminderPolicy.LEAD_GUIDE.contains("2880"), "guide mentions days");
+
     System.out.println("ReminderPolicyTest: " + count + " checks passed");
   }
 }

@@ -620,7 +620,15 @@ mod tests {
         assert!(st.review_batch(false).unwrap().is_empty());
         assert_eq!(st.failed_count().unwrap(), 2);
         assert_eq!(st.review_batch(true).unwrap().len(), 2, "ручной запуск берёт всё");
-        let proposals = review::proposals(&batch, vec![json!({"type": "task", "reason": "r", "title": "t", "body": "b", "sources": [{"id": a.id, "revision": review::fingerprint(&a)}]})]).unwrap();
+        let both = json!([{"id": a.id, "revision": review::fingerprint(&a)}, {"id": b.id, "revision": review::fingerprint(&b)}]);
+        let proposals = review::proposals(
+            &batch,
+            vec![
+                json!({"type": "task", "reason": "r", "title": "t", "body": "b", "sources": [{"id": a.id, "revision": review::fingerprint(&a)}]}),
+                json!({"type": "link", "reason": "оба про борщ", "sources": both}),
+            ],
+        )
+        .unwrap();
         let analysis: HashMap<i64, AnalysisResult> = batch.iter().map(|n| (n.id, AnalysisResult::default())).collect();
         let out = st.finish_review(&batch, proposals.clone(), &analysis).unwrap();
         assert_eq!((out.reviewed, out.added), (2, 2));

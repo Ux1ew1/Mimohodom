@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 pub const MISSED_GRACE_MS: i64 = 60_000;
 pub const MISSED_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
-pub const LEADS: [i64; 8] = [0, 5, 10, 15, 30, 60, 120, 1440];
+pub const LEADS: [i64; 11] = [0, 5, 10, 15, 30, 60, 120, 1440, 2880, 4320, 10080];
 pub const TOMORROW_HOUR: u32 = 9;
 pub const SNOOZE_10_MIN: i64 = 0;
 pub const SNOOZE_HOUR: i64 = 1;

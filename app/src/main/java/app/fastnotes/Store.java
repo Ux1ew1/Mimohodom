@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 10);
+    super(context, name, null, 11);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -78,6 +78,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addFolders(db);
     addSync(db);
     addChatSync(db);
+    addSuggestionLead(db);
   }
 
   @Override
@@ -93,6 +94,13 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 8) addFolders(db);
     if (oldV < 9) addSync(db);
     if (oldV < 10) addChatSync(db);
+    if (oldV < 11) addSuggestionLead(db);
+  }
+
+  /** За сколько минут ИИ предлагает напомнить. Безопасно вызывается повторно. */
+  private void addSuggestionLead(SQLiteDatabase db) {
+    if (!hasColumn(db, "suggestion_lead"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN suggestion_lead INTEGER NOT NULL DEFAULT -1");
   }
 
   /** Папки: таблица и номер папки у заметки (0 — «Все заметки»). Безопасно вызывается повторно. */
@@ -366,6 +374,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     n.repeat = c.getInt(14);
     n.lead = c.getInt(15);
     n.folder = c.getLong(16);
+    int leadColumn = c.getColumnIndex("suggestion_lead");
+    if (leadColumn >= 0) n.suggestionLead = c.getInt(leadColumn);
     return n;
   }
 
@@ -495,6 +505,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
             : 0);
     v.put("suggestion", 0);
     v.put("suggestion_reason", "");
+    v.put("suggestion_lead", -1);
     v.put("ai_failed", 0);
     v.put("title", Note.autoTitle(title, body));
     v.put("body", body.trim());
@@ -554,6 +565,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     Analysis.Result proposal = new Analysis.Result();
     proposal.reminder = result.reminder;
     proposal.reason = result.reason;
+    proposal.lead = result.lead;
     proposal.metadata = result.metadata;
     applyAnalysis(note(id), proposal);
     getWritableDatabase()
@@ -679,6 +691,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (note.reminder == 0 && result.reminder > System.currentTimeMillis()) {
       v.put("suggestion", result.reminder);
       v.put("suggestion_reason", result.reason);
+      v.put("suggestion_lead", result.lead);
     }
     JSONObject metadata =
         Metadata.base(
@@ -727,6 +740,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     ContentValues v = new ContentValues();
     v.put("suggestion", 0);
     v.put("suggestion_reason", "");
+    v.put("suggestion_lead", -1);
     getWritableDatabase().update("notes", v, "id=?", new String[] {"" + id});
   }
 

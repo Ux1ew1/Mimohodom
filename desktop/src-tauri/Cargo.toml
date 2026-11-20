@@ -1,6 +1,6 @@
 [package]
 name = "mimohodom"
-version = "0.10.3-6"
+version = "0.10.5-7"
 edition = "2021"
 description = "Мимоходом для Windows и macOS"
 

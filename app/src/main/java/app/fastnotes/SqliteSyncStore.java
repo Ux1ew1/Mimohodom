@@ -433,6 +433,7 @@ public final class SqliteSyncStore implements SyncStore {
     v.put("ai_failed", 0);
     v.put("suggestion", 0);
     v.put("suggestion_reason", "");
+    v.put("suggestion_lead", -1);
     v.put("metadata", metadata);
     v.put("search_text", Metadata.searchText(Metadata.read(metadata)));
     v.put("sync_ts", r.ts);

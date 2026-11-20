@@ -80,6 +80,7 @@ fn review_suggestions_stack_and_summary() {
         ],
         "suggestions": [
             {"type": "task", "sources": [2], "reason": "возможно, ещё не записались", "title": "Записаться к врачу", "body": "Записаться к терапевту"},
+            {"type": "link", "sources": [1, 2], "reason": "Анализы и приём врача — один поход"},
         ],
     });
     let summary = json!({"title": "Здоровье", "body": "Анализы и приём терапевта."});
@@ -140,8 +141,8 @@ fn review_suggestions_stack_and_summary() {
 fn summary_flow_and_stack_listing() {
     let when = chrono::Local::now() + chrono::Duration::days(4);
     let _ = when;
-    // Первая проверка: заметки близкие по теме, модель ничего не предлагает — связь добавляет приложение.
-    let review = json!({"notes": [{"id": 1}, {"id": 2}], "suggestions": []});
+    // Первая проверка: модель сама называет две записи про борщ — стопку собираем из них, а не из всей пачки.
+    let review = json!({"notes": [{"id": 1}, {"id": 2}], "suggestions": [{"type": "link", "sources": [1, 2], "reason": "Обе про борщ"}]});
     let summary = json!({"title": "Борщ", "body": "Свёкла, капуста, мясо, морковь."});
     let (app, _) = setup("stack", vec![reply(&review.to_string()), reply(&summary.to_string())]);
     let a = note(&app, "Борщ", "свёкла капуста мясо варить час");

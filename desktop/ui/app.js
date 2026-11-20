@@ -76,7 +76,7 @@ function toLocalInput(ms) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 const REPEATS = [["0", "Не повторять"], ["1", "Каждый день"], ["2", "Каждую неделю"], ["3", "Каждый месяц"], ["4", "Каждый год"]];
-const LEADS = [["-1", "Как в настройках"], ["0", "В момент события"], ["5", "За 5 минут"], ["15", "За 15 минут"], ["30", "За 30 минут"], ["60", "За час"], ["1440", "За день"]];
+const LEADS = [["-1", "Как в настройках"], ["0", "В момент события"], ["5", "За 5 минут"], ["15", "За 15 минут"], ["30", "За 30 минут"], ["60", "За час"], ["1440", "За день"], ["2880", "За 2 дня"], ["4320", "За 3 дня"], ["10080", "За неделю"]];
 
 // ---------- боковая панель ----------
 function renderSide() {
@@ -951,7 +951,7 @@ async function renderSettings() {
   root.append(el("div", { class: "row" }, el("button", { class: "secondary", text: "Экспорт заметок в JSON", onclick: exportJson }),
     el("span", { class: "note", text: "Ключ ИИ и настройки в экспорт не попадают." })));
   root.append(el("h2", { text: "Горячие клавиши" }), el("div", { class: "keys" }, HOTKEYS.map(([k, t]) => el("div", { class: "key-row" }, el("kbd", { text: k }), el("span", { text: t })))));
-  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.10.3.6 для компьютера (Android — 0.10.3). Заметки, папки, картинки, чаты и стопки обмениваются с телефоном." }));
+  root.append(el("div", { class: "note", style: "margin-top:24px", text: "Мимоходом 0.10.5.7 для компьютера (Android — 0.10.5). Заметки, папки, картинки, чаты и стопки обмениваются с телефоном." }));
 }
 async function renderReminderSettings(root) {
   const get = async (k) => rpc("setting_get", { key: k }).catch(() => null);
@@ -1110,6 +1110,7 @@ async function init() {
   $("#search").addEventListener("input", (e) => { clearTimeout(timer); timer = setTimeout(async () => { S.query = e.target.value; await loadNotes(); renderList(); }, 180); });
   $("#sync-pill").addEventListener("click", () => { S.view = "settings"; showView(); });
   document.addEventListener("keydown", onHotkey);
+  rpc("app_version").then((v) => { $("#app-version").textContent = "Версия " + v; }).catch(() => {});
   showView(); renderEditor(); await reload(); await pollSync();
   setInterval(pollSync, 3000);
 }
