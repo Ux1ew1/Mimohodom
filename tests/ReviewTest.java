@@ -51,7 +51,7 @@ public final class ReviewTest {
     String instruction = payload.getJSONArray("messages").getJSONObject(0).getString("content");
     check(
         instruction.contains("ОБЕ проверки")
-            && instruction.contains("suggestions")
+            && instruction.contains("\"actions\"")
             && instruction.contains("notes"),
         "Unified response contract");
     JSONObject merge =
@@ -82,6 +82,37 @@ public final class ReviewTest {
     check(result.notes.get(2L).title.isEmpty(), "Model cannot rename custom title");
     check(result.notes.get(1L).reminder > 0, "Reminder proposal parsed");
     check(result.proposals.size() == 1, "Merge parsed in same response");
+    // Новый словарь (этап 3): {"notes":[...],"actions":[...]}.
+    JSONObject actions =
+        new JSONObject()
+            .put("notes", rows)
+            .put(
+                "actions",
+                new JSONArray(
+                    "[{\"action\":\"group\",\"sources\":[1,2],\"title\":\"Блины\","
+                        + "\"reason\":\"Один рецепт\"}]"));
+    ReviewAnalysis.Result fresh =
+        ReviewAnalysis.parse(response(actions.toString(), "stop"), notes, NOW);
+    check(
+        fresh.proposals.size() == 1 && fresh.proposals.get(0).getString("type").equals("group"),
+        "Agent actions parsed with per-note review");
+    fails(
+        response(new JSONObject().put("notes", rows).toString(), "stop"),
+        notes,
+        "Missing action section fails");
+    check(
+        ReviewAnalysis.parse(
+                    response(
+                        new JSONObject()
+                            .put("notes", rows)
+                            .put("actions", new JSONArray("[{\"action\":\"name\",\"note\":1,\"title\":\"x\"}]"))
+                            .toString(),
+                        "stop"),
+                    notes,
+                    NOW)
+                .proposals
+                .isEmpty(),
+        "Only names in actions is not a source error");
     fails(response(answer.toString(), "length"), notes, "Truncated response is explicit error");
     fails(response("", "stop"), notes, "Empty response fails");
     fails(response("{\"suggestions\":[]}", "stop"), notes, "Missing per-note section fails");

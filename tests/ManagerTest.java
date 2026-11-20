@@ -63,7 +63,36 @@ public final class ManagerTest {
     String system = base.getJSONArray("messages").getJSONObject(0).getString("content");
     check(system.contains("[[1,2]]"), "Known groups handed to the model");
     check(system.contains("Список покупок"), "User answers handed to the model");
-    check(system.contains("clarify"), "Prompt describes clarifying questions");
+    check(system.contains("\"action\":\"ask\""), "Prompt describes clarifying questions");
+    check(system.contains("\"actions\""), "Prompt asks for the agent action list");
+    check(system.contains("extend"), "Prompt offers adding to an existing deck");
+    check(parsed.get(0).getString("type").equals("group"), "Old merge becomes a deck card");
+    // Колоды по теме: модель видит их и может предложить extend.
+    Note top = new Note(10, "Рецепт блинов", "Мука, молоко, яйца", 1, 2, 0);
+    JSONObject withStacks = ManagerAnalysis.payload(notes, "m");
+    ManagerAnalysis.withContext(
+        withStacks, Collections.emptyList(), Collections.emptyMap(), Arrays.asList(top));
+    check(
+        withStacks.getJSONArray("messages").getJSONObject(0).getString("content")
+            .contains("\"stack\":10"),
+        "Existing decks handed to the model");
+    String extendText =
+        "{\"actions\":[{\"action\":\"extend\",\"stack\":10,\"sources\":[2],"
+            + "\"reason\":\"Тоже про блины\"}]}";
+    List<JSONObject> extended = ManagerAnalysis.parse(extendText, notes, Arrays.asList(top));
+    check(extended.size() == 1 && extended.get(0).getString("type").equals("extend"), "Extend card");
+    check(extended.get(0).getLong("stack") == 10, "Extend keeps its deck");
+    check(extended.get(0).getJSONArray("sources").length() == 2, "Deck revision is checked too");
+    check(
+        extended.get(0).getString("identity").startsWith("extend|2:"), "Extend identity by sources");
+    check(ManagerAnalysis.parse(extendText, notes).isEmpty(), "Unknown deck rejected");
+    List<JSONObject> grouped =
+        ManagerAnalysis.parse(
+            "{\"actions\":[{\"action\":\"group\",\"sources\":[1,2],\"title\":\"Блины\","
+                + "\"reason\":\"Один рецепт\",\"trash\":[2,7]}]}",
+            notes);
+    check(grouped.size() == 1 && grouped.get(0).getString("body").isEmpty(), "Deck needs no text");
+    check(grouped.get(0).getJSONArray("trash").toString().equals("[2]"), "Trash only from sources");
     check(
         ManagerAnalysis.payload(notes, "m").getJSONArray("messages").getJSONObject(0)
             .getString("content").contains("название магазина"),

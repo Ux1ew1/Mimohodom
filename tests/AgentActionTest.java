@@ -18,8 +18,9 @@ public final class AgentActionTest {
       LocalDateTime.of(2026, 11, 20, 12, 0).atZone(ZONE).toInstant().toEpochMilli();
 
   static AgentAction.Scope scope() {
-    // 1–4 пришли целиком, 5 — обрезанной (для merge не годится).
+    // 1–4 пришли целиком, 5 — обрезанной (для merge не годится); 10 — колода для extend.
     return new AgentAction.Scope(NOW, ZONE)
+        .stack(10)
         .note(1, true)
         .note(2, true)
         .note(3, true)
@@ -40,6 +41,7 @@ public final class AgentActionTest {
     name();
     create();
     group();
+    extend();
     trash();
     remind();
     ask();
@@ -48,11 +50,12 @@ public final class AgentActionTest {
     legacy();
     plans();
     journal();
+    deck();
     System.out.println("PASS: " + count + " agent action checks");
   }
 
   static void kinds() {
-    check(AgentAction.Kind.values().length == 8, "eight kinds in the vocabulary");
+    check(AgentAction.Kind.values().length == 9, "nine kinds in the vocabulary (extend added)");
     for (AgentAction.Kind k : AgentAction.Kind.values())
       check(AgentAction.Kind.of(k.wire) == k, "wire name round trip " + k);
     check(AgentAction.Kind.of("delete") == null, "no hard delete in the vocabulary");
@@ -116,10 +119,16 @@ public final class AgentActionTest {
     AgentAction a =
         act("{\"action\":\"group\",\"sources\":[2,1],\"title\":\"Отпуск\",\"body\":\"Сводка\"}");
     check(a.kind == AgentAction.Kind.GROUP && a.notes.equals(List.of(1L, 2L)), "group parsed");
-    check(a.legacy.equals("merge"), "complete sources -> merge card");
+    check(a.legacy.equals("group"), "group card");
     AgentAction partial =
         act("{\"action\":\"group\",\"sources\":[1,5],\"title\":\"Отпуск\",\"body\":\"Сводка\"}");
-    check(partial.legacy.equals("link"), "cut source -> link card");
+    check(partial != null && partial.legacy.equals("group"), "cut source is fine for a deck");
+    AgentAction bare = act("{\"action\":\"group\",\"sources\":[1,2]}");
+    check(bare != null && bare.title.isEmpty() && bare.body.isEmpty(), "summary is made later");
+    AgentAction extras =
+        act("{\"action\":\"group\",\"sources\":[1,2,3],\"trash\":[3,9,3,1]}");
+    check(extras.trash.equals(List.of(1L, 3L)), "trash only among sources, sorted, once");
+    check(extras.proposal().getJSONArray("trash").length() == 2, "trash list in the card");
     check(
         act("{\"action\":\"group\",\"sources\":[1],\"title\":\"О\",\"body\":\"С\"}") == null,
         "group needs two");
@@ -127,8 +136,9 @@ public final class AgentActionTest {
         act("{\"action\":\"group\",\"sources\":[1,9],\"title\":\"О\",\"body\":\"С\"}") == null,
         "unknown source");
     check(
-        act("{\"action\":\"group\",\"sources\":[1,2],\"title\":\"\",\"body\":\"С\"}") == null,
-        "group needs a title");
+        act("{\"action\":\"group\",\"sources\":[1,2],\"title\":\"" + "я".repeat(161) + "\"}")
+            == null,
+        "group title still bounded");
     AgentAction.Scope many = new AgentAction.Scope(NOW, ZONE);
     for (long i = 1; i <= 9; i++) many.note(i, true);
     check(
@@ -138,6 +148,26 @@ public final class AgentActionTest {
                 many)
             == null,
         "at most eight sources");
+  }
+
+  static void extend() throws Exception {
+    AgentAction a =
+        act("{\"action\":\"extend\",\"stack\":10,\"sources\":[3,1],\"reason\":\"Туда же\"}");
+    check(a != null && a.kind == AgentAction.Kind.EXTEND, "extend parsed");
+    check(a.stack == 10 && a.notes.equals(List.of(1L, 3L)), "deck and new notes");
+    check(a.sources().equals(List.of(1L, 3L, 10L)), "deck revision is a source too");
+    check(a.legacy.equals("extend"), "extend card");
+    JSONObject p = a.proposal();
+    check(p.getLong("stack") == 10 && p.getJSONArray("sources").length() == 3, "extend proposal");
+    check(!a.automatic(), "extend needs a button");
+    check(
+        act("{\"action\":\"extend\",\"stack\":11,\"sources\":[1]}") == null,
+        "deck must be shown to the model");
+    check(act("{\"action\":\"extend\",\"sources\":[1]}") == null, "deck required");
+    check(act("{\"action\":\"extend\",\"stack\":10,\"sources\":[]}") == null, "needs a note");
+    check(
+        act("{\"action\":\"extend\",\"stack\":10,\"sources\":[9]}") == null,
+        "only notes from the request");
   }
 
   static void trash() {
@@ -282,13 +312,13 @@ public final class AgentActionTest {
         old(
             "{\"type\":\"merge\",\"sources\":[2,1],\"reason\":\"Одно дело\",\"title\":\"Т\","
                 + "\"body\":\"Б\"}");
-    check(merge.kind == AgentAction.Kind.GROUP && merge.legacy.equals("merge"), "merge -> group");
+    check(merge.kind == AgentAction.Kind.GROUP && merge.legacy.equals("group"), "merge -> group");
     check(
         old("{\"type\":\"merge\",\"sources\":[1,5],\"reason\":\"r\",\"title\":\"Т\",\"body\":\"Б\"}")
             == null,
         "merge needs complete sources");
     AgentAction link = old("{\"type\":\"link\",\"sources\":[1,5],\"reason\":\"Тема\"}");
-    check(link != null && link.legacy.equals("link") && link.title.isEmpty(), "link without text");
+    check(link != null && link.legacy.equals("group") && link.title.isEmpty(), "link -> group");
     check(old("{\"type\":\"link\",\"sources\":[1],\"reason\":\"Тема\"}") == null, "link needs two");
     AgentAction task =
         old("{\"type\":\"task\",\"sources\":[4],\"reason\":\"r\",\"title\":\"Т\",\"body\":\"Б\"}");
@@ -391,8 +421,24 @@ public final class AgentActionTest {
         AgentJournal.groupData(20, "Отпуск", List.of(1L, 10L, 11L, 12L), before, 4);
     check(
         AgentJournal.describe(AgentJournal.GROUP, group)
-            .equals("Собрана стопка «Отпуск» из 4 заметок"),
+            .equals("Собрана колода «Отпуск» из 4 заметок"),
         "group line");
+    JSONObject trimmed =
+        AgentJournal.groupData(20, "Отпуск", List.of(1L, 2L, 3L), before, 4, List.of(3L));
+    check(
+        AgentJournal.describe(AgentJournal.GROUP, trimmed)
+            .equals("Собрана колода «Отпуск» из 3 заметок, в корзину: 1"),
+        "group line with trash");
+    check(AgentJournal.ids(trimmed, "trashed").equals(List.of(3L)), "trashed kept for undo");
+    check(AgentJournal.ids(group, "trashed").isEmpty(), "nothing trashed by default");
+    JSONObject extended =
+        AgentJournal.extendData(10, "Блины", "Новая сводка", "Блины", "Старая", List.of(4L, 5L), 6);
+    check(
+        AgentJournal.describe(AgentJournal.EXTEND, extended)
+            .equals("В колоду «Блины» добавлено: 2, сводка обновлена"),
+        "extend line");
+    check(extended.getString("was_body").equals("Старая"), "old summary kept for undo");
+    check(AgentJournal.ids(extended, "added").equals(List.of(4L, 5L)), "added notes kept");
     check(AgentJournal.before(group).equals(before), "old stacks round trip");
     check(AgentJournal.before(new JSONObject()).isEmpty(), "no old stacks");
     check(AgentJournal.notes(1).equals("заметки") && AgentJournal.notes(21).equals("заметки"), "из 1/21 заметки");
@@ -404,7 +450,50 @@ public final class AgentActionTest {
         "answer line");
     for (String action :
         new String[] {
-          AgentJournal.NAME, AgentJournal.CREATE, AgentJournal.GROUP, AgentJournal.ANSWER
+          AgentJournal.NAME,
+          AgentJournal.CREATE,
+          AgentJournal.GROUP,
+          AgentJournal.EXTEND,
+          AgentJournal.ANSWER
         }) check(!AgentJournal.undoHint(action).isEmpty(), "undo hint for " + action);
+  }
+
+  static Note note(long id, String title, String body) {
+    return new Note(id, title, body, 1, 1, 0);
+  }
+
+  static void deck() {
+    Note a = note(1, "Список", "Хлеб, молоко"),
+        b = note(2, "список", "  хлеб,   молоко "),
+        c = note(3, "", ""),
+        d = note(4, "Идея", "Подарок маме"),
+        e = note(5, "Список", "Хлеб, молоко");
+    c.autoTitle = true;
+    e.image = "x.jpg";
+    LinkedHashMap<Long, String> out =
+        DeckPolicy.trashCandidates(List.of(a, b, c, d, e), Set.of(4L, 99L));
+    check(out.get(2L).equals(DeckPolicy.DUPLICATE), "exact duplicate (case, spaces)");
+    check(out.get(3L).equals(DeckPolicy.EMPTY), "empty note");
+    check(out.get(4L).equals(DeckPolicy.MERGED), "named by the model");
+    check(!out.containsKey(1L), "first copy stays");
+    check(!out.containsKey(5L), "note with a picture is never trashed");
+    check(!out.containsKey(99L), "foreign ids ignored");
+    check(new ArrayList<>(out.keySet()).equals(List.of(2L, 3L, 4L)), "in source order");
+    Note withReminder = note(6, "Список", "Хлеб, молоко");
+    withReminder.reminder = NOW;
+    check(
+        DeckPolicy.trashCandidates(List.of(a, withReminder), Set.of()).isEmpty(),
+        "note with a reminder is never trashed");
+    Note titled = note(7, "Позвонить маме", "");
+    check(!DeckPolicy.empty(titled), "own title is not empty");
+    Note e1 = note(8, "", ""), e2 = note(9, "", "");
+    e1.autoTitle = e2.autoTitle = true;
+    LinkedHashMap<Long, String> all = DeckPolicy.trashCandidates(List.of(e1, e2), Set.of());
+    check(all.size() == 1 && all.containsKey(9L), "at least one source stays in the deck");
+    check(DeckPolicy.trashCandidates(List.of(), Set.of()).isEmpty(), "no sources");
+    check(
+        DeckPolicy.describe(out, Map.of(2L, "список", 3L, "Новая заметка"))
+            .equals("«список» (дубль), «Новая заметка» (пустая), «Заметка» (целиком в сводке)"),
+        "checkbox text");
   }
 }

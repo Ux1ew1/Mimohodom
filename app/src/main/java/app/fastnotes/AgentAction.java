@@ -15,6 +15,8 @@ public final class AgentAction {
     NAME("name"),
     CREATE("create"),
     GROUP("group"),
+    /** Добавить новые записи в существующую колоду и обновить её сводку (этап 3). */
+    EXTEND("extend"),
     TRASH("trash"),
     REMIND("remind"),
     ASK("ask"),
@@ -47,14 +49,21 @@ public final class AgentAction {
   /** Причины, по которым агент может предложить заметку в корзину (решение 2). */
   public static final List<String> TRASH_REASONS = List.of("empty", "duplicate", "merged");
 
-  /** Старые виды предложений менеджера, которые понимает приложение до этапа 3. */
+  /** Прежние виды предложений менеджера (до этапа 3); merge и link теперь становятся group. */
   public static final List<String> LEGACY = List.of("merge", "link", "task", "question", "clarify");
 
   public final Kind kind;
   /** Заметка действия (name, remind, ask, plan, check_in); 0 — нет. */
   public long note;
-  /** Исходные заметки (create, group) или заметки для корзины (trash), по возрастанию номера. */
+  /** Исходные заметки (create, group, extend) или заметки для корзины (trash), по возрастанию. */
   public final List<Long> notes = new ArrayList<>();
+  /** Колода (номер её верхней заметки) для extend; 0 — нет. */
+  public long stack;
+  /**
+   * Для group: какие исходные модель считает пустыми, дублями или целиком вошедшими в сводку. Их
+   * можно отправить в корзину галочкой в карточке (по умолчанию выключена, решение 2).
+   */
+  public final List<Long> trash = new ArrayList<>();
 
   public String title = "", body = "", reason = "", question = "", folder = "", askKind = "";
   public final List<String> options = new ArrayList<>();
@@ -67,8 +76,8 @@ public final class AgentAction {
   /** Дерево плана в виде ответа модели {@code {"nodes":[...]}}; разбирает {@link PlanTree}. */
   public JSONObject tree;
   /**
-   * Старый вид предложения (merge/link/task/question/clarify), из которого получено действие, или
-   * тот, в котором его покажет колокольчик; пусто — показать нельзя.
+   * Вид карточки колокольчика (group, extend, task, question, clarify), в которой действие
+   * показывается; пусто — показать пока нельзя.
    */
   public String legacy = "";
 
@@ -81,9 +90,13 @@ public final class AgentAction {
     return kind == Kind.NAME;
   }
 
-  /** Что известно о входе запроса: какие заметки были в нём и какие пришли целиком. */
+  /**
+   * Что известно о входе запроса: какие заметки были в нём, какие пришли целиком и какие колоды
+   * (верхние заметки) показаны модели для extend.
+   */
   public static final class Scope {
     public final Set<Long> known = new HashSet<>(), complete = new HashSet<>();
+    public final Set<Long> stacks = new HashSet<>();
     public final long now;
     public final ZoneId zone;
 
@@ -95,6 +108,11 @@ public final class AgentAction {
     public Scope note(long id, boolean whole) {
       known.add(id);
       if (whole) complete.add(id);
+      return this;
+    }
+
+    public Scope stack(long top) {
+      stacks.add(top);
       return this;
     }
   }
@@ -119,9 +137,23 @@ public final class AgentAction {
         a.legacy = a.notes.isEmpty() ? "" : "task";
       }
       case GROUP -> {
-        if (!a.readNotes(raw, "sources", scope, 2) || !a.readTitle(raw, true) || !a.readBody(raw))
-          return null;
-        a.legacy = scope.complete.containsAll(a.notes) ? "merge" : "link";
+        // Текст сводки модель не пишет: его готовит отдельный запрос по нажатию пользователя.
+        if (!a.readNotes(raw, "sources", scope, 2) || !a.readTitle(raw, false)) return null;
+        a.body = raw.optString("body", "").trim();
+        if (a.body.length() > MAX_BODY) return null;
+        JSONArray extra = raw.optJSONArray("trash");
+        for (int i = 0; extra != null && i < extra.length(); i++) {
+          long id = extra.optLong(i, -1);
+          if (a.notes.contains(id) && !a.trash.contains(id)) a.trash.add(id);
+        }
+        Collections.sort(a.trash);
+        a.legacy = "group";
+      }
+      case EXTEND -> {
+        a.stack = raw.optLong("stack", -1);
+        if (!scope.stacks.contains(a.stack) || !a.readNotes(raw, "sources", scope, 1)) return null;
+        if (a.notes.contains(a.stack)) return null;
+        a.legacy = "extend";
       }
       case TRASH -> {
         if (!a.readNotes(raw, "notes", scope, 1)) return null;
@@ -185,6 +217,7 @@ public final class AgentAction {
           || (type.equals("merge") && !scope.complete.contains(id))) return null;
     }
     if ((type.equals("merge") || type.equals("link")) && sorted.size() < 2) return null;
+    boolean deck = type.equals("merge") || type.equals("link");
     Kind kind =
         switch (type) {
           case "merge", "link" -> Kind.GROUP;
@@ -192,7 +225,7 @@ public final class AgentAction {
           default -> Kind.CREATE;
         };
     AgentAction a = new AgentAction(kind);
-    a.legacy = type;
+    a.legacy = deck ? "group" : type;
     a.reason = reason;
     if (type.equals("clarify")) {
       if (sorted.size() != 1 || reason.length() > MAX_QUESTION) return null;
@@ -211,6 +244,12 @@ public final class AgentAction {
 
   /** Номера заметок, на которые действие ссылается (для проверки, что они не изменились). */
   public List<Long> sources() {
+    if (kind == Kind.EXTEND) {
+      List<Long> all = new ArrayList<>(notes);
+      all.add(stack);
+      Collections.sort(all);
+      return all;
+    }
     if (!notes.isEmpty()) return Collections.unmodifiableList(notes);
     return note == 0 ? List.of() : List.of(note);
   }
@@ -222,13 +261,21 @@ public final class AgentAction {
     for (long id : sources()) ids.put(id);
     JSONArray choices = new JSONArray();
     for (String o : options) choices.put(o);
-    return new JSONObject()
-        .put("type", legacy)
-        .put("reason", legacy.equals("clarify") ? question : reason)
-        .put("title", title)
-        .put("body", body)
-        .put("sources", ids)
-        .put("options", choices);
+    JSONObject out =
+        new JSONObject()
+            .put("type", legacy)
+            .put("reason", legacy.equals("clarify") ? question : reason)
+            .put("title", title)
+            .put("body", body)
+            .put("sources", ids)
+            .put("options", choices);
+    if (kind == Kind.GROUP) {
+      JSONArray extra = new JSONArray();
+      for (long id : trash) extra.put(id);
+      out.put("trash", extra);
+    }
+    if (kind == Kind.EXTEND) out.put("stack", stack);
+    return out;
   }
 
   // --- разбор полей ---

@@ -8,8 +8,9 @@ import org.json.*;
  * можно отменить и как оно называется в колокольчике. Сама таблица — {@code AgentLog}.
  *
  * <p>Записи: {@code name} (агент сам дал название), {@code create} (по кнопке создана заметка),
- * {@code group} (по кнопке собрана стопка), {@code answer} (ответ на уточняющий вопрос). В {@code
- * data} — что сделано, в {@code undo} — что нужно, чтобы вернуть как было.
+ * {@code group} (по кнопке собрана колода), {@code extend} (по кнопке записи добавлены в колоду и
+ * обновлена сводка), {@code answer} (ответ на уточняющий вопрос). В {@code data} — что сделано и
+ * что нужно, чтобы вернуть как было.
  */
 public final class AgentJournal {
   /** «Отменить» доступно сутки после действия. */
@@ -17,7 +18,11 @@ public final class AgentJournal {
   /** Журнал хранится 30 дней, как корзина. */
   public static final long KEEP = 30 * 86_400_000L;
 
-  public static final String NAME = "name", CREATE = "create", GROUP = "group", ANSWER = "answer";
+  public static final String NAME = "name",
+      CREATE = "create",
+      GROUP = "group",
+      EXTEND = "extend",
+      ANSWER = "answer";
   public static final String DONE = "done", UNDONE = "undone";
 
   private AgentJournal() {}
@@ -56,6 +61,20 @@ public final class AgentJournal {
   public static JSONObject groupData(
       long top, String title, Collection<Long> members, Map<Long, List<Long>> before, long proposal)
       throws JSONException {
+    return groupData(top, title, members, before, proposal, List.of());
+  }
+
+  /** То же и исходные, ушедшие в корзину по галочке «Пустые и дубли — в корзину». */
+  public static JSONObject groupData(
+      long top,
+      String title,
+      Collection<Long> members,
+      Map<Long, List<Long>> before,
+      long proposal,
+      Collection<Long> trashed)
+      throws JSONException {
+    JSONArray gone = new JSONArray();
+    for (long id : trashed) gone.put(id);
     JSONArray ids = new JSONArray();
     for (long id : members) ids.put(id);
     JSONObject old = new JSONObject();
@@ -69,7 +88,41 @@ public final class AgentJournal {
         .put("title", title)
         .put("members", ids)
         .put("before", old)
+        .put("trashed", gone)
         .put("proposal", proposal);
+  }
+
+  /**
+   * extend: колода, её сводка после обновления (по ней «Отменить» проверяет, что пользователь
+   * ничего не менял), прежняя сводка и добавленные записи.
+   */
+  public static JSONObject extendData(
+      long top,
+      String title,
+      String body,
+      String wasTitle,
+      String wasBody,
+      Collection<Long> added,
+      long proposal)
+      throws JSONException {
+    JSONArray ids = new JSONArray();
+    for (long id : added) ids.put(id);
+    return new JSONObject()
+        .put("note", top)
+        .put("title", title)
+        .put("body", body)
+        .put("was_title", wasTitle)
+        .put("was_body", wasBody)
+        .put("added", ids)
+        .put("proposal", proposal);
+  }
+
+  /** Список номеров из поля записи ({@code trashed}, {@code added}). */
+  public static List<Long> ids(JSONObject data, String field) {
+    List<Long> out = new ArrayList<>();
+    JSONArray rows = data.optJSONArray(field);
+    for (int i = 0; rows != null && i < rows.length(); i++) out.add(rows.optLong(i));
+    return out;
   }
 
   public static JSONObject answerData(long note, String question, String answer, long proposal)
@@ -111,7 +164,16 @@ public final class AgentJournal {
       case CREATE -> "Создана заметка «" + title + "»";
       case GROUP -> {
         int n = data.optJSONArray("members") == null ? 0 : data.optJSONArray("members").length();
-        yield "Собрана стопка «" + title + "»" + (n > 0 ? " из " + n + " " + notes(n) : "");
+        int gone = ids(data, "trashed").size();
+        yield "Собрана колода «"
+            + title
+            + "»"
+            + (n > 0 ? " из " + n + " " + notes(n) : "")
+            + (gone > 0 ? ", в корзину: " + gone : "");
+      }
+      case EXTEND -> {
+        int n = ids(data, "added").size();
+        yield "В колоду «" + title + "» добавлено: " + n + ", сводка обновлена";
       }
       case ANSWER -> "Ответ «" + data.optString("answer") + "» на вопрос «"
           + data.optString("question") + "»";
@@ -125,8 +187,9 @@ public final class AgentJournal {
       case NAME -> "Вернётся прежнее название, и помощник больше не будет его менять.";
       case CREATE -> "Заметка уйдёт в корзину, предложение не вернётся.";
       case GROUP ->
-          "Сводка уйдёт в корзину, исходные заметки вернутся в список; прежние стопки соберутся"
-              + " как были.";
+          "Сводка уйдёт в корзину, исходные заметки вернутся в список (и из корзины, если ушли"
+              + " туда по галочке); прежние колоды соберутся как были.";
+      case EXTEND -> "Вернётся прежняя сводка колоды, добавленные заметки — обратно в список.";
       case ANSWER -> "Ответ забудется, вопрос снова появится в колокольчике.";
       default -> "";
     };

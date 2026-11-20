@@ -1331,7 +1331,7 @@ public final class MainActivity extends Activity
     }
     for (JSONObject p : proposals) {
       String type = p.optString("type");
-      boolean stack = type.equals("link") || type.equals("merge");
+      boolean stack = deckProposal(type);
       LinearLayout item = column();
       item.setPadding(dp(8), dp(12), dp(8), dp(12));
       LinearLayout top = row();
@@ -1842,6 +1842,30 @@ public final class MainActivity extends Activity
             },
             (d, which) -> moveToTrash(id, which == 0))
         .setNegativeButton("Отмена", null)
+        .show();
+  }
+
+  /**
+   * «Разобрать колоду»: исходные возвращаются в список. Сводку можно оставить обычной заметкой или
+   * отправить в корзину (оттуда её можно вернуть вместе с исходными 30 дней).
+   */
+  private void dissolveDeck(long top) {
+    int inside = new ManagerStore(store).members(top).size();
+    new AlertDialog.Builder(this)
+        .setTitle("Разобрать колоду?")
+        .setMessage(
+            "Исходные заметки ("
+                + inside
+                + ") вернутся в список. Что сделать со сводкой сверху?")
+        .setNegativeButton("Назад", null)
+        .setNeutralButton(
+            "Оставить",
+            (d, w) -> {
+              new ManagerStore(store).dissolve(top);
+              render();
+              toast("Колода разобрана");
+            })
+        .setPositiveButton("В корзину", (d, w) -> moveToTrash(top, false))
         .show();
   }
 
@@ -2433,7 +2457,7 @@ public final class MainActivity extends Activity
               line = null;
               occupied = 0;
               LinearLayout group = column();
-              group.addView(text("В стопке: " + members.size() + " исходных заметок", 15, MUTED));
+              group.addView(text("В колоде: " + members.size() + " " + TrashPolicy.plural(members.size(), "исходная заметка", "исходные заметки", "исходных заметок"), 15, MUTED));
               List<Note> all = new ArrayList<>();
               all.add(n);
               for (long member : members) {
@@ -3035,12 +3059,32 @@ public final class MainActivity extends Activity
           if (top != 0)
             popup
                 .getMenu()
-                .add(manager.expanded(top) ? "Сгруппировать" : "Разгруппировать")
+                .add(manager.expanded(top) ? "Свернуть колоду" : "Раскрыть колоду")
                 .setOnMenuItemClickListener(
                     item -> {
                       manager.toggle(top);
                       search = "";
                       render();
+                      return true;
+                    });
+          if (top != 0 && top == n.id)
+            popup
+                .getMenu()
+                .add("Разобрать колоду")
+                .setOnMenuItemClickListener(
+                    item -> {
+                      dissolveDeck(n.id);
+                      return true;
+                    });
+          if (top != 0 && top != n.id)
+            popup
+                .getMenu()
+                .add("Убрать из колоды")
+                .setOnMenuItemClickListener(
+                    item -> {
+                      manager.removeMember(n.id);
+                      render();
+                      toast("Заметка вернулась в список");
                       return true;
                     });
           popup.show();
@@ -3222,7 +3266,16 @@ public final class MainActivity extends Activity
   private void undoAgent(long id) {
     String done;
     try {
-      done = AgentLog.undo(store, id);
+      AgentLog.Outcome outcome = AgentLog.undo(store, id);
+      done = outcome.message;
+      // Ушедшие в корзину — без будильника, вернувшиеся из неё — с будильником, как при «Восстановить».
+      for (long gone : outcome.trashed) Reminders.cancel(this, gone);
+      long now = System.currentTimeMillis();
+      for (long back : outcome.restored) {
+        Note n = store.note(back);
+        if (n != null && n.reminder > now) Reminders.schedule(this, n);
+      }
+      if (!outcome.trashed.isEmpty() || !outcome.restored.isEmpty()) CalendarSync.runAsync(this);
     } catch (IllegalStateException e) {
       done = e.getMessage();
     } catch (Exception e) {
@@ -3272,10 +3325,15 @@ public final class MainActivity extends Activity
     bar.postDelayed(() -> host.removeView(bar), 8000);
   }
 
+  /** Карточка про колоду: собрать новую или добавить в существующую. */
+  private static boolean deckProposal(String type) {
+    return TopicSelection.deck(type) || type.equals("extend");
+  }
+
   private String proposalLabel(String type) {
     return switch (type) {
-      case "merge" -> "Готовый общий текст";
-      case "link" -> "Общая тема";
+      case "group", "merge", "link" -> "Собрать в колоду";
+      case "extend" -> "Добавить в колоду";
       case "task" -> "Идея для дела";
       case "clarify" -> "Уточните";
       default -> "Стоит уточнить";
@@ -3361,7 +3419,7 @@ public final class MainActivity extends Activity
     title.setTypeface(Typeface.create("serif", Typeface.NORMAL));
     header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
     content.addView(header);
-    secondary(content, "Находит связи и помогает собрать заметки в стопки.");
+    secondary(content, "Находит связи и помогает собрать заметки в колоды.");
     gap(content, 14);
     content.addView(button("Проверить заметки", true, this::manualAnalysis));
     gap(content, 8);
@@ -3403,10 +3461,16 @@ public final class MainActivity extends Activity
         content.addView(card);
         continue;
       }
-      if (type.equals("link"))
-        secondary(card, "ИИ подготовит выжимку отдельным платным запросом. Исходники сохранятся.");
-      if (type.equals("merge"))
-        secondary(card, "Подготовьте выжимку ИИ и проверьте её перед созданием стопки.");
+      if (TopicSelection.deck(type))
+        secondary(
+            card,
+            "ИИ подготовит общую сводку отдельным платным запросом; исходные спрячутся в колоду под"
+                + " ней и сохранятся.");
+      if (type.equals("extend"))
+        secondary(
+            card,
+            "ИИ дополнит сводку колоды новыми записями отдельным платным запросом; записи лягут в"
+                + " колоду.");
       gap(card, 8);
       JSONArray sources = p.optJSONArray("sources");
       if (sources != null)
@@ -3425,9 +3489,7 @@ public final class MainActivity extends Activity
           button(
               summaryReady
                   ? "Посмотреть выжимку"
-                  : type.equals("link")
-                      ? "Подготовить выжимку"
-                      : type.equals("merge") ? "Подготовить выжимку" : "Посмотреть черновик",
+                  : deckProposal(type) ? "Подготовить выжимку" : "Посмотреть черновик",
               true,
               () -> previewProposal(p)));
       card.addView(
@@ -3446,7 +3508,7 @@ public final class MainActivity extends Activity
     content.addView(journalTitle);
     secondary(
         content,
-        "Что помощник сделал за 30 дней: названия, созданные заметки, стопки, ответы на вопросы."
+        "Что помощник сделал за 30 дней: названия, созданные заметки, колоды, ответы на вопросы."
             + " Отменить можно в течение суток.");
     List<AgentLog.Entry> journal = AgentLog.recent(store, 30, 0);
     if (journal.isEmpty()) {
@@ -3530,18 +3592,30 @@ public final class MainActivity extends Activity
       toast("Не удалось открыть предложение");
       return;
     }
-    if ((p.optString("type").equals("link") || p.optString("type").equals("merge"))
-        && !p.optBoolean("summaryReady")) {
+    String type = p.optString("type");
+    boolean deck = TopicSelection.deck(type), extend = type.equals("extend");
+    if ((deck || extend) && !p.optBoolean("summaryReady")) {
       prepareSummary(p);
       return;
     }
+    JSONArray proposalSources = p.optJSONArray("sources");
+    boolean stacked = deck || (!extend && proposalSources != null && proposalSources.length() >= 2);
     LinearLayout form = column();
     pad(form, 20);
-    if (p.optString("type").equals("link") || p.optString("type").equals("merge")) {
+    if (stacked) {
       secondary(
           form,
-          "Сверху стопки появится эта заметка. Исходники останутся под ней; их тексты и напоминания"
-              + " сохранятся.");
+          "Сверху колоды будет эта заметка. Исходные спрячутся под ней; их тексты и напоминания"
+              + " сохранятся, «Разобрать колоду» вернёт их в список.");
+      gap(form, 12);
+    }
+    if (extend) {
+      Note head = store.note(p.optLong("stack"));
+      secondary(
+          form,
+          "Это новая сводка колоды «"
+              + (head == null ? "" : head.title)
+              + "». Новые записи лягут в колоду; прежнюю сводку вернёт «Отменить».");
       gap(form, 12);
     }
     EditText title = input("Заголовок", false), body = input("Текст", true);
@@ -3551,21 +3625,36 @@ public final class MainActivity extends Activity
     body.setText(prefs.getString(key + ".body", p.optString("body")));
     form.addView(title);
     form.addView(body);
+    // Галочка «Пустые и дубли — в корзину» (решение 2): только у колоды, по умолчанию выключена.
+    Switch trashExtras = null;
+    if (deck) {
+      try {
+        Map<Long, String> extras = manager.trashCandidates(p);
+        if (!extras.isEmpty()) {
+          Map<Long, String> titles = new HashMap<>();
+          for (long id : extras.keySet()) {
+            Note n = store.note(id);
+            if (n != null) titles.put(id, n.title);
+          }
+          gap(form, 12);
+          trashExtras = toggle("Пустые и дубли — в корзину", false);
+          form.addView(trashExtras);
+          secondary(form, DeckPolicy.describe(extras, titles) + ". Вернуть можно 30 дней.");
+        }
+      } catch (Exception ignored) {
+        // Без галочки: исходные просто лягут в колоду.
+      }
+    }
+    Switch extrasSwitch = trashExtras;
     watch(title, () -> prefs.edit().putString(key + ".title", title.getText().toString()).apply());
     watch(body, () -> prefs.edit().putString(key + ".body", body.getText().toString()).apply());
     AlertDialog dialog =
         new AlertDialog.Builder(this)
-            .setTitle(
-                p.optString("type").equals("link") || p.optString("type").equals("merge")
-                    ? "Новая стопка"
-                    : "Сохранить заметку")
+            .setTitle(extend ? "Добавить в колоду" : stacked ? "Новая колода" : "Сохранить заметку")
             .setView(scroll(form))
             .setNegativeButton("Назад", null)
             .setPositiveButton(
-                p.optString("type").equals("link") || p.optString("type").equals("merge")
-                    ? "Создать стопку"
-                    : "Сохранить",
-                null)
+                extend ? "Добавить в колоду" : stacked ? "Собрать колоду" : "Сохранить", null)
             .create();
     dialog.setOnShowListener(
         d ->
@@ -3574,18 +3663,27 @@ public final class MainActivity extends Activity
                 .setOnClickListener(
                     v -> {
                       try {
-                        manager.accept(
-                            p.optLong("id"), title.getText().toString(), body.getText().toString());
+                        ManagerStore.Accepted done =
+                            manager.accept(
+                                p.optLong("id"),
+                                title.getText().toString(),
+                                body.getText().toString(),
+                                extrasSwitch != null && extrasSwitch.isChecked());
+                        for (long gone : done.trashed) Reminders.cancel(this, gone);
+                        if (!done.trashed.isEmpty()) CalendarSync.runAsync(this);
                         prefs.edit().remove(key + ".title").remove(key + ".body").apply();
                         dialog.dismiss();
                         page = "notes";
                         search = "";
                         render();
                         undoBar(
-                            p.optString("type").equals("link")
-                                    || p.optString("type").equals("merge")
-                                ? "✓ Стопка создана"
-                                : "✓ Заметка сохранена");
+                            extend
+                                ? "✓ Добавлено в колоду"
+                                : stacked
+                                    ? done.trashed.isEmpty()
+                                        ? "✓ Колода собрана"
+                                        : "✓ Колода собрана, в корзину: " + done.trashed.size()
+                                    : "✓ Заметка сохранена");
                       } catch (Exception e) {
                         toast(
                             e instanceof IllegalStateException

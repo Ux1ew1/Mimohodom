@@ -22,15 +22,14 @@ public final class ReviewAnalysis {
             + "\n"
             + perNote
             + "\n"
-            + "Выполни ОБЕ проверки в одном ответе: {\"notes\":[...],\"suggestions\":[...]}. Массив"
+            + "Выполни ОБЕ проверки в одном ответе: {\"notes\":[...],\"actions\":[...]}. Массив"
             + " notes должен содержать каждый входной ID. Улучшай только автоматические заголовки с"
-            + " needs_title=true; авторские заголовки сохраняй. Для suggestions вначале сопоставь"
-            + " записи между собой: близкие дубли и дополняющие записи могут подходить для"
-            + " объединения. Не объединяй разные темы ради группировки. Если подходящих записей"
-            + " нет, suggestions=[]. Экономь ответ: до 2 предложений, до 1 объединения, краткие"
-            + " объяснения, metadata необязательна. Для metadata достаточно summary до 100 символов"
-            + " и до 2 aliases. Умести оба массива в 1200 токенов; если полный объединённый текст"
-            + " не помещается, предложи link вместо merge.");
+            + " needs_title=true; авторские заголовки сохраняй. Для actions вначале сопоставь"
+            + " записи между собой и с колодами stacks: близкие дубли и дополняющие записи могут"
+            + " подходить для колоды. Не объединяй разные темы ради группировки. Если подходящих"
+            + " записей нет, actions=[]. Экономь ответ: до 2 действий, до 1 колоды (group или"
+            + " extend), краткие объяснения, metadata необязательна. Для metadata достаточно"
+            + " summary до 100 символов и до 2 aliases. Умести оба массива в 1200 токенов.");
     JSONArray data = new JSONArray(messages.getJSONObject(1).getString("content"));
     for (int i = 0; i < notes.size(); i++) {
       Note n = notes.get(i);
@@ -53,6 +52,12 @@ public final class ReviewAnalysis {
   }
 
   public static Result parse(JSONObject response, List<Note> notes, long now) throws Exception {
+    return parse(response, notes, Collections.emptyList(), now);
+  }
+
+  /** {@code stacks} — верхние заметки колод, показанных модели для extend. */
+  public static Result parse(JSONObject response, List<Note> notes, List<Note> stacks, long now)
+      throws Exception {
     JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
     if ("length".equals(choice.optString("finish_reason")))
       throw new Failure(
@@ -62,10 +67,12 @@ public final class ReviewAnalysis {
     if (text.trim().isEmpty())
       throw new Failure("Модель вернула пустой ответ. Попробуйте другую модель.");
     Result result = new Result();
-    result.proposals = ManagerAnalysis.parse(text, notes);
-    String clean = AgentPlan.unwrap(text);
-    if (new JSONObject(clean).getJSONArray("suggestions").length() > 0
-        && result.proposals.isEmpty())
+    result.proposals = ManagerAnalysis.parse(text, notes, stacks);
+    JSONObject root = new JSONObject(AgentPlan.unwrap(text));
+    // Раздел действий обязателен (новый «actions» или прежний «suggestions»), иначе формат неверный.
+    JSONArray actions = root.optJSONArray("actions");
+    if (actions == null) actions = root.getJSONArray("suggestions");
+    if (actions.length() > 0 && result.proposals.isEmpty() && !onlyNames(actions))
       throw new Failure(
           "Модель предложила действия с неверными источниками или неполным текстом. Предложения не"
               + " применены; повторите вручную.");
@@ -74,6 +81,15 @@ public final class ReviewAnalysis {
       throw new Failure(
           "Модель проверила не все записи. Результат не применён; повторите проверку вручную.");
     return result;
+  }
+
+  /** Модель могла прислать в actions только названия — это не ошибка источников. */
+  private static boolean onlyNames(JSONArray actions) {
+    for (int i = 0; i < actions.length(); i++) {
+      JSONObject a = actions.optJSONObject(i);
+      if (a == null || !"name".equals(a.optString("action"))) return false;
+    }
+    return true;
   }
 
   public static final class Failure extends Exception {

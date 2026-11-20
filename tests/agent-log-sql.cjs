@@ -47,7 +47,7 @@ const rows = db.prepare(recent[0]).all(now - day, 20);
 check(rows.length === 2 && rows[0].id === 4 && rows[1].id === 3, 'last day, newest first');
 check(db.prepare(recent[0]).all(0, 2).length === 2, 'limit applies');
 
-const undo = method(log, 'static String undo(Store store, long id)');
+const undo = method(log, 'static Outcome undo(Store store, long id)');
 const pick = queries(undo)[0];
 check(db.prepare(pick).get(3).action === 'group', 'undo reads the entry');
 const mark = execs(undo).find(sql => sql.startsWith('UPDATE agent_log'));
@@ -69,7 +69,7 @@ db.exec('INSERT INTO note_groups(top) VALUES(20)');
 db.exec('INSERT INTO note_members(note,top) VALUES(1,20),(2,20),(3,20),(10,20)');
 db.exec('DELETE FROM note_groups WHERE top=20');
 check(db.prepare('SELECT count(*) n FROM note_members').get().n === 0, 'sources leave the stack with its top');
-const restore = execs(method(log, 'private static String undoGroup(Store store, SQLiteDatabase db, JSONObject data)'));
+const restore = execs(method(log, 'private static String undoGroup(Store store, SQLiteDatabase db, JSONObject data, Outcome out)'));
 check(restore.length === 2, 'restore SQL extracted');
 db.prepare(restore[0]).run(10);
 db.prepare(restore[0]).run(10);
@@ -77,6 +77,18 @@ db.prepare(restore[1]).run(2, 10);
 db.prepare(restore[1]).run(3, 10);
 check(db.prepare('SELECT count(*) n FROM note_members WHERE top=10').get().n === 2, 'old stack rebuilt');
 check(db.prepare('SELECT count(*) n FROM note_groups').get().n === 1, 'old top restored once');
+// Отмена extend: добавленные записи выходят только из своей колоды.
+db.exec('INSERT INTO note_members(note,top) VALUES(1,10)');
+const unextend = execs(method(log, 'private static String undoExtend(Store store, SQLiteDatabase db, JSONObject data)'));
+check(unextend.length === 1, 'extend undo SQL extracted');
+db.prepare(unextend[0]).run(1, 10);
+db.prepare(unextend[0]).run(2, 99);
+check(!db.prepare('SELECT 1 FROM note_members WHERE note=1').get(), 'added note left the deck');
+check(db.prepare('SELECT top FROM note_members WHERE note=2').get().top === 10, 'old members stay');
+// «Разобрать колоду» и «Убрать из колоды» (ManagerStore.dissolve/removeMember): каскад и очистка.
+db.exec('DELETE FROM note_groups WHERE top=10');
+check(db.prepare('SELECT count(*) n FROM note_members').get().n === 0, 'dissolve frees every source');
+check(db.prepare('SELECT count(*) n FROM notes').get().n === 5, 'dissolve keeps every note');
 
 // Миграция в Store: свежая установка и обновление 13 → 14.
 check(method(store, 'void onCreate(SQLiteDatabase db)').includes('AgentLog.create(db)'), 'fresh install gets the journal');

@@ -68,7 +68,7 @@ public final class SummaryTest {
     List<JSONObject> proposals = TopicSelection.proposals(selected, Arrays.asList(modelLink));
     check(
         proposals.size() == 1
-            && proposals.get(0).getString("type").equals("link")
+            && proposals.get(0).getString("type").equals("group")
             && proposals.get(0).getJSONArray("sources").length() == 3
             && proposals.get(0).getString("reason").startsWith("Все про одну машину"),
         "Model chooses the stack members and its reason is kept");

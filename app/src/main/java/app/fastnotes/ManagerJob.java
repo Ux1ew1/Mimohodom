@@ -23,7 +23,11 @@ final class ManagerJob {
     boolean perNote = manual || prefs.getBoolean("backgroundAi", false);
     ManagerStore manager = new ManagerStore(store);
     List<Note> batch = manager.batch(manual);
-    JSONObject groupSnapshot = manager.groupSnapshot(batch);
+    // Колоды по теме пачки: модель может предложить добавить запись туда (extend).
+    List<Note> stacks = manager.stacksFor(batch);
+    List<Note> snapshotNotes = new ArrayList<>(batch);
+    snapshotNotes.addAll(stacks);
+    JSONObject groupSnapshot = manager.groupSnapshot(snapshotNotes);
     if (batch.isEmpty()) {
       status(
           context,
@@ -32,7 +36,7 @@ final class ManagerJob {
               : manager.failedCount() > 0
                   ? "Все доступные записи ожидают ручного повтора после ошибки. Нажмите «Проверить"
                         + " заметки»."
-                  : "Нет доступных заметок для проверки. Стопки и их исходники уже просмотрены и"
+                  : "Нет доступных заметок для проверки. Колоды и их исходники уже просмотрены и"
                         + " исключены из анализа.");
       return;
     }
@@ -41,7 +45,7 @@ final class ManagerJob {
       if (!enabled.getAsBoolean()) return;
       batch.removeIf(n -> manager.top(n.id) != 0);
       if (batch.isEmpty()) {
-        status(context, "Нет доступных заметок для проверки. Все выбранные записи уже в стопках.");
+        status(context, "Нет доступных заметок для проверки. Все выбранные записи уже в колодах.");
         return;
       }
       if (!ReviewBudget.reserve(context)) {
@@ -65,13 +69,14 @@ final class ManagerJob {
                 batch, model, System.currentTimeMillis(), ZoneId.systemDefault())
             : ManagerAnalysis.payload(batch, model);
     payload =
-        ManagerAnalysis.withContext(payload, manager.knownGroups(batch), manager.answers(batch));
+        ManagerAnalysis.withContext(
+            payload, manager.knownGroups(batch), manager.answers(batch), stacks);
     JSONObject response = Polza.request("chat/completions", key, payload);
     List<JSONObject> proposals;
     Map<Long, Analysis.Result> results = Collections.emptyMap();
     if (perNote) {
       ReviewAnalysis.Result parsed =
-          ReviewAnalysis.parse(response, batch, System.currentTimeMillis());
+          ReviewAnalysis.parse(response, batch, stacks, System.currentTimeMillis());
       proposals = parsed.proposals;
       results = parsed.notes;
     } else {
@@ -81,7 +86,8 @@ final class ManagerJob {
             "Ответ модели оборвался по лимиту 1200 токенов. Попробуйте другую модель или более"
                 + " короткие заметки.");
       proposals =
-          ManagerAnalysis.parse(choice.getJSONObject("message").getString("content"), batch);
+          ManagerAnalysis.parse(
+              choice.getJSONObject("message").getString("content"), batch, stacks);
     }
     proposals = TopicSelection.proposals(batch, proposals);
     for (JSONObject p : proposals) ManagerStore.attachGroups(p, groupSnapshot);

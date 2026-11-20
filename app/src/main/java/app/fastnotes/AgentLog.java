@@ -88,12 +88,19 @@ final class AgentLog {
         .execSQL("DELETE FROM agent_log WHERE created<?", new Object[] {now - AgentJournal.KEEP});
   }
 
+  /** Итог отмены: текст для пользователя и заметки, ушедшие в корзину или вернувшиеся из неё. */
+  static final class Outcome {
+    String message = "";
+    final List<Long> trashed = new ArrayList<>(), restored = new ArrayList<>();
+  }
+
   /**
-   * Отменяет действие и возвращает текст для пользователя. Если вернуть уже нельзя (заметку
-   * изменили или удалили, прошли сутки), бросает {@link IllegalStateException} с причиной и
-   * ничего не меняет.
+   * Отменяет действие. Если вернуть уже нельзя (заметку изменили или удалили, прошли сутки),
+   * бросает {@link IllegalStateException} с причиной и ничего не меняет. Напоминания заметок из
+   * {@link Outcome} снимает и ставит вызывающий.
    */
-  static String undo(Store store, long id) {
+  static Outcome undo(Store store, long id) {
+    Outcome out = new Outcome();
     SQLiteDatabase db = store.getWritableDatabase();
     db.beginTransaction();
     try (Cursor c =
@@ -107,18 +114,19 @@ final class AgentLog {
                 : "Отменить можно только в течение суток");
       String action = c.getString(1);
       JSONObject data = new JSONObject(c.getString(2));
-      String done =
+      out.message =
           switch (action) {
             case AgentJournal.NAME -> undoName(store, data);
-            case AgentJournal.CREATE -> undoCreate(store, db, data);
-            case AgentJournal.GROUP -> undoGroup(store, db, data);
+            case AgentJournal.CREATE -> undoCreate(store, db, data, out);
+            case AgentJournal.GROUP -> undoGroup(store, db, data, out);
+            case AgentJournal.EXTEND -> undoExtend(store, db, data);
             case AgentJournal.ANSWER -> undoAnswer(db, data);
             default -> throw new IllegalStateException("Это действие нельзя отменить");
           };
       db.execSQL(
           "UPDATE agent_log SET state=? WHERE id=?", new Object[] {AgentJournal.UNDONE, id});
       db.setTransactionSuccessful();
-      return done;
+      return out;
     } catch (JSONException e) {
       throw new IllegalStateException("Запись журнала повреждена");
     } finally {
@@ -133,21 +141,26 @@ final class AgentLog {
     return "Название возвращено";
   }
 
-  private static String undoCreate(Store store, SQLiteDatabase db, JSONObject data) {
+  private static String undoCreate(Store store, SQLiteDatabase db, JSONObject data, Outcome out) {
     Note n = store.note(data.optLong("note"));
     if (n == null || n.trashed > 0) throw new IllegalStateException("Заметки уже нет");
-    store.trash(n.id, false);
+    out.trashed.addAll(store.trash(n.id, false));
     closeProposal(db, data.optLong("proposal"));
     return "Заметка в корзине";
   }
 
-  private static String undoGroup(Store store, SQLiteDatabase db, JSONObject data) {
+  private static String undoGroup(Store store, SQLiteDatabase db, JSONObject data, Outcome out) {
     long top = data.optLong("note");
     Note n = store.note(top);
-    if (n == null || n.trashed > 0) throw new IllegalStateException("Стопки уже нет");
+    if (n == null || n.trashed > 0) throw new IllegalStateException("Колоды уже нет");
     ManagerStore manager = new ManagerStore(store);
-    if (manager.top(top) != top) throw new IllegalStateException("Стопку уже разобрали");
-    store.trash(top, false);
+    if (manager.top(top) != top) throw new IllegalStateException("Колоду уже разобрали");
+    // Ушедшие в корзину по галочке возвращаются обычными заметками (если их не удалили насовсем).
+    for (long gone : AgentJournal.ids(data, "trashed")) {
+      Note g = store.note(gone);
+      if (g != null && g.trashed > 0) out.restored.addAll(store.restore(gone));
+    }
+    out.trashed.addAll(store.trash(top, false));
     // Прежние стопки собираются заново из того, что осталось на месте и сейчас ни в какой стопке.
     for (Map.Entry<Long, List<Long>> old : AgentJournal.before(data).entrySet()) {
       Note head = store.note(old.getKey());
@@ -166,7 +179,23 @@ final class AgentLog {
             new Object[] {member, head.id});
     }
     closeProposal(db, data.optLong("proposal"));
-    return "Стопка разобрана, сводка в корзине";
+    return "Колода разобрана, сводка в корзине";
+  }
+
+  private static String undoExtend(Store store, SQLiteDatabase db, JSONObject data) {
+    long top = data.optLong("note");
+    Note n = store.note(top);
+    if (n == null || n.trashed > 0 || new ManagerStore(store).top(top) != top)
+      throw new IllegalStateException("Колоды уже нет");
+    if (!n.title.equals(data.optString("title")) || !n.body.equals(data.optString("body")))
+      throw new IllegalStateException("Сводку колоды уже изменили");
+    store.save(top, data.optString("was_title"), data.optString("was_body"), n.reminder, n.repeat, n.lead);
+    for (long added : AgentJournal.ids(data, "added"))
+      db.execSQL(
+          "DELETE FROM note_members WHERE note=? AND top=?", new Object[] {added, top});
+    new ManagerStore(store).cleanup();
+    closeProposal(db, data.optLong("proposal"));
+    return "Сводка колоды возвращена, добавленные заметки — в списке";
   }
 
   private static String undoAnswer(SQLiteDatabase db, JSONObject data) throws JSONException {

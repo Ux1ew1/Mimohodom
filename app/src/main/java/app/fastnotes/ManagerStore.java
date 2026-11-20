@@ -161,7 +161,7 @@ public final class ManagerStore {
         try {
           JSONObject p = new JSONObject(c.getString(0));
           String type = p.optString("type");
-          if (!type.equals("link") && !type.equals("merge")) continue;
+          if (!TopicSelection.deck(type) && !type.equals("extend")) continue;
           if (!current(p)) continue;
           Set<Long> ids = new TreeSet<>();
           JSONArray sources = p.getJSONArray("sources");
@@ -261,7 +261,7 @@ public final class ManagerStore {
       List<Set<Long>> known = knownGroups();
       for (JSONObject p : proposals) {
         if (!current(p)) continue;
-        if (p.getString("type").equals("merge") || p.getString("type").equals("link")) {
+        if (TopicSelection.deck(p.getString("type"))) {
           Set<Long> distinctGroups = new HashSet<>();
           JSONArray sources = p.getJSONArray("sources");
           for (int i = 0; i < sources.length(); i++) {
@@ -350,6 +350,14 @@ public final class ManagerStore {
       // Only our own title changes are rebased. User changes were rejected above, under this
       // transaction.
       JSONObject groups = groupSnapshot(unchanged);
+      // Колода из extend во входе не была: её состояние берём сейчас, под той же транзакцией.
+      for (JSONObject p : valid) {
+        JSONArray sources = p.getJSONArray("sources");
+        for (int i = 0; i < sources.length(); i++) {
+          String key = "" + sources.getJSONObject(i).getLong("id");
+          if (!groups.has(key)) groups.put(key, groupRevision(Long.parseLong(key)));
+        }
+      }
       for (JSONObject p : valid) {
         JSONArray sources = p.getJSONArray("sources");
         for (int i = 0; i < sources.length(); i++) {
@@ -445,57 +453,196 @@ public final class ManagerStore {
         new Object[] {state, id});
   }
 
+  /** Итог «Принять»: созданная или обновлённая заметка и исходные, ушедшие в корзину. */
+  public static final class Accepted {
+    public long note;
+    public final List<Long> trashed = new ArrayList<>();
+  }
+
   public long accept(long id, String title, String body) throws Exception {
+    return accept(id, title, body, false).note;
+  }
+
+  /**
+   * Принимает предложение по нажатию пользователя. Колода (group и прежние merge/link), а также
+   * заметка-дело из нескольких записей: сверху новая заметка, исходные прячутся под ней. extend:
+   * сводка колоды заменяется новой, новые записи ложатся в колоду. {@code trashExtras} —
+   * галочка «Пустые и дубли — в корзину» (только для колоды, {@link #trashCandidates}).
+   */
+  public Accepted accept(long id, String title, String body, boolean trashExtras)
+      throws Exception {
+    Accepted out = new Accepted();
     db.beginTransaction();
     try (Cursor c =
         db.rawQuery(
             "SELECT data,state,result FROM manager_proposals WHERE id=?", new String[] {"" + id})) {
       if (!c.moveToFirst()) throw new IllegalStateException("Предложение не найдено");
-      if (c.getString(1).equals("accepted")) return c.getLong(2);
+      if (c.getString(1).equals("accepted")) {
+        out.note = c.getLong(2);
+        return out;
+      }
       JSONObject p = new JSONObject(c.getString(0));
+      String type = p.getString("type");
       if (!(c.getString(1).equals("pending")
-              || (c.getString(1).equals("reviewed") && p.optString("type").equals("link")))
+              || (c.getString(1).equals("reviewed") && type.equals("link")))
           || !current(p))
         throw new IllegalStateException("Исходные заметки изменились. Нужна новая проверка.");
       if (body.trim().isEmpty()) throw new IllegalStateException("Добавьте текст заметки");
-      long result = store.save(0, title, body, 0);
-      if (p.getString("type").equals("merge") || p.getString("type").equals("link")) {
-        LinkedHashSet<Long> members = new LinkedHashSet<>();
-        // Прежние стопки, которые войдут в новую: журнал вернёт их по «Отменить».
-        Map<Long, List<Long>> before = new LinkedHashMap<>();
+      long result;
+      if (type.equals("extend")) result = extendDeck(p, id, title, body);
+      else {
+        Map<Long, String> extras = trashExtras && TopicSelection.deck(type)
+            ? trashCandidates(p)
+            : Collections.emptyMap();
+        result = store.save(0, title, body, 0);
         JSONArray sources = p.getJSONArray("sources");
-        for (int i = 0; i < sources.length(); i++) {
-          long source = sources.getJSONObject(i).getLong("id"), top = top(source);
-          members.add(source);
-          if (top != 0) {
-            members.add(top);
-            members.addAll(members(top));
-            before.putIfAbsent(top, members(top));
+        // Заметка-дело из нескольких записей тоже прячет их в колоду (этап 3).
+        if (TopicSelection.deck(type) || sources.length() >= 2) {
+          LinkedHashSet<Long> members = new LinkedHashSet<>();
+          // Прежние колоды, которые войдут в новую: журнал вернёт их по «Отменить».
+          Map<Long, List<Long>> before = new LinkedHashMap<>();
+          for (int i = 0; i < sources.length(); i++) {
+            long source = sources.getJSONObject(i).getLong("id"), top = top(source);
+            members.add(source);
+            if (top != 0) {
+              members.add(top);
+              members.addAll(members(top));
+              before.putIfAbsent(top, members(top));
+            }
           }
-        }
-        AgentLog.record(
-            db,
-            AgentJournal.GROUP,
-            AgentJournal.groupData(result, store.note(result).title, members, before, id));
-        for (long member : members) db.delete("note_groups", "top=?", new String[] {"" + member});
-        db.execSQL("INSERT INTO note_groups(top) VALUES(?)", new Object[] {result});
-        for (long member : members)
-          db.execSQL(
-              "INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)",
-              new Object[] {member, result});
-      } else
-        AgentLog.record(
-            db,
-            AgentJournal.CREATE,
-            AgentJournal.createData(result, store.note(result).title, id));
+          for (long member : members)
+            db.delete("note_groups", "top=?", new String[] {"" + member});
+          db.execSQL("INSERT INTO note_groups(top) VALUES(?)", new Object[] {result});
+          for (long member : members)
+            db.execSQL(
+                "INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)",
+                new Object[] {member, result});
+          // Галочка «Пустые и дубли — в корзину»: только в корзину, вернуть можно 30 дней.
+          for (long extra : extras.keySet())
+            if (members.contains(extra) && !store.trash(extra, false).isEmpty())
+              out.trashed.add(extra);
+          AgentLog.record(
+              db,
+              AgentJournal.GROUP,
+              AgentJournal.groupData(
+                  result, store.note(result).title, members, before, id, out.trashed));
+        } else
+          AgentLog.record(
+              db,
+              AgentJournal.CREATE,
+              AgentJournal.createData(result, store.note(result).title, id));
+      }
       db.execSQL(
           "UPDATE manager_proposals SET state='accepted',result=? WHERE id=?",
           new Object[] {result, id});
       db.setTransactionSuccessful();
-      return result;
+      out.note = result;
+      return out;
     } finally {
       db.endTransaction();
     }
+  }
+
+  /** extend: новая сводка в верхнюю заметку колоды, новые записи — в колоду. */
+  private long extendDeck(JSONObject p, long proposal, String title, String body)
+      throws Exception {
+    long top = p.getLong("stack");
+    Note head = store.note(top);
+    if (head == null || head.trashed > 0 || top(top) != top)
+      throw new IllegalStateException("Колоды уже нет. Нужна новая проверка.");
+    List<Long> added = extendAdded(p);
+    for (long note : added)
+      if (top(note) != 0) throw new IllegalStateException("Заметка уже в другой колоде.");
+    store.save(top, title, body, head.reminder, head.repeat, head.lead);
+    for (long note : added)
+      db.execSQL(
+          "INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)", new Object[] {note, top});
+    Note after = store.note(top);
+    AgentLog.record(
+        db,
+        AgentJournal.EXTEND,
+        AgentJournal.extendData(top, after.title, after.body, head.title, head.body, added, proposal));
+    return top;
+  }
+
+  /** Новые записи предложения extend (его исходные без самой колоды). */
+  public static List<Long> extendAdded(JSONObject p) throws JSONException {
+    long top = p.getLong("stack");
+    List<Long> out = new ArrayList<>();
+    JSONArray sources = p.getJSONArray("sources");
+    for (int i = 0; i < sources.length(); i++) {
+      long id = sources.getJSONObject(i).getLong("id");
+      if (id != top) out.add(id);
+    }
+    return out;
+  }
+
+  /** Исходные для выжимки extend: только новые записи (прежняя сводка идёт как начало). */
+  public List<Note> extendSources(JSONObject p) throws Exception {
+    List<Note> out = new ArrayList<>();
+    for (long id : extendAdded(p)) {
+      Note n = store.note(id);
+      if (n == null) throw new IllegalStateException("Исходники изменились");
+      out.add(n);
+    }
+    return out;
+  }
+
+  /**
+   * Что галочка «Пустые и дубли — в корзину» отправит в корзину: номер → причина ({@link
+   * DeckPolicy}). Пусто — галочку не показываем.
+   */
+  public LinkedHashMap<Long, String> trashCandidates(JSONObject p) throws Exception {
+    List<Note> notes = new ArrayList<>();
+    JSONArray sources = p.getJSONArray("sources");
+    for (int i = 0; i < sources.length(); i++) {
+      Note n = store.note(sources.getJSONObject(i).getLong("id"));
+      if (n != null && n.trashed == 0) notes.add(n);
+    }
+    Set<Long> model = new HashSet<>();
+    JSONArray extra = p.optJSONArray("trash");
+    for (int i = 0; extra != null && i < extra.length(); i++) model.add(extra.optLong(i));
+    return DeckPolicy.trashCandidates(notes, model);
+  }
+
+  /**
+   * Колоды по теме пачки для подсказки модели: верхние заметки (не в корзине), похожие хотя бы на
+   * одну запись пачки, самые похожие первыми, не больше пяти.
+   */
+  public List<Note> stacksFor(List<Note> batch) {
+    List<Note> tops = new ArrayList<>();
+    Map<Long, Double> scores = new HashMap<>();
+    try (Cursor c =
+        db.rawQuery(
+            "SELECT g.top FROM note_groups g JOIN notes n ON n.id=g.top WHERE n.trashed=0", null)) {
+      while (c.moveToNext()) {
+        Note top = store.note(c.getLong(0));
+        if (top == null) continue;
+        double best = 0;
+        for (Note n : batch) best = Math.max(best, TopicSelection.similarity(top, n));
+        if (best >= 0.18) {
+          tops.add(top);
+          scores.put(top.id, best);
+        }
+      }
+    }
+    tops.sort(
+        (x, y) -> {
+          int by = Double.compare(scores.get(y.id), scores.get(x.id));
+          return by != 0 ? by : Long.compare(x.id, y.id);
+        });
+    return tops.size() > 5 ? new ArrayList<>(tops.subList(0, 5)) : tops;
+  }
+
+  /** «Разобрать колоду»: исходные возвращаются в список, сводка остаётся обычной заметкой. */
+  public void dissolve(long top) {
+    db.delete("note_groups", "top=?", new String[] {"" + top});
+  }
+
+  /** «Убрать из колоды»: заметка возвращается в список; пустая колода распадается. */
+  public void removeMember(long note) {
+    db.delete("note_members", "note=?", new String[] {"" + note});
+    cleanup();
   }
 
   public long top(long id) {

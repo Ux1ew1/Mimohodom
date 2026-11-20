@@ -81,34 +81,32 @@ public final class TopicSelection {
     return selected;
   }
 
+  /** Карточка колоды: новая (group) или прежние merge/link из старых ответов и базы. */
+  public static boolean deck(String type) {
+    return type.equals("group") || type.equals("link") || type.equals("merge");
+  }
+
   public static List<JSONObject> proposals(List<Note> batch, List<JSONObject> model)
       throws Exception {
     List<JSONObject> out = new ArrayList<>();
     JSONObject first = null;
     for (JSONObject p : model) {
-      boolean stack = p.optString("type").equals("link") || p.optString("type").equals("merge");
-      if (stack) {
+      if (deck(p.optString("type"))) {
         if (first == null) first = p;
       } else if (out.size() < 3) out.add(p);
     }
-    // Стопку предлагаем только по выводу модели и только из тех записей, которые она назвала:
+    // Колоду предлагаем только по выводу модели и только из тех записей, которые она назвала:
     // одного сходства слов мало (общий магазин или оператор ещё не делают записи одной темой).
+    // Одна колода за проверку; название и список «в корзину» от модели сохраняются.
     if (first != null) {
-      JSONArray ids = new JSONArray();
-      JSONArray sources = first.getJSONArray("sources");
-      for (int i = 0; i < sources.length(); i++) ids.put(sources.getJSONObject(i).getLong("id"));
       String reason = first.optString("reason", "").trim();
-      JSONObject group =
-          new JSONObject()
-              .put("type", "link")
-              .put("sources", ids)
+      out.add(
+          first
+              .put("type", "group")
               .put(
                   "reason",
                   (reason.isEmpty() ? "Записи об одном и том же." : reason)
-                      + " Проверьте состав: их можно собрать в одну стопку с выжимкой ИИ.");
-      out.addAll(
-          ManagerAnalysis.parse(
-              new JSONObject().put("suggestions", new JSONArray().put(group)).toString(), batch));
+                      + " Проверьте состав: их можно собрать в одну колоду с выжимкой ИИ."));
     }
     return out;
   }
