@@ -50,6 +50,40 @@ public final class CheckInJob extends JobService {
     return CheckIn.every(prefs(c).getInt(EVERY, CheckIn.DEFAULT_EVERY));
   }
 
+  /** Настройка: раньше этого времени не спрашивать «Как продвигается?» о заметке. */
+  public static String progressKey(long note) {
+    return "progressNext." + note;
+  }
+
+  /**
+   * Дело для «Как продвигается?» или null: заметки вне корзины и вне колод (кроме верхней), с
+   * классом из проверки агента, открытым планом и сроком — выбор по правилам {@link ProgressCheck}.
+   */
+  static ProgressCheck.Candidate progressCandidate(Context c, Store store, long now) {
+    ManagerStore manager = new ManagerStore(store);
+    Map<Long, String> kinds = manager.kinds();
+    Map<Long, Long> tops = manager.topMap();
+    List<ProgressCheck.Candidate> all = new ArrayList<>();
+    for (Note n : store.notes()) {
+      Long top = tops.get(n.id);
+      if (top != null && top != n.id) continue;
+      ProgressCheck.Candidate k = new ProgressCheck.Candidate();
+      k.id = n.id;
+      k.title = n.title;
+      k.kind = kinds.getOrDefault(n.id, "");
+      k.reminder = n.reminder;
+      k.repeat = n.repeat;
+      k.updated = n.updated;
+      k.created = n.created;
+      PlanTree plan = PlanTree.parse(store.plan(n.id));
+      k.planOpen = plan.checkable() > plan.done();
+      k.nextAsk = prefs(c).getLong(progressKey(n.id), 0);
+      all.add(k);
+    }
+    List<ProgressCheck.Candidate> picked = ProgressCheck.pick(all, now, 1);
+    return picked.isEmpty() ? null : picked.get(0);
+  }
+
   /** Сообщение о последнем запуске для экрана настроек. */
   public static String status(Context c) {
     return prefs(c).getString(STATUS, "");
@@ -184,7 +218,7 @@ public final class CheckInJob extends JobService {
         return;
       }
       long chat = compose(c, store);
-      if (chat > 0) notifyChat(c, chat, store.firstMessage(chat));
+      if (chat > 0) notifyChat(c, chat, PlanChat.split(store.firstMessage(chat)).text);
     } catch (Exception e) {
       status(c, "Не удалось задать вопрос. " + describe(e));
     } finally {
@@ -215,6 +249,36 @@ public final class CheckInJob extends JobService {
       if (streak >= CheckIn.MAX_MISSED) {
         prefs(c).edit().putInt(MISSED, streak).apply();
         return 0;
+      }
+      // Не больше 4 чатов в день, начатых помощником (решение пользователя 4).
+      long dayStart =
+          java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate().atStartOfDay(zone)
+              .toInstant()
+              .toEpochMilli();
+      if (!ProgressCheck.allowed(store.agentChatsSince(dayStart))) {
+        status(c, "Сегодня помощник уже начал 4 чата — следующий вопрос завтра.");
+        return 0;
+      }
+      // Сначала «Как продвигается?» о деле с близким сроком или давно без движения: без модели.
+      ProgressCheck.Candidate task = progressCandidate(c, store, now);
+      if (task != null) {
+        String question = ProgressCheck.question(task, now, zone);
+        long chat = store.newProgressChat(task.id, "Как дела: " + task.title, question);
+        prefs(c)
+            .edit()
+            .putLong(progressKey(task.id), ProgressCheck.nextAsk("", now))
+            .putLong(LAST, now)
+            .putLong(CHAT, chat)
+            .putInt(MISSED, streak)
+            .putString(
+                STATUS,
+                "Последний вопрос: «Как продвигается?» о «"
+                    + CheckIn.line(task.title, 40)
+                    + "», "
+                    + new java.text.SimpleDateFormat("d MMM, HH:mm", new Locale("ru"))
+                        .format(new Date(now)))
+            .apply();
+        return chat;
       }
       JSONObject payload =
           new JSONObject()
@@ -271,7 +335,7 @@ public final class CheckInJob extends JobService {
       long id = Long.parseLong(chat[0]);
       if (past.size() >= 3) break;
       if (ChatOrigin.AGENT.equals(chat.length > 4 ? chat[4] : ""))
-        past.add(CheckIn.pastLine(store.firstMessage(id), store.userText(id)));
+        past.add(CheckIn.pastLine(PlanChat.split(store.firstMessage(id)).text, store.userText(id)));
     }
     return CheckIn.prompt(now, zone, events, recent, past);
   }

@@ -176,7 +176,8 @@ public final class AgentAction {
           return null;
         a.askKind = raw.optString("kind", "").trim();
         if (a.askKind.length() > MAX_ASK_KIND) return null;
-        a.legacy = a.options.size() >= 2 ? "clarify" : "";
+        // Вопрос по заметке показывается всегда: варианты кнопками (0–4) и свой ответ.
+        a.legacy = "clarify";
       }
       case PLAN -> {
         if (!a.readNote(raw, scope, true)) return null;

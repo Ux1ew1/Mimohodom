@@ -133,11 +133,14 @@ public final class ManagerStore {
       long id = db.insertOrThrow("manager_runs", null, run);
       for (Note n : notes) {
         ContentValues v = new ContentValues();
-        v.put("note", n.id);
         v.put("revision", ManagerAnalysis.fingerprint(n));
         v.put("attempted", now);
         v.put("failed", 1);
-        db.insertWithOnConflict("manager_review", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+        // Обновляем строку, а не заменяем: класс заметки (kind) прошлой проверки сохраняется.
+        if (db.update("manager_review", v, "note=?", new String[] {"" + n.id}) == 0) {
+          v.put("note", n.id);
+          db.insertOrThrow("manager_review", null, v);
+        }
       }
       db.setTransactionSuccessful();
       return id;
@@ -197,25 +200,74 @@ public final class ManagerStore {
     return false;
   }
 
-  /** Ответы пользователя на уточняющие вопросы по заметкам из пачки: номер заметки → ответ. */
+  /**
+   * Ответы пользователя на вопросы агента по заметкам из пачки: номер заметки → «вопрос → ответ;
+   * …». С этапа 5 ответ хранится по заметке и идёт в следующие проверки и после правки заметки —
+   * чтобы агент не переспрашивал (docs/AGENT-PLANNER.md, 2.4).
+   */
   public Map<Long, String> answers(List<Note> batch) {
-    Set<Long> ids = new HashSet<>();
-    for (Note n : batch) ids.add(n.id);
     Map<Long, String> out = new LinkedHashMap<>();
+    for (Note n : batch) {
+      List<String> lines = noteAnswers(n.id);
+      if (!lines.isEmpty()) out.put(n.id, String.join("; ", lines));
+    }
+    return out;
+  }
+
+  /** Ответы на вопросы агента по одной заметке, старые первыми, не больше пяти последних. */
+  public List<String> noteAnswers(long note) {
+    List<String> out = new ArrayList<>();
     try (Cursor c =
         db.rawQuery(
             "SELECT data FROM manager_proposals WHERE state='accepted' AND identity LIKE"
-                + " 'clarify|%'",
+                + " 'clarify|%' ORDER BY id",
             null)) {
       while (c.moveToNext()) {
         try {
           JSONObject p = new JSONObject(c.getString(0));
           String answer = p.optString("_answer", "");
-          long id = p.getJSONArray("sources").getJSONObject(0).getLong("id");
-          if (!answer.isEmpty() && ids.contains(id) && current(p)) out.put(id, answer);
+          if (answer.isEmpty() || firstSource(p) != note) continue;
+          out.add(CheckIn.line(p.optString("reason"), 120) + " → " + CheckIn.line(answer, 200));
         } catch (Exception ignored) {
         }
       }
+    }
+    return out.size() > 5 ? new ArrayList<>(out.subList(out.size() - 5, out.size())) : out;
+  }
+
+  /** Открытый вопрос агента по заметке (один на заметку) или null. */
+  public JSONObject pendingQuestion(long note) {
+    for (JSONObject p : pending())
+      if (p.optString("type").equals("clarify") && firstSource(p) == note) return p;
+    return null;
+  }
+
+  /** Заметки с открытым вопросом агента — для пометки на карточках списка. */
+  public Set<Long> questionNotes() {
+    Set<Long> out = new HashSet<>();
+    for (JSONObject p : pending()) if (p.optString("type").equals("clarify")) out.add(firstSource(p));
+    return out;
+  }
+
+  static long firstSource(JSONObject p) {
+    JSONArray sources = p.optJSONArray("sources");
+    JSONObject first = sources == null ? null : sources.optJSONObject(0);
+    return first == null ? 0 : first.optLong("id");
+  }
+
+  /** Класс заметки из последней проверки ({@link TaskKind}) или пусто. */
+  public String kind(long note) {
+    try (Cursor c =
+        db.rawQuery("SELECT kind FROM manager_review WHERE note=?", new String[] {"" + note})) {
+      return c.moveToFirst() ? TaskKind.clean(c.getString(0)) : "";
+    }
+  }
+
+  /** Классы всех заметок, которые их получили: номер → класс. */
+  public Map<Long, String> kinds() {
+    Map<Long, String> out = new HashMap<>();
+    try (Cursor c = db.rawQuery("SELECT note,kind FROM manager_review WHERE kind<>''", null)) {
+      while (c.moveToNext()) out.put(c.getLong(0), TaskKind.clean(c.getString(1)));
     }
     return out;
   }
@@ -261,6 +313,15 @@ public final class ManagerStore {
       List<Set<Long>> known = knownGroups();
       for (JSONObject p : proposals) {
         if (!current(p)) continue;
+        // Один открытый вопрос на заметку: новый ждёт, пока пользователь не ответит на прежний.
+        if (p.getString("type").equals("clarify") && pendingQuestion(firstSource(p)) != null)
+          continue;
+        // Предложение разобрать план даётся один раз на заметку; устаревшее можно повторить.
+        if (p.getString("type").equals("plan"))
+          db.delete(
+              "manager_proposals",
+              "identity=? AND state='stale'",
+              new String[] {p.getString("identity")});
         if (TopicSelection.deck(p.getString("type"))) {
           Set<Long> distinctGroups = new HashSet<>();
           JSONArray sources = p.getJSONArray("sources");
@@ -327,6 +388,20 @@ public final class ManagerStore {
   public ReviewOutcome finishReview(
       long run, List<Note> notes, List<JSONObject> proposals, Map<Long, Analysis.Result> analysis)
       throws Exception {
+    return finishReview(run, notes, proposals, analysis, Collections.emptyMap());
+  }
+
+  /**
+   * То же и классы заметок ({@link TaskKind}) из того же ответа модели: записываются заметкам, не
+   * изменившимся за время запроса; большой задаче (complex) без плана предлагается «Разобрать план».
+   */
+  public ReviewOutcome finishReview(
+      long run,
+      List<Note> notes,
+      List<JSONObject> proposals,
+      Map<Long, Analysis.Result> analysis,
+      Map<Long, String> kinds)
+      throws Exception {
     db.beginTransaction();
     try {
       ReviewOutcome outcome = new ReviewOutcome();
@@ -366,11 +441,34 @@ public final class ManagerStore {
         }
         attachGroups(p, groups);
       }
+      for (Note n : unchanged) {
+        String kind = TaskKind.clean(kinds.get(n.id));
+        if (!TaskKind.COMPLEX.equals(kind) || !store.plan(n.id).isEmpty()) continue;
+        valid.add(
+            new JSONObject()
+                .put("type", "plan")
+                .put("reason", "Большая задача — агент поможет разобрать её в план по шагам.")
+                .put("title", n.title)
+                .put("body", "")
+                .put("options", new JSONArray())
+                .put(
+                    "sources",
+                    new JSONArray()
+                        .put(
+                            new JSONObject()
+                                .put("id", n.id)
+                                .put("revision", ManagerAnalysis.fingerprint(n))))
+                .put("identity", "plan|" + n.id));
+      }
       outcome.added = finish(run, notes, valid);
-      for (Note n : unchanged)
+      for (Note n : unchanged) {
         db.execSQL(
             "UPDATE manager_review SET revision=?,failed=0 WHERE note=?",
             new Object[] {ManagerAnalysis.fingerprint(n), n.id});
+        String kind = TaskKind.clean(kinds.get(n.id));
+        if (!kind.isEmpty())
+          db.execSQL("UPDATE manager_review SET kind=? WHERE note=?", new Object[] {kind, n.id});
+      }
       db.setTransactionSuccessful();
       return outcome;
     } finally {

@@ -342,7 +342,15 @@ public final class ChatRunner {
     }
     JSONObject payload =
         PlanChat.payload(
-            model, note.title, note.body, current, past, query, System.currentTimeMillis(), zone);
+            model,
+            note.title,
+            note.body,
+            current,
+            new ManagerStore(store).noteAnswers(noteId),
+            past,
+            query,
+            System.currentTimeMillis(),
+            zone);
     JSONObject response = store.complete(key, payload);
     JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
     String text = choice.getJSONObject("message").optString("content", "");

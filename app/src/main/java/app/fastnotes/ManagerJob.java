@@ -89,11 +89,23 @@ final class ManagerJob {
           ManagerAnalysis.parse(
               choice.getJSONObject("message").getString("content"), batch, stacks);
     }
+    // Класс каждой записи (info/simple/event/complex) приходит в том же ответе, без запроса.
+    Set<Long> batchIds = new HashSet<>();
+    for (Note n : batch) batchIds.add(n.id);
+    Map<Long, String> kinds =
+        TaskKind.parse(
+            response
+                .getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .optString("content", ""),
+            batchIds);
     proposals = TopicSelection.proposals(batch, proposals);
     for (JSONObject p : proposals) ManagerStore.attachGroups(p, groupSnapshot);
     synchronized (lock) {
       if (!enabled.getAsBoolean()) return;
-      ManagerStore.ReviewOutcome outcome = manager.finishReview(runId, batch, proposals, results);
+      ManagerStore.ReviewOutcome outcome =
+          manager.finishReview(runId, batch, proposals, results, kinds);
       int merges = 0;
       for (JSONObject p : manager.pending()) if (p.optString("type").equals("merge")) merges++;
       int failed = manager.failedCount();

@@ -1354,6 +1354,24 @@ public final class MainActivity extends Activity
       words.addView(reason);
       top.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
       item.addView(top);
+      if (type.equals("plan")) {
+        LinearLayout actions = column();
+        actions.setPadding(dp(48), dp(8), 0, 0);
+        planOfferActions(
+            actions,
+            p,
+            manager,
+            () -> {
+              suggestionsPopup.dismiss();
+              render();
+            });
+        item.addView(actions);
+        items.addView(item);
+        View planRule = new View(this);
+        planRule.setBackgroundColor(LINE);
+        items.addView(planRule, new LinearLayout.LayoutParams(-1, dp(1)));
+        continue;
+      }
       if (type.equals("clarify")) {
         LinearLayout options = column();
         options.setPadding(dp(48), dp(8), 0, 0);
@@ -1752,6 +1770,7 @@ public final class MainActivity extends Activity
     }
     sheet.addView(footer);
     content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
+    if (id > 0) questionSection(id);
     if (id > 0) planSection(id);
     if (note != null && note.suggestion > 0) {
       gap(content, 12);
@@ -2529,6 +2548,7 @@ public final class MainActivity extends Activity
           Map<Long, List<Long>> groups = manager.membersMap();
           membersCache = groups;
           planCache = store.planBadges();
+          questionCache = manager.questionNotes();
           List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search);
           visibleNotes.clear();
           for (Note n : found) {
@@ -2599,6 +2619,7 @@ public final class MainActivity extends Activity
           }
           membersCache = null;
           planCache = null;
+          questionCache = null;
         };
     refresh.run();
     watch(
@@ -2721,6 +2742,8 @@ public final class MainActivity extends Activity
 
   /** Отметки «План 3/8» на время построения списка; вне его {@code null} и карточка читает базу. */
   private Map<Long, String> planCache;
+  /** Заметки с открытым вопросом агента на время построения списка; вне его {@code null}. */
+  private Set<Long> questionCache;
 
   private String planBadge(long id) {
     Map<Long, String> cache = planCache;
@@ -3209,6 +3232,8 @@ public final class MainActivity extends Activity
       TextView suggestion = text("Есть предложение ИИ", 11, GREEN);
       card.addView(suggestion);
     }
+    if (questionCache != null && questionCache.contains(n.id))
+      card.addView(text("Вопрос помощника", 11, GREEN));
     TextView stamp =
         text(
             n.reminder > 0
@@ -3278,7 +3303,8 @@ public final class MainActivity extends Activity
   /** Текст предложения; для уточнения впереди название заметки, о которой вопрос. */
   private String proposalReason(JSONObject p) {
     String reason = p.optString("reason");
-    if (!p.optString("type").equals("clarify")) return reason;
+    if (!p.optString("type").equals("clarify") && !p.optString("type").equals("plan"))
+      return reason;
     JSONArray sources = p.optJSONArray("sources");
     Note n = sources == null || sources.length() == 0 ? null : store.note(sources.optJSONObject(0).optLong("id"));
     return n == null ? reason : "«" + n.title + "»: " + reason;
@@ -3302,9 +3328,46 @@ public final class MainActivity extends Activity
               }));
       gap(parent, 6);
     }
+    parent.addView(
+        button(
+            "Свой ответ",
+            options == null || options.length() == 0,
+            () -> {
+              EditText field = input("Ваш ответ", false);
+              field.setFilters(new InputFilter[] {new InputFilter.LengthFilter(300)});
+              LinearLayout box = column();
+              pad(box, 20);
+              box.addView(field);
+              AlertDialog dialog =
+                  new AlertDialog.Builder(this)
+                      .setTitle(p.optString("reason"))
+                      .setView(box)
+                      .setNegativeButton("Отмена", null)
+                      .setPositiveButton("Ответить", null)
+                      .create();
+              dialog.setOnShowListener(
+                  d ->
+                      dialog
+                          .getButton(AlertDialog.BUTTON_POSITIVE)
+                          .setOnClickListener(
+                              v -> {
+                                String answer = field.getText().toString().trim();
+                                if (answer.isEmpty()) {
+                                  field.setError("Напишите ответ");
+                                  return;
+                                }
+                                dialog.dismiss();
+                                boolean answered = manager.answerClarify(p.optLong("id"), answer);
+                                after.run();
+                                if (answered) undoBar("Запомнил: " + answer);
+                                else toast("Запись уже изменилась");
+                              }));
+              dialog.show();
+            }));
+    gap(parent, 6);
     JSONArray sources = p.optJSONArray("sources");
     long noteId = sources == null || sources.length() == 0 ? 0 : sources.optJSONObject(0).optLong("id");
-    if (noteId > 0)
+    if (noteId > 0 && !"edit".equals(page))
       parent.addView(
           quietAction(
               "Открыть заметку",
@@ -3319,6 +3382,56 @@ public final class MainActivity extends Activity
               manager.state(p.optLong("id"), "dismissed");
               after.run();
             }));
+  }
+
+  /** «Разобрать план» для большой задачи: открыть чат по заметке или отказаться (больше не предлагать). */
+  private void planOfferActions(
+      LinearLayout parent, JSONObject p, ManagerStore manager, Runnable after) {
+    long noteId = ManagerStore.firstSource(p);
+    parent.addView(
+        button(
+            "Разобрать",
+            true,
+            () -> {
+              manager.state(p.optLong("id"), "accepted");
+              if (suggestionsPopup != null) suggestionsPopup.dismiss();
+              openPlanChat(noteId);
+            }));
+    gap(parent, 6);
+    parent.addView(
+        quietAction(
+            "Не нужно",
+            () -> {
+              manager.state(p.optLong("id"), "dismissed");
+              after.run();
+            }));
+  }
+
+  /** Открытый вопрос агента в открытой заметке: варианты кнопками, свой ответ, «Не нужно». */
+  private void questionSection(long noteId) {
+    ManagerStore manager = new ManagerStore(store);
+    JSONObject p = manager.pendingQuestion(noteId);
+    if (p == null) return;
+    gap(content, 12);
+    LinearLayout box = column();
+    pad(box, 14);
+    box.setBackground(shape(LIME, 12));
+    TextView head = text("Вопрос помощника", 13, GREEN);
+    head.setTypeface(null, Typeface.BOLD);
+    if (Build.VERSION.SDK_INT >= 28) head.setAccessibilityHeading(true);
+    box.addView(head);
+    gap(box, 4);
+    box.addView(text(p.optString("reason"), 15, INK));
+    gap(box, 8);
+    clarifyOptions(
+        box,
+        p,
+        manager,
+        () -> {
+          stash();
+          render();
+        });
+    content.addView(box);
   }
 
   /** Строка журнала агента: что сделано, когда и «Отменить», пока прошло меньше суток. */
@@ -3440,7 +3553,8 @@ public final class MainActivity extends Activity
       case "group", "merge", "link" -> "Собрать в колоду";
       case "extend" -> "Добавить в колоду";
       case "task" -> "Идея для дела";
-      case "clarify" -> "Уточните";
+      case "clarify" -> "Вопрос помощника";
+      case "plan" -> "Разобрать план";
       default -> "Стоит уточнить";
     };
   }
@@ -3563,6 +3677,12 @@ public final class MainActivity extends Activity
       if (type.equals("clarify")) {
         gap(card, 8);
         clarifyOptions(card, p, manager, this::render);
+        content.addView(card);
+        continue;
+      }
+      if (type.equals("plan")) {
+        gap(card, 8);
+        planOfferActions(card, p, manager, this::render);
         content.addView(card);
         continue;
       }
@@ -4103,6 +4223,10 @@ public final class MainActivity extends Activity
             && !draftJson.isEmpty()
             && (new JSONObject(draftJson).has("plan") || new JSONObject(draftJson).has("edit"))) {
           noteDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
+        } else if (!user && !draftJson.isEmpty() && new JSONObject(draftJson).has("kind")
+            && new JSONObject(draftJson).optString("kind").startsWith("progress")) {
+          // «Как продвигается?»: варианты — кнопками выше, карточки «В корзину» и «Перенести».
+          progressDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
         } else if (!user && !draftJson.isEmpty() && ReminderBatch.isBatch(new JSONObject(draftJson))) {
           reminderBatchView(bubble, m.getLong("id"), new JSONObject(draftJson));
         } else if (!user && !draftJson.isEmpty()) {
@@ -4519,6 +4643,128 @@ public final class MainActivity extends Activity
 
   private boolean sendPlain;
 
+  /**
+   * Ответ кнопкой на «Как продвигается?» обрабатывается без модели: ответ записывается в чат,
+   * помощник отвечает сам и при «Сделано» / «Не актуально» предлагает корзину, при «Отложить» —
+   * перенести напоминание. Свой ответ словами уходит модели как обычно. Возвращает true, если
+   * ответ обработан здесь.
+   */
+  private boolean answerProgress(String query) {
+    String answer = ProgressCheck.option(query);
+    if (chat == 0 || answer.isEmpty()) return false;
+    try {
+      JSONArray history = store.messages(chat);
+      if (history.length() == 0) return false;
+      JSONObject last = history.getJSONObject(history.length() - 1);
+      String draftJson = last.optString("draft", "");
+      if (!"assistant".equals(last.optString("role")) || draftJson.isEmpty()) return false;
+      JSONObject draft = new JSONObject(draftJson);
+      if (!"progress".equals(draft.optString("kind"))) return false;
+      long noteId = draft.optLong("note");
+      Note n = store.note(noteId);
+      store.dismissDraft(last.getLong("id"));
+      store.message(chat, "user", answer, new JSONArray());
+      long now = System.currentTimeMillis();
+      prefs.edit().putLong(CheckInJob.progressKey(noteId), ProgressCheck.nextAsk(answer, now)).apply();
+      boolean alive = n != null && n.trashed == 0;
+      boolean postpone = alive && ProgressCheck.canPostpone(n.reminder, n.repeat);
+      JSONObject next = null;
+      String reply;
+      if (!alive) reply = "Этой заметки уже нет — спрашивать о ней больше не буду.";
+      else {
+        reply = ProgressCheck.reply(answer, postpone);
+        if (answer.equals(ProgressCheck.DONE) || answer.equals(ProgressCheck.DROP))
+          next = new JSONObject().put("kind", "progress_trash").put("note", noteId);
+        else if (answer.equals(ProgressCheck.LATER) && postpone)
+          next = new JSONObject().put("kind", "progress_later").put("note", noteId);
+      }
+      JSONArray sources =
+          alive ? new JSONArray().put(new JSONObject().put("id", noteId).put("title", n.title)) : new JSONArray();
+      store.message(chat, "assistant", reply, sources, next);
+      chatInput.setText("");
+      stash();
+      render();
+      return true;
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  /** Карточки после ответа на «Как продвигается?»: убрать в корзину или перенести напоминание. */
+  private void progressDraftView(LinearLayout bubble, long message, JSONObject draft) {
+    String kind = draft.optString("kind");
+    long noteId = draft.optLong("note");
+    Note n = store.note(noteId);
+    if (kind.equals("progress") || n == null || n.trashed > 0) return;
+    gap(bubble, 6);
+    LinearLayout row = row();
+    if (kind.equals("progress_trash")) {
+      row.addView(
+          compactButton(
+              "В корзину",
+              true,
+              () -> {
+                store.dismissDraft(message);
+                List<Long> gone = store.trash(noteId, false);
+                for (long g : gone) Reminders.cancel(this, g);
+                if (!gone.isEmpty()) CalendarSync.runAsync(this);
+                stash();
+                render();
+                toast(gone.isEmpty() ? "Заметка уже в корзине" : "Заметка в корзине. Вернуть её можно 30 дней");
+              }),
+          new LinearLayout.LayoutParams(0, -2, 1));
+      row.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+      row.addView(
+          compactButton(
+              "Оставить",
+              false,
+              () -> {
+                store.dismissDraft(message);
+                stash();
+                render();
+              }),
+          new LinearLayout.LayoutParams(0, -2, 1));
+    } else if (kind.equals("progress_later")) {
+      for (int days : new int[] {1, 7}) {
+        if (row.getChildCount() > 0) row.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+        row.addView(
+            compactButton(
+                days == 1 ? "На день" : "На неделю",
+                days == 1,
+                () -> {
+                  Note before = store.note(noteId);
+                  if (before == null || !ProgressCheck.canPostpone(before.reminder, before.repeat)) {
+                    toast("Напоминание уже изменилось");
+                    store.dismissDraft(message);
+                    render();
+                    return;
+                  }
+                  long moved = ProgressCheck.postponed(before.reminder, days, System.currentTimeMillis());
+                  store.save(
+                      noteId, before.title, before.body, moved, before.repeat, before.lead);
+                  store.dismissDraft(message);
+                  Reminders.scheduleEdited(getApplicationContext(), before, store.note(noteId));
+                  stash();
+                  render();
+                  toast("Напоминание: " + date(moved));
+                }),
+            new LinearLayout.LayoutParams(0, -2, 1));
+      }
+      row.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+      row.addView(
+          compactButton(
+              "Не переносить",
+              false,
+              () -> {
+                store.dismissDraft(message);
+                stash();
+                render();
+              }),
+          new LinearLayout.LayoutParams(0, -2, 1));
+    }
+    bubble.addView(row);
+  }
+
   /** Открывает чат по заметке; новый чат сразу просит агента начать разбор. */
   private void openPlanChat(long noteId) {
     stash();
@@ -4821,6 +5067,7 @@ public final class MainActivity extends Activity
     String query = chatInput.getText().toString().trim();
     String image = prefs.getString("chatImage." + chat, "");
     if (ChatRunner.running != 0 || (query.isEmpty() && image.isEmpty())) return;
+    if (image.isEmpty() && answerProgress(query)) return;
     if (query.isEmpty()) query = ChatRunner.NOTE_QUERY;
     boolean local = LocalLlm.enabled(this);
     if (local && !image.isEmpty()) {

@@ -84,14 +84,27 @@ public final class PlanChat {
 
   /** Сведения о заметке: текст берётся свежим при каждом запросе, а не на момент создания чата. */
   static String context(String title, String body, PlanTree plan, ZoneId zone) {
+    return context(title, body, plan, List.of(), zone);
+  }
+
+  /** То же и ответы пользователя на вопросы помощника по этой заметке — их не переспрашивать. */
+  static String context(
+      String title, String body, PlanTree plan, List<String> answers, ZoneId zone) {
     String text = body == null ? "" : body;
     if (text.length() > MAX_NOTE) text = text.substring(0, MAX_NOTE) + " …";
+    StringBuilder known = new StringBuilder();
+    for (String a : answers == null ? List.<String>of() : answers)
+      known.append("\n- ").append(a);
     return "Заметка.\nНазвание: "
         + (title == null || title.isEmpty() ? "(без названия)" : title)
         + "\nТекст:\n"
         + text
         + "\n\nТекущий план: "
-        + (plan == null || plan.isEmpty() ? "нет" : plan.forModel(zone).toString());
+        + (plan == null || plan.isEmpty() ? "нет" : plan.forModel(zone).toString())
+        + (known.length() == 0
+            ? ""
+            : "\n\nОтветы пользователя на вопросы помощника (это известно, не переспрашивай):"
+                + known);
   }
 
   /**
@@ -108,10 +121,27 @@ public final class PlanChat {
       long now,
       ZoneId zone)
       throws Exception {
+    return payload(model, title, body, plan, List.of(), history, query, now, zone);
+  }
+
+  /** То же; {@code answers} — ответы пользователя на вопросы помощника по заметке. */
+  public static JSONObject payload(
+      String model,
+      String title,
+      String body,
+      PlanTree plan,
+      List<String> answers,
+      JSONArray history,
+      String query,
+      long now,
+      ZoneId zone)
+      throws Exception {
     JSONArray messages = new JSONArray();
     messages.put(new JSONObject().put("role", "system").put("content", system(now, zone)));
     messages.put(
-        new JSONObject().put("role", "system").put("content", context(title, body, plan, zone)));
+        new JSONObject()
+            .put("role", "system")
+            .put("content", context(title, body, plan, answers, zone)));
     // Последние 30 сообщений хватает для разбора одной задачи и держит запрос коротким.
     int from = Math.max(0, history.length() - 30);
     for (int i = from; i < history.length(); i++) {

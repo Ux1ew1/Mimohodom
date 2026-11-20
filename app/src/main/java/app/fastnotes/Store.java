@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 16);
+    super(context, name, null, 17);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -84,6 +84,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     AgentLog.create(db);
     addReminderTimes(db);
     addChatOrigin(db);
+    addTaskKinds(db);
   }
 
   @Override
@@ -108,6 +109,16 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
       addChatOrigin(db);
       moveCheckInMarks(db);
     }
+    if (oldV < 17) addTaskKinds(db);
+  }
+
+  /**
+   * Класс заметки из проверки агента ({@link TaskKind}: info, simple, event, complex) — в строке
+   * проверки заметки, только на этом устройстве (в обмен не идёт). Безопасно вызывается повторно.
+   */
+  private void addTaskKinds(SQLiteDatabase db) {
+    if (!hasColumn(db, "manager_review", "kind"))
+      db.execSQL("ALTER TABLE manager_review ADD COLUMN kind TEXT NOT NULL DEFAULT ''");
   }
 
   /**
@@ -1140,12 +1151,16 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     return out;
   }
 
-  /** Чат по заметке, если он уже есть, иначе 0. */
+  /**
+   * Чат по заметке, если он уже есть, иначе 0. Чаты «Как продвигается?» помощника тоже привязаны к
+   * заметке, но это не её чат.
+   */
   public long noteChat(long note) {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT id FROM chats WHERE note=? ORDER BY id LIMIT 1", new String[] {"" + note})) {
+                "SELECT id FROM chats WHERE note=? AND origin<>'agent' ORDER BY id LIMIT 1",
+                new String[] {"" + note})) {
       return c.moveToFirst() ? c.getLong(0) : 0;
     }
   }
@@ -1257,6 +1272,46 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
                 "SELECT body FROM messages WHERE chat=? ORDER BY created,id LIMIT 1",
                 new String[] {"" + chat})) {
       return c.moveToFirst() ? c.getString(0) : "";
+    }
+  }
+
+  /** Сколько чатов помощник начал с момента {@code since} (лимит «не больше 4 в день»). */
+  public int agentChatsSince(long since) {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT count(*) FROM chats WHERE origin='agent' AND created>=?",
+                new String[] {"" + since})) {
+      c.moveToFirst();
+      return c.getInt(0);
+    }
+  }
+
+  /**
+   * «Как продвигается?»: чат помощника, привязанный к заметке, с вопросом и вариантами ответа
+   * кнопками; черновик {@code {"kind":"progress","note":id}} говорит, что варианты обрабатываются
+   * без модели. Одна транзакция.
+   */
+  public long newProgressChat(long note, String title, String question) {
+    SQLiteDatabase db = getWritableDatabase();
+    db.beginTransaction();
+    try {
+      long id = newChat(title, ChatOrigin.AGENT, note);
+      PlanChat.Reply ask = new PlanChat.Reply();
+      ask.say = question;
+      ask.options.addAll(ProgressCheck.OPTIONS);
+      message(
+          id,
+          "assistant",
+          PlanChat.store(ask),
+          new JSONArray(),
+          new JSONObject().put("kind", "progress").put("note", note));
+      db.setTransactionSuccessful();
+      return id;
+    } catch (JSONException e) {
+      throw new IllegalStateException(e);
+    } finally {
+      db.endTransaction();
     }
   }
 

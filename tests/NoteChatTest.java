@@ -105,6 +105,14 @@ public final class NoteChatTest {
     PlanChat.Reply noEdit = PlanChat.parse("{\"say\":\"Когда?\",\"options\":[\"Завтра\"],\"edit\":null}", zone, now);
     check(noEdit.edit == null && noEdit.options.size() == 1, "null edit keeps options");
     check(PlanChat.system(now, zone).contains("\"replace\""), "prompt describes edit");
+    // Ответы на вопросы помощника идут в запрос чата по заметке (этап 5/6)
+    String withAnswers =
+        PlanChat.context("Выезд", "текст", null, java.util.List.of("Во сколько выезд? → В 10:00"), zone);
+    check(withAnswers.contains("не переспрашивай") && withAnswers.contains("В 10:00"), "answers in context");
+    check(!PlanChat.context("Выезд", "текст", null, zone).contains("Ответы пользователя"), "no answers block when empty");
+    JSONObject withHistory =
+        PlanChat.payload("m", "Выезд", "текст", null, java.util.List.of("Кто едет? → Команда"), new JSONArray(), "Привет", now, zone);
+    check(withHistory.getJSONArray("messages").getJSONObject(1).getString("content").contains("Команда"), "payload carries answers");
 
     System.out.println("NoteChatTest: " + count + " checks passed");
   }

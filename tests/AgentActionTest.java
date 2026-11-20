@@ -266,8 +266,8 @@ public final class AgentActionTest {
     check(p.getJSONArray("sources").getLong(0) == 3, "proposal source");
     AgentAction free = act("{\"action\":\"ask\",\"note\":3,\"question\":\"Кто едет?\"}");
     check(free != null && free.options.isEmpty(), "free answer question allowed");
-    check(free.legacy.isEmpty(), "free answer is not a clarify card yet");
-    check(free.proposal() == null, "no proposal without a card");
+    check(free.legacy.equals("clarify"), "free answer question is a clarify card (stage 5)");
+    check(free.proposal().getJSONArray("options").length() == 0, "card without options");
     check(act("{\"action\":\"ask\",\"note\":3,\"question\":\"\"}") == null, "question required");
     check(
         act("{\"action\":\"ask\",\"note\":3,\"question\":\"" + "в".repeat(301) + "\"}") == null,
