@@ -1,5 +1,11 @@
 # Проверка сборки — 5 ноября 2026
 
+## Android 0.10.23: свои всплывающие окна — 21 ноября 2026
+
+**Проверено на машине агента:** `assembleDebug lintDebug assembleDebugAndroidTest` прошли; все JVM- и node-тесты прошли (интерфейс они не затрагивают); в `MainActivity` не осталось `AlertDialog.Builder`, `PopupMenu`, `Toast.makeText`, `DatePickerDialog`, `TimePickerDialog`, `new Spinner`; `dist/mimohodom-0.10.23-debug.apk` — `versionCode 66`, сертификат тот же.
+
+**НЕ проверено (всё на устройстве):** вид и анимации окон, листов, меню и плашки; что окна с полем ввода не закрываются клавиатурой (insets через `setDecorFitsSystemWindows(false)` на Android 11+, `adjustResize` ниже); положение меню у края экрана (сдвиг `showAsDropDown`); прокрутка длинных окон и списка моделей Polza.AI; выбор даты через смену месяца и «Время уже прошло»; что окна, где своя кнопка не закрывает окно (`getButton`), ведут себя как раньше; плашка подсказки под открытым окном (если подсказка показана при открытом окне, её закрывает затемнение); тёмная тема; TalkBack; мост агента (`AgentUi` обходит все окна, но с новыми окнами не запускался).
+
 ## Android 0.10.22: лента чатов — 21 ноября 2026
 
 **Проверено на машине агента:** `assembleDebug lintDebug assembleDebugAndroidTest` прошли; все JVM-тесты (23, новый `test-chat-feed` — 30 проверок) и node-тесты (6, новый `tests/chat-feed-sql.cjs` — запрос `Store.chatFeed` на настоящей SQLite) прошли; `dist/mimohodom-0.10.22-debug.apk` — `versionCode 65`, сертификат тот же.

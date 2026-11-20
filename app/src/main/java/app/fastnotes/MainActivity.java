@@ -164,7 +164,7 @@ public final class MainActivity extends Activity
   private Note editorBase;
   private String returnPage = "notes";
   private TextView reminderButton, analysisStatusView;
-  private AlertDialog managerPreview, analysisLogDialog;
+  private Popup managerPreview, analysisLogDialog;
   private TextView analysisLogText;
   private final SharedPreferences.OnSharedPreferenceChangeListener analysisListener =
       (preferences, key) -> {
@@ -959,7 +959,7 @@ public final class MainActivity extends Activity
     if (!persistEditedNote()) return;
     try {
       if (Secrets.read(this).isEmpty() || prefs.getString("model", "").isEmpty()) {
-        new AlertDialog.Builder(this)
+        new Ask(this)
             .setTitle("Подключите ИИ")
             .setMessage("Сохраните API-ключ Polza.AI и выберите модель в настройках.")
             .setNegativeButton("Позже", null)
@@ -979,7 +979,7 @@ public final class MainActivity extends Activity
         return;
       }
       if (!prefs.getBoolean("manualReviewConsent", false)) {
-        new AlertDialog.Builder(this)
+        new Ask(this)
             .setTitle("Проверить заметки через Polza.AI?")
             .setMessage(
                 "Один платный запрос проверит автоматические названия, даты для напоминаний и"
@@ -1617,7 +1617,7 @@ public final class MainActivity extends Activity
       menu.setContentDescription("Меню заметки");
       menu.setOnClickListener(
           v -> {
-            PopupMenu popup = new PopupMenu(this, menu);
+            Pop popup = new Pop(menu);
             popup.getMenu().add("Удалить заметку");
             popup.setOnMenuItemClickListener(
                 item -> {
@@ -1955,7 +1955,7 @@ public final class MainActivity extends Activity
       moveToTrash(id, false);
       return;
     }
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Удалить колоду?")
         .setItems(
             new String[] {
@@ -1973,7 +1973,7 @@ public final class MainActivity extends Activity
    */
   private void dissolveDeck(long top) {
     int inside = new ManagerStore(store).members(top).size();
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Разобрать колоду?")
         .setMessage(
             "Исходные заметки ("
@@ -2019,7 +2019,7 @@ public final class MainActivity extends Activity
 
   /** Удаляет насовсем после подтверждения; картинки освобождаются. */
   private void purgeNotes(String title, String message, java.util.function.Supplier<List<Note>> purge) {
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle(title)
         .setMessage(message + " Вернуть их будет нельзя.")
         .setNegativeButton("Отмена", null)
@@ -2280,7 +2280,7 @@ public final class MainActivity extends Activity
       labels[i] = ReminderBatch.label(times[i], zone) + (times[i] <= now ? " · прошло" : "");
       keep[i] = true;
     }
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Даты напоминания")
         .setMultiChoiceItems(labels, keep, (d, w, checked) -> keep[w] = checked)
         .setNegativeButton("Отмена", null)
@@ -2403,7 +2403,7 @@ public final class MainActivity extends Activity
       labels.add("Напоминания по всем датам в тексте");
       actions.add(this::remindersFromText);
     }
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Напоминание")
         .setItems(labels.toArray(new String[0]), (d, w) -> actions.get(w).run())
         .show();
@@ -2443,7 +2443,7 @@ public final class MainActivity extends Activity
   private void pickRepeat() {
     String[] labels = new String[5];
     for (int i = 0; i < labels.length; i++) labels[i] = ReminderPolicy.repeatLabel(i);
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Повтор")
         .setSingleChoiceItems(
             labels,
@@ -2464,7 +2464,7 @@ public final class MainActivity extends Activity
     int checked = 0;
     for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
       if (Reminders.LEAD_MINUTES[i] == leadChoice) checked = i + 1;
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Напомнить за")
         .setSingleChoiceItems(
             labels,
@@ -2489,42 +2489,16 @@ public final class MainActivity extends Activity
 
   /** Выбор даты и времени в будущем; выбранный момент получает {@code picked}. */
   private void datePicker(java.util.function.LongConsumer picked) {
-    Calendar cal = Calendar.getInstance();
-    cal.setTimeInMillis(
-        reminder > System.currentTimeMillis() ? reminder : System.currentTimeMillis() + 3600000);
-    DatePickerDialog picker =
-        new DatePickerDialog(
-            this,
-            (v, y, m, d) -> {
-              cal.set(y, m, d);
-              new TimePickerDialog(
-                      this,
-                      (tv, h, min) -> {
-                        cal.set(Calendar.HOUR_OF_DAY, h);
-                        cal.set(Calendar.MINUTE, min);
-                        cal.set(Calendar.SECOND, 0);
-                        cal.set(Calendar.MILLISECOND, 0);
-                        if (cal.getTimeInMillis() <= System.currentTimeMillis()) {
-                          toast("Выберите время в будущем");
-                          return;
-                        }
-                        picked.accept(cal.getTimeInMillis());
-                        if (Build.VERSION.SDK_INT >= 33
-                            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                                != PackageManager.PERMISSION_GRANTED)
-                          requestPermissions(
-                              new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
-                      },
-                      cal.get(Calendar.HOUR_OF_DAY),
-                      cal.get(Calendar.MINUTE),
-                      true)
-                  .show();
-            },
-            cal.get(Calendar.YEAR),
-            cal.get(Calendar.MONTH),
-            cal.get(Calendar.DAY_OF_MONTH));
-    picker.getDatePicker().setMinDate(System.currentTimeMillis());
-    picker.show();
+    long now = System.currentTimeMillis();
+    whenPicker(
+        reminder > now ? reminder : now + 3600000,
+        at -> {
+          picked.accept(at);
+          if (Build.VERSION.SDK_INT >= 33
+              && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                  != PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
+        });
   }
 
   private void saveNote() {
@@ -3023,7 +2997,7 @@ public final class MainActivity extends Activity
               + plural(n, "заметка", "заметки", "заметок");
       chosen[i] = true;
     }
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Папки по темам")
         .setMultiChoiceItems(labels, chosen, (d, which, checked) -> chosen[which] = checked)
         .setNegativeButton("Отмена", null)
@@ -3074,7 +3048,7 @@ public final class MainActivity extends Activity
             mergeAsking = false;
             askNext();
           };
-      new AlertDialog.Builder(this)
+      new Ask(this)
           .setTitle(
               s.existing > 0
                   ? "Положить в папку «" + s.name + "»?"
@@ -3136,7 +3110,7 @@ public final class MainActivity extends Activity
     if (f != null)
       chip.setOnLongClickListener(
           v -> {
-            PopupMenu popup = new PopupMenu(this, chip);
+            Pop popup = new Pop(chip);
             popup
                 .getMenu()
                 .add("Переименовать")
@@ -3157,7 +3131,7 @@ public final class MainActivity extends Activity
                 .add("Удалить папку")
                 .setOnMenuItemClickListener(
                     item -> {
-                      new AlertDialog.Builder(this)
+                      new Ask(this)
                           .setTitle("Удалить папку «" + f.name + "»?")
                           .setMessage(
                               "Заметки из неё не удаляются: они останутся в «Все заметки».")
@@ -3191,7 +3165,7 @@ public final class MainActivity extends Activity
     FrameLayout holder = new FrameLayout(this);
     holder.setPadding(dp(20), dp(8), dp(20), 0);
     holder.addView(field, new FrameLayout.LayoutParams(-1, -2));
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle(title)
         .setView(holder)
         .setNegativeButton("Отмена", null)
@@ -3211,7 +3185,7 @@ public final class MainActivity extends Activity
     for (int i = 0; i < list.size(); i++)
       items[i + 1] = (list.get(i).id == current ? "✓ " : "") + list.get(i).name;
     items[items.length - 1] = "＋ Новая папка…";
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Папка")
         .setItems(
             items,
@@ -3260,7 +3234,7 @@ public final class MainActivity extends Activity
     menu.setOnClickListener(
         v -> {
           ManagerStore manager = new ManagerStore(store);
-          PopupMenu popup = new PopupMenu(this, menu);
+          Pop popup = new Pop(menu);
           popup
               .getMenu()
               .add("Удалить")
@@ -3530,8 +3504,8 @@ public final class MainActivity extends Activity
               LinearLayout box = column();
               pad(box, 20);
               box.addView(field);
-              AlertDialog dialog =
-                  new AlertDialog.Builder(this)
+              Popup dialog =
+                  new Ask(this)
                       .setTitle(p.optString("reason"))
                       .setView(box)
                       .setNegativeButton("Отмена", null)
@@ -3540,7 +3514,7 @@ public final class MainActivity extends Activity
               dialog.setOnShowListener(
                   d ->
                       dialog
-                          .getButton(AlertDialog.BUTTON_POSITIVE)
+                          .getButton(DialogInterface.BUTTON_POSITIVE)
                           .setOnClickListener(
                               v -> {
                                 String answer = field.getText().toString().trim();
@@ -3665,7 +3639,7 @@ public final class MainActivity extends Activity
   }
 
   private void confirmUndo(AgentLog.Entry e) {
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Отменить действие помощника?")
         .setMessage(e.text() + "\n\n" + AgentJournal.undoHint(e.action))
         .setNegativeButton("Назад", null)
@@ -3806,7 +3780,7 @@ public final class MainActivity extends Activity
     analysisLogText.setTextIsSelectable(true);
     body.addView(analysisLogText);
     analysisLogDialog =
-        new AlertDialog.Builder(this)
+        new Ask(this)
             .setTitle("История проверок")
             .setView(scroll(body))
             .setPositiveButton("Закрыть", null)
@@ -3972,7 +3946,7 @@ public final class MainActivity extends Activity
               (result, error) -> {
                 if (isDestroyed() || isFinishing()) return;
                 if (error != null) {
-                  new AlertDialog.Builder(this)
+                  new Ask(this)
                       .setTitle("Выжимка не готова")
                       .setMessage(error)
                       .setPositiveButton("Понятно", null)
@@ -4065,8 +4039,8 @@ public final class MainActivity extends Activity
     Switch extrasSwitch = trashExtras;
     watch(title, () -> prefs.edit().putString(key + ".title", title.getText().toString()).apply());
     watch(body, () -> prefs.edit().putString(key + ".body", body.getText().toString()).apply());
-    AlertDialog dialog =
-        new AlertDialog.Builder(this)
+    Popup dialog =
+        new Ask(this)
             .setTitle(extend ? "Добавить в колоду" : stacked ? "Новая колода" : "Сохранить заметку")
             .setView(scroll(form))
             .setNegativeButton("Назад", null)
@@ -4076,7 +4050,7 @@ public final class MainActivity extends Activity
     dialog.setOnShowListener(
         d ->
             dialog
-                .getButton(AlertDialog.BUTTON_POSITIVE)
+                .getButton(DialogInterface.BUTTON_POSITIVE)
                 .setOnClickListener(
                     v -> {
                       try {
@@ -4709,7 +4683,7 @@ public final class MainActivity extends Activity
 
   /** Меню чата: заметка из диалога или удаление. В ленте чатов открывается долгим нажатием. */
   private void showChatMenu(View anchor, long id) {
-          PopupMenu popup = new PopupMenu(this, anchor);
+          Pop popup = new Pop(anchor);
           popup.getMenu().add(0, 1, 0, "Создать заметку из диалога");
           popup.getMenu().add(0, 2, 1, "Удалить чат");
           popup.setOnMenuItemClickListener(
@@ -4732,7 +4706,7 @@ public final class MainActivity extends Activity
                   send();
                   return true;
                 }
-                new AlertDialog.Builder(this)
+                new Ask(this)
                     .setTitle("Удалить этот чат?")
                     .setMessage("Заметки останутся на месте.")
                     .setNegativeButton("Отмена", null)
@@ -5247,8 +5221,8 @@ public final class MainActivity extends Activity
     form.addView(title);
     gap(form, 10);
     form.addView(body);
-    AlertDialog dialog =
-        new AlertDialog.Builder(this)
+    Popup dialog =
+        new Ask(this)
             .setTitle("Заметка из диалога")
             .setView(scroll(form))
             .setNegativeButton("Отмена", null)
@@ -5257,7 +5231,7 @@ public final class MainActivity extends Activity
     dialog.setOnShowListener(
         d ->
             dialog
-                .getButton(AlertDialog.BUTTON_POSITIVE)
+                .getButton(DialogInterface.BUTTON_POSITIVE)
                 .setOnClickListener(
                     v -> {
                       if (body.getText().toString().trim().isEmpty()) {
@@ -5662,7 +5636,7 @@ public final class MainActivity extends Activity
           plan.remove(n.id);
           savePlan(noteId, plan, refresh);
         });
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle(n.text)
         .setItems(labels.toArray(new String[0]), (d, which) -> actions.get(which).run())
         .show();
@@ -5676,8 +5650,8 @@ public final class MainActivity extends Activity
     }
     // К разовому напоминанию или списку дат время из плана можно добавить ещё одной датой.
     boolean canAdd = reminder > 0 && !ReminderPolicy.periodic(repeatMode);
-    AlertDialog.Builder dialog =
-        new AlertDialog.Builder(this)
+    Ask dialog =
+        new Ask(this)
             .setTitle("Напомнить " + date(n.at) + "?")
             .setMessage(
                 n.text
@@ -5722,7 +5696,7 @@ public final class MainActivity extends Activity
     FrameLayout holder = new FrameLayout(this);
     holder.setPadding(dp(20), dp(8), dp(20), 0);
     holder.addView(field, new FrameLayout.LayoutParams(-1, -2));
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle(title)
         .setView(holder)
         .setNegativeButton("Отмена", null)
@@ -5836,7 +5810,7 @@ public final class MainActivity extends Activity
       return;
     }
     if (!local && (key.isEmpty() || prefs.getString("model", "").isEmpty())) {
-      new AlertDialog.Builder(this)
+      new Ask(this)
           .setTitle("Подключите Polza.AI")
           .setMessage(
               "Укажите свой API-ключ и выберите модель в настройках или включите локальную модель"
@@ -5847,7 +5821,7 @@ public final class MainActivity extends Activity
       return;
     }
     if (!local && !prefs.getBoolean("consent", false)) {
-      new AlertDialog.Builder(this)
+      new Ask(this)
           .setTitle("Отправить заметки в Polza.AI?")
           .setMessage(
               "Ваш вопрос, последние сообщения чата и до 8 найденных фрагментов заметок будут"
@@ -5930,7 +5904,7 @@ public final class MainActivity extends Activity
     }
     labels.add("Убрать");
     keys.add("remove");
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Изображение " + (selectedImage + 1))
         .setItems(
             labels.toArray(new String[0]),
@@ -6011,7 +5985,7 @@ public final class MainActivity extends Activity
   }
 
   private void chatImageMenu(String name, List<String> all, long chatId) {
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setItems(
             new String[] {"Открыть", "Повернуть и обрезать", "Убрать"},
             (d, which) -> {
@@ -6292,7 +6266,7 @@ public final class MainActivity extends Activity
     pickerTarget = forChat ? chat : editing;
     boolean system = Build.VERSION.SDK_INT >= 33;
     String limit = room > 1 ? " (до " + room + ")" : "";
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Добавить изображения")
         .setItems(
             system
@@ -6584,7 +6558,7 @@ public final class MainActivity extends Activity
     FrameLayout box = new FrameLayout(this);
     box.setPadding(dp(22), dp(8), dp(22), 0);
     box.addView(field);
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Сводка видео YouTube")
         .setMessage("Вставьте ссылку на видео, и ИИ сделает по нему заметку.")
         .setView(box)
@@ -6635,7 +6609,7 @@ public final class MainActivity extends Activity
       key = "";
     }
     if (key.isEmpty()) {
-      new AlertDialog.Builder(this)
+      new Ask(this)
           .setTitle("Подключите Polza.AI")
           .setMessage(
               "Сводку видео делает модель Polza.AI. Укажите API-ключ в настройках или сохраните"
@@ -6647,7 +6621,7 @@ public final class MainActivity extends Activity
       return;
     }
     final String apiKey = key, model = videoModel();
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle(links.size() == 1 ? "Сделать сводку видео?" : "Сделать сводки видео?")
         .setMessage(
             (links.size() == 1
@@ -6681,7 +6655,7 @@ public final class MainActivity extends Activity
     if (outcome.merged > 0 || !outcome.mergeError.isEmpty()) {
       // Закончилось объединение с общей заметкой.
       if (!outcome.mergeError.isEmpty()) {
-        new AlertDialog.Builder(this)
+        new Ask(this)
             .setTitle("Объединить не удалось")
             .setMessage(outcome.mergeError)
             .setPositiveButton("Понятно", null)
@@ -6701,7 +6675,7 @@ public final class MainActivity extends Activity
     }
     int made = outcome.created.size();
     if (!outcome.error.isEmpty()) {
-      new AlertDialog.Builder(this)
+      new Ask(this)
           .setTitle("Сводка видео не готова")
           .setMessage(
               (made > 0 ? "Готово заметок: " + made + ".\n\n" : "") + outcome.error)
@@ -6748,7 +6722,7 @@ public final class MainActivity extends Activity
             mergeAsking = false;
             askNext();
           };
-      new AlertDialog.Builder(this)
+      new Ask(this)
           .setTitle("Добавить в общую заметку?")
           .setMessage(
               "Видео «"
@@ -6812,7 +6786,7 @@ public final class MainActivity extends Activity
         toast("Сначала сохраните API-ключ в настройках");
         return;
       }
-      new AlertDialog.Builder(this)
+      new Ask(this)
           .setTitle("Создать заметку по изображению?")
           .setMessage(
               "Картинка будет отправлена в Polza.AI и выбранную модель. С вашего баланса спишется"
@@ -6850,7 +6824,7 @@ public final class MainActivity extends Activity
         toast("Сначала сохраните API-ключ в настройках");
         return;
       }
-      new AlertDialog.Builder(this)
+      new Ask(this)
           .setTitle("Описать изображение?")
           .setMessage(
               "Картинка будет отправлена в Polza.AI и выбранную модель. С вашего баланса спишется"
@@ -7121,7 +7095,7 @@ public final class MainActivity extends Activity
       toast("Сначала остановите локальный ответ");
       return;
     }
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Удалить GGUF с устройства?")
         .setMessage(
             "Будет удалена только копия модели в приложении. Исходный файл и заметки сохранятся.")
@@ -7143,21 +7117,44 @@ public final class MainActivity extends Activity
         .show();
   }
 
-  private void onPick(Spinner spinner, java.util.function.IntConsumer pick) {
-    int[] shown = {spinner.getSelectedItemPosition()};
-    spinner.setOnItemSelectedListener(
-        new AdapterView.OnItemSelectedListener() {
-          @Override
-          public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-            if (position == shown[0]) return;
-            shown[0] = position;
-            buzz(0);
-            pick.accept(position);
-          }
-
-          @Override
-          public void onNothingSelected(AdapterView<?> parent) {}
+  /**
+   * Строка выбора (вместо Spinner, 0.10.23): поле с выбранным вариантом и стрелкой, по нажатию —
+   * лист снизу с выбором одного. {@code pick} получает новый номер, только если он изменился.
+   */
+  private TextView choiceRow(
+      String title, String[] labels, int selected, java.util.function.IntConsumer pick) {
+    int[] shown = {Math.max(0, Math.min(selected, labels.length - 1))};
+    TextView field = text(labels[shown[0]], 16, INK);
+    field.setGravity(Gravity.CENTER_VERTICAL);
+    field.setMinHeight(dp(50));
+    field.setPadding(dp(16), dp(10), dp(14), dp(10));
+    GradientDrawable box = shape(SURFACE, 12);
+    box.setStroke(dp(1), LINE);
+    field.setBackground(
+        new RippleDrawable(android.content.res.ColorStateList.valueOf(0x2028634B), box, null));
+    field.setCompoundDrawablesWithIntrinsicBounds(null, null, new Glyph("down", GREEN, 18), null);
+    field.setCompoundDrawablePadding(dp(8));
+    field.setContentDescription(title + ": " + labels[shown[0]]);
+    field.setFocusable(true);
+    field.setOnClickListener(
+        v -> {
+          buzz(0);
+          new Ask(this)
+              .setTitle(title)
+              .setSingleChoiceItems(
+                  labels,
+                  shown[0],
+                  (d, which) -> {
+                    d.dismiss();
+                    if (which == shown[0]) return;
+                    shown[0] = which;
+                    field.setText(labels[which]);
+                    field.setContentDescription(title + ": " + labels[which]);
+                    pick.accept(which);
+                  })
+              .show();
         });
+    return field;
   }
 
   private Switch toggle(String label, boolean value) {
@@ -7176,7 +7173,7 @@ public final class MainActivity extends Activity
     link.setPadding(0, dp(10), dp(16), dp(10));
     link.setOnClickListener(
         v ->
-            new AlertDialog.Builder(this)
+            new Ask(this)
                 .setTitle(title)
                 .setMessage(message)
                 .setPositiveButton("Понятно", null)
@@ -7528,22 +7525,22 @@ public final class MainActivity extends Activity
       content.addView(more);
       if (advancedOpen) {
         secondary(content, "Максимальная длина ответа");
-        Spinner tokens = new Spinner(this);
         String[] choices = {
           "Коротко — до 300 токенов",
           "Обычно — до 2000 токенов",
           "Подробно — до 3000 токенов",
           "Без ограничения — сколько нужно модели"
         };
-        tokens.setAdapter(
-            new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, choices));
-        tokens.setSelection(ManagerAnalysis.answerMode(prefs.getInt("maxTokens", 0)));
-        tokens.setMinimumHeight(dp(50));
-        content.addView(tokens);
-        onPick(
-            tokens,
-            position ->
-                prefs.edit().putInt("maxTokens", ManagerAnalysis.ANSWER_TOKENS[position]).apply());
+        content.addView(
+            choiceRow(
+                "Длина ответа",
+                choices,
+                ManagerAnalysis.answerMode(prefs.getInt("maxTokens", 0)),
+                position ->
+                    prefs
+                        .edit()
+                        .putInt("maxTokens", ManagerAnalysis.ANSWER_TOKENS[position])
+                        .apply()));
         chatNote(
             content,
             "Тот же предел берёт фоновая проверка заметок (не меньше 1600). «Без ограничения» нужен"
@@ -7569,22 +7566,19 @@ public final class MainActivity extends Activity
     content.addView(reliabilityBox);
     fillReliability(reliabilityBox);
     secondary(content, "Напоминать до события");
-    Spinner lead = new Spinner(this);
-    lead.setAdapter(
-        new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, LEAD_LABELS));
     int leadSelection = 0;
     for (int i = 0; i < Reminders.LEAD_MINUTES.length; i++)
       if (Reminders.LEAD_MINUTES[i] == Reminders.leadMinutes(this)) leadSelection = i;
-    lead.setSelection(leadSelection);
-    lead.setMinimumHeight(dp(50));
-    content.addView(lead);
-    onPick(
-        lead,
-        position -> {
-          prefs.edit().putInt("reminderLead", Reminders.LEAD_MINUTES[position]).apply();
-          // Новый интервал сразу применяется ко всем будущим событиям.
-          restoreReminders();
-        });
+    content.addView(
+        choiceRow(
+            "Напоминать до события",
+            LEAD_LABELS,
+            leadSelection,
+            position -> {
+              prefs.edit().putInt("reminderLead", Reminders.LEAD_MINUTES[position]).apply();
+              // Новый интервал сразу применяется ко всем будущим событиям.
+              restoreReminders();
+            }));
     content.addView(
         infoLink(
             "Как работают напоминания",
@@ -7654,18 +7648,14 @@ public final class MainActivity extends Activity
     digestTime.setOnClickListener(
         v -> {
           buzz(0);
-          int minutes = Reminders.digestMinutes(this);
-          new TimePickerDialog(
-                  this,
-                  (tv, hour, minute) -> {
-                    prefs.edit().putInt("digestMinutes", hour * 60 + minute).apply();
-                    Reminders.scheduleDigest(this);
-                    showDigestTime.run();
-                  },
-                  minutes / 60,
-                  minutes % 60,
-                  true)
-              .show();
+          timePicker(
+              "Время сводки",
+              Reminders.digestMinutes(this),
+              picked -> {
+                prefs.edit().putInt("digestMinutes", picked).apply();
+                Reminders.scheduleDigest(this);
+                showDigestTime.run();
+              });
         });
     content.addView(digest);
     content.addView(digestTime);
@@ -7728,7 +7718,7 @@ public final class MainActivity extends Activity
             manager.setChecked(false);
             return;
           }
-          new AlertDialog.Builder(this)
+          new Ask(this)
               .setTitle("Включить менеджера заметок?")
               .setMessage(
                   "Выбранные тексты из всей коллекции будут передаваться в Polza.AI примерно"
@@ -7822,7 +7812,7 @@ public final class MainActivity extends Activity
             ask.setChecked(false);
             return;
           }
-          new AlertDialog.Builder(this)
+          new Ask(this)
               .setTitle("Включить вопросы о планах?")
               .setMessage(
                   "Время от времени помощник будет писать сам: спрашивать о делах и планах, когда и"
@@ -7849,18 +7839,14 @@ public final class MainActivity extends Activity
     time.setOnClickListener(
         v -> {
           buzz(0);
-          int minutes = CheckInJob.minutes(this);
-          new TimePickerDialog(
-                  this,
-                  (tv, hour, minute) -> {
-                    prefs.edit().putInt(CheckInJob.MINUTES, hour * 60 + minute).apply();
-                    io.execute(() -> CheckInJob.arm(getApplicationContext()));
-                    refresh.run();
-                  },
-                  minutes / 60,
-                  minutes % 60,
-                  true)
-              .show();
+          timePicker(
+              "Время вопросов",
+              CheckInJob.minutes(this),
+              picked -> {
+                prefs.edit().putInt(CheckInJob.MINUTES, picked).apply();
+                io.execute(() -> CheckInJob.arm(getApplicationContext()));
+                refresh.run();
+              });
         });
     every.setOnClickListener(
         v -> {
@@ -7871,7 +7857,7 @@ public final class MainActivity extends Activity
             labels[i] = CheckIn.everyLabel(CheckIn.EVERY_DAYS[i]);
             if (CheckIn.EVERY_DAYS[i] == CheckInJob.every(this)) selected = i;
           }
-          new AlertDialog.Builder(this)
+          new Ask(this)
               .setTitle("Как часто спрашивать")
               .setSingleChoiceItems(
                   labels,
@@ -8036,7 +8022,7 @@ public final class MainActivity extends Activity
             "Забыть",
             false,
             () ->
-                new AlertDialog.Builder(this)
+                new Ask(this)
                     .setTitle("Забыть «" + peer.name + "»?")
                     .setMessage(
                         "Заметки на обоих устройствах останутся. Чтобы подключить компьютер снова,"
@@ -8059,7 +8045,7 @@ public final class MainActivity extends Activity
   }
 
   private void connectComputer() {
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Подключить компьютер")
         .setMessage(
             "На компьютере откройте «Мимоходом»: Настройки → Синхронизация → «Показать код"
@@ -8107,7 +8093,7 @@ public final class MainActivity extends Activity
       }
     } catch (RuntimeException ignored) {
     }
-    new AlertDialog.Builder(this)
+    new Ask(this)
         .setTitle("Код сопряжения")
         .setMessage("Вставьте строку, которую показывает компьютер.")
         .setView(field)
@@ -8278,17 +8264,33 @@ public final class MainActivity extends Activity
                 () -> {
                   if (isDestroyed() || !isSettings()) return;
                   LinearLayout dialog = column();
-                  pad(dialog, 16);
                   EditText filter = input("Поиск модели", false);
                   dialog.addView(filter);
+                  gap(dialog, 8);
                   ListView list = new ListView(this);
+                  list.setDivider(new ColorDrawable(LINE));
+                  list.setDividerHeight(1);
+                  list.setSelector(new ColorDrawable(android.graphics.Color.TRANSPARENT));
+                  // Строки списка в стиле приложения вместо системного simple_list_item_1.
                   ArrayAdapter<String> adapter =
-                      new ArrayAdapter<>(
-                          this, android.R.layout.simple_list_item_1, new ArrayList<>(ids));
+                      new ArrayAdapter<String>(this, 0, new ArrayList<>(ids)) {
+                        @Override
+                        public View getView(int position, View convert, ViewGroup parent) {
+                          TextView row =
+                              convert instanceof TextView ? (TextView) convert : text("", 15, INK);
+                          row.setText(getItem(position));
+                          row.setMinHeight(dp(48));
+                          row.setGravity(Gravity.CENTER_VERTICAL);
+                          row.setPadding(dp(10), dp(6), dp(10), dp(6));
+                          row.setBackground(ripple(android.graphics.Color.TRANSPARENT, 10));
+                          return row;
+                        }
+                      };
                   list.setAdapter(adapter);
                   dialog.addView(list, new LinearLayout.LayoutParams(-1, dp(350)));
-                  AlertDialog picker =
-                      new AlertDialog.Builder(this)
+                  Popup picker =
+                      new Ask(this)
+                          .asSheet()
                           .setTitle("Модели Polza.AI")
                           .setView(dialog)
                           .setNegativeButton("Отмена", null)
@@ -8559,12 +8561,968 @@ public final class MainActivity extends Activity
         .start();
   }
 
+  private View snack;
+
+  /**
+   * Подсказка внизу (вместо Toast, 0.10.23): тёмная плашка над нижней панелью, сама гаснет через
+   * несколько секунд, исчезает по касанию. Лежит прямо в окне, поэтому переживает {@code render()}.
+   */
   private void toast(String message) {
-    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+    if (isFinishing() || getWindow() == null) return;
+    ViewGroup decor = (ViewGroup) getWindow().getDecorView();
+    if (snack != null) decor.removeView(snack);
+    LinearLayout bar = row();
+    bar.setPadding(dp(16), dp(12), dp(16), dp(12));
+    bar.setBackground(shape(INK, 14));
+    bar.setElevation(dp(8));
+    TextView words = text(message, 14, PAPER);
+    words.setLineSpacing(dp(2), 1);
+    bar.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+    bar.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+    lp.leftMargin = dp(22);
+    lp.rightMargin = dp(22);
+    boolean dockShown = dock != null && dock.getVisibility() == View.VISIBLE;
+    lp.bottomMargin = (root != null ? root.getPaddingBottom() : navInset) + dp(dockShown ? 96 : 16);
+    View shown = bar;
+    snack = bar;
+    Runnable hide =
+        () -> {
+          if (snack != shown) return;
+          snack = null;
+          if (!android.animation.ValueAnimator.areAnimatorsEnabled()) {
+            decor.removeView(shown);
+            return;
+          }
+          shown
+              .animate()
+              .alpha(0)
+              .translationY(dp(8))
+              .setDuration(160)
+              .withEndAction(() -> decor.removeView(shown))
+              .start();
+        };
+    bar.setOnClickListener(v -> hide.run());
+    decor.addView(bar, lp);
+    if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+      bar.setAlpha(0);
+      bar.setTranslationY(dp(12));
+      bar.animate()
+          .alpha(1)
+          .translationY(0)
+          .setDuration(200)
+          .setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
+          .start();
+    }
+    bar.postDelayed(hide, Math.min(6000, 2800 + message.length() * 30L));
   }
 
   private void hideKeyboard() {
     getSystemService(InputMethodManager.class).hideSoftInputFromWindow(root.getWindowToken(), 0);
+  }
+
+  // ── Свои всплывающие окна (0.10.23) вместо AlertDialog, PopupMenu и выбора даты Android ──
+
+  /** Кнопка с действием «удалить»: красная, а у окна по центру — значок корзины сверху. */
+  private static boolean destructive(CharSequence label) {
+    if (label == null) return false;
+    String l = label.toString();
+    return l.startsWith("Удал") || l.startsWith("Очист") || l.startsWith("Забыть") || l.startsWith("Стер");
+  }
+
+  /**
+   * Замена {@code AlertDialog.Builder} с теми же методами. Список, выбор одного и нескольких —
+   * лист снизу, остальное — карточка по центру; цвета, шрифты и скругления приложения.
+   */
+  private final class Ask {
+    CharSequence title, message, pos, neg, neu;
+    DialogInterface.OnClickListener posL, negL, neuL, itemsL;
+    DialogInterface.OnMultiChoiceClickListener multiL;
+    DialogInterface.OnCancelListener cancelL;
+    CharSequence[] items;
+    boolean[] multi;
+    int checked = -2;
+    View view;
+    boolean sheet;
+
+    Ask(Context context) {}
+
+    Ask setTitle(CharSequence value) {
+      title = value;
+      return this;
+    }
+
+    Ask setMessage(CharSequence value) {
+      message = value;
+      return this;
+    }
+
+    Ask setView(View value) {
+      view = value;
+      return this;
+    }
+
+    /** Показать содержимое листом снизу (выбор даты, длинные формы). */
+    Ask asSheet() {
+      sheet = true;
+      return this;
+    }
+
+    Ask setItems(CharSequence[] list, DialogInterface.OnClickListener listener) {
+      items = list;
+      itemsL = listener;
+      sheet = true;
+      return this;
+    }
+
+    Ask setSingleChoiceItems(CharSequence[] list, int selected, DialogInterface.OnClickListener listener) {
+      items = list;
+      checked = selected;
+      itemsL = listener;
+      sheet = true;
+      return this;
+    }
+
+    Ask setMultiChoiceItems(
+        CharSequence[] list, boolean[] state, DialogInterface.OnMultiChoiceClickListener listener) {
+      items = list;
+      multi = state == null ? new boolean[list.length] : state;
+      multiL = listener;
+      sheet = true;
+      return this;
+    }
+
+    Ask setPositiveButton(CharSequence label, DialogInterface.OnClickListener listener) {
+      pos = label;
+      posL = listener;
+      return this;
+    }
+
+    Ask setNegativeButton(CharSequence label, DialogInterface.OnClickListener listener) {
+      neg = label;
+      negL = listener;
+      return this;
+    }
+
+    Ask setNeutralButton(CharSequence label, DialogInterface.OnClickListener listener) {
+      neu = label;
+      neuL = listener;
+      return this;
+    }
+
+    Ask setOnCancelListener(DialogInterface.OnCancelListener listener) {
+      cancelL = listener;
+      return this;
+    }
+
+    Popup create() {
+      return new Popup(this);
+    }
+
+    Popup show() {
+      Popup p = create();
+      p.show();
+      return p;
+    }
+  }
+
+  /** Окно, которое строит {@link Ask}: своё затемнение, карточка или лист, плавное появление. */
+  private final class Popup extends Dialog {
+    final Ask a;
+    final Map<Integer, TextView> buttons = new HashMap<>();
+    final FrameLayout frameView, holder;
+    final View scrim;
+    final LinearLayout panel;
+    final List<Runnable> marks = new ArrayList<>();
+    final int panelBottom;
+    boolean closing;
+
+    Popup(Ask a) {
+      super(MainActivity.this, android.R.style.Theme_Translucent_NoTitleBar);
+      this.a = a;
+      frameView = new FrameLayout(MainActivity.this);
+      scrim = new View(MainActivity.this);
+      scrim.setBackgroundColor(dark ? 0x99000000 : 0x6B1E3028);
+      scrim.setOnClickListener(v -> cancel());
+      scrim.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+      frameView.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
+      holder = new FrameLayout(MainActivity.this);
+      frameView.addView(holder, new FrameLayout.LayoutParams(-1, -1));
+      float share = a.sheet ? 0.88f : 1f;
+      panel =
+          new LinearLayout(MainActivity.this) {
+            @Override
+            protected void onMeasure(int widthSpec, int heightSpec) {
+              int size = View.MeasureSpec.getSize(heightSpec);
+              if (View.MeasureSpec.getMode(heightSpec) != View.MeasureSpec.UNSPECIFIED)
+                heightSpec =
+                    View.MeasureSpec.makeMeasureSpec(Math.round(size * share), View.MeasureSpec.AT_MOST);
+              super.onMeasure(widthSpec, heightSpec);
+            }
+          };
+      panel.setOrientation(LinearLayout.VERTICAL);
+      panel.setClickable(true);
+      FrameLayout.LayoutParams panelParams;
+      if (a.sheet) {
+        GradientDrawable sheetShape = new GradientDrawable();
+        sheetShape.setColor(SURFACE);
+        float r = dp(20);
+        sheetShape.setCornerRadii(new float[] {r, r, r, r, 0, 0, 0, 0});
+        panel.setBackground(sheetShape);
+        panelBottom = dp(20);
+        panel.setPadding(dp(12), dp(8), dp(12), panelBottom);
+        panelParams = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+      } else {
+        panel.setBackground(shape(SURFACE, 20));
+        panelBottom = dp(18);
+        panel.setPadding(dp(20), dp(22), dp(20), panelBottom);
+        panelParams = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
+        panelParams.leftMargin = dp(22);
+        panelParams.rightMargin = dp(22);
+        panelParams.topMargin = dp(16);
+        panelParams.bottomMargin = dp(16);
+      }
+      panel.setElevation(dp(12));
+      holder.addView(panel, panelParams);
+      build();
+      setContentView(frameView, new ViewGroup.LayoutParams(-1, -1));
+      Window w = getWindow();
+      if (w != null) {
+        w.setBackgroundDrawable(new ColorDrawable(android.graphics.Color.TRANSPARENT));
+        w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        w.setWindowAnimations(0);
+        w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        if (Build.VERSION.SDK_INT >= 30) w.setDecorFitsSystemWindows(false);
+      }
+      frameView.setOnApplyWindowInsetsListener(
+          (v, insets) -> {
+            int left, top, right, bottom;
+            if (Build.VERSION.SDK_INT >= 30) {
+              android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+              android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
+              left = bars.left;
+              top = bars.top;
+              right = bars.right;
+              bottom = Math.max(bars.bottom, ime.bottom);
+            } else {
+              left = insets.getSystemWindowInsetLeft();
+              top = insets.getSystemWindowInsetTop();
+              right = insets.getSystemWindowInsetRight();
+              bottom = insets.getSystemWindowInsetBottom();
+            }
+            holder.setPadding(left, top, right, a.sheet ? 0 : bottom);
+            if (a.sheet)
+              panel.setPadding(
+                  panel.getPaddingLeft(), panel.getPaddingTop(), panel.getPaddingRight(), panelBottom + bottom);
+            return Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED : insets.consumeSystemWindowInsets();
+          });
+      if (a.cancelL != null) setOnCancelListener(a.cancelL);
+    }
+
+    private void build() {
+      int side = a.sheet ? dp(10) : 0;
+      if (a.sheet) {
+        View handle = new View(MainActivity.this);
+        handle.setBackground(shape(LINE, 2));
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(dp(36), dp(4));
+        hp.gravity = Gravity.CENTER_HORIZONTAL;
+        hp.bottomMargin = dp(14);
+        panel.addView(handle, hp);
+      } else if (destructive(a.pos)) {
+        ImageView icon = new ImageView(MainActivity.this);
+        icon.setScaleType(ImageView.ScaleType.CENTER);
+        icon.setImageDrawable(new Glyph("trash", RED, 22));
+        icon.setBackground(shape((RED & 0x00FFFFFF) | 0x1F000000, 12));
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(44), dp(44));
+        ip.bottomMargin = dp(14);
+        panel.addView(icon, ip);
+      }
+      if (a.title != null && a.title.length() > 0) {
+        TextView title = text(a.title.toString(), 22, INK);
+        title.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+        title.setLineSpacing(dp(2), 1);
+        if (Build.VERSION.SDK_INT >= 28) title.setAccessibilityHeading(true);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, -2);
+        tp.leftMargin = side;
+        tp.rightMargin = side;
+        tp.bottomMargin = dp(a.sheet ? 6 : 8);
+        panel.addView(title, tp);
+      }
+      // Тело: пояснение, своё содержимое и список; длинное прокручивается, кнопки всегда видны.
+      LinearLayout body = column();
+      if (a.message != null && a.message.length() > 0) {
+        TextView message = text("", a.sheet ? 13 : 15, MUTED);
+        message.setText(a.message);
+        message.setLineSpacing(dp(3), 1);
+        message.setPadding(side, 0, side, dp(a.sheet ? 8 : 4));
+        body.addView(message);
+      }
+      // Своё содержимое с прокруткой (список, ScrollView) не вкладываем во вторую прокрутку.
+      boolean scrolls = a.view != null && scrolls(a.view);
+      if (a.view != null) {
+        styleFields(a.view);
+        if (!scrolls) {
+          LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(-1, -2);
+          vp.topMargin = dp(4);
+          body.addView(a.view, vp);
+        }
+      }
+      if (a.items != null) for (int i = 0; i < a.items.length; i++) body.addView(itemRow(i));
+      if (body.getChildCount() > 0) {
+        ScrollView bodyScroll = new ScrollView(MainActivity.this);
+        bodyScroll.setFillViewport(false);
+        bodyScroll.setVerticalScrollBarEnabled(false);
+        bodyScroll.addView(body);
+        panel.addView(bodyScroll, new LinearLayout.LayoutParams(-1, -2, 1));
+      }
+      if (a.view != null && scrolls) panel.addView(a.view, new LinearLayout.LayoutParams(-1, -2, 1));
+      addButtons(side);
+    }
+
+    private boolean scrolls(View v) {
+      if (v instanceof ScrollView || v instanceof AbsListView) return true;
+      if (v instanceof ViewGroup)
+        for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++)
+          if (scrolls(((ViewGroup) v).getChildAt(i))) return true;
+      return false;
+    }
+
+    /** Поля ввода на белой карточке получают тонкую рамку, иначе их не видно. */
+    private void styleFields(View v) {
+      if (v instanceof EditText && v.getBackground() instanceof GradientDrawable)
+        ((GradientDrawable) v.getBackground()).setStroke(dp(1), LINE);
+      if (v instanceof ViewGroup)
+        for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) styleFields(((ViewGroup) v).getChildAt(i));
+    }
+
+    private View itemRow(int i) {
+      boolean single = a.checked != -2, many = a.multi != null;
+      LinearLayout item = row();
+      item.setMinimumHeight(dp(52));
+      item.setPadding(dp(10), dp(6), dp(10), dp(6));
+      TextView label = text(a.items[i].toString(), 16, INK);
+      label.setLineSpacing(dp(2), 1);
+      item.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+      ImageView mark = null;
+      if (single || many) {
+        mark = new ImageView(MainActivity.this);
+        mark.setScaleType(ImageView.ScaleType.CENTER);
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(dp(22), dp(22));
+        mp.leftMargin = dp(12);
+        item.addView(mark, mp);
+      }
+      ImageView box = mark;
+      Runnable paint =
+          () -> {
+            boolean on = single ? a.checked == i : many && a.multi[i];
+            if (single) {
+              item.setBackground(ripple(on ? LIME : android.graphics.Color.TRANSPARENT, 12));
+              label.setTextColor(on ? GREEN : INK);
+              label.setTypeface(null, on ? Typeface.BOLD : Typeface.NORMAL);
+            } else item.setBackground(ripple(android.graphics.Color.TRANSPARENT, 12));
+            if (box != null) {
+              GradientDrawable g = shape(on ? FILL : android.graphics.Color.TRANSPARENT, single ? 11 : 6);
+              if (!on) g.setStroke(dp(2), STROKE);
+              box.setBackground(g);
+              box.setImageDrawable(on ? new Glyph("check", WHITE, 14) : null);
+            }
+            item.setSelected(on);
+            if (single || many)
+              item.setContentDescription(a.items[i] + (on ? ", выбрано" : ", не выбрано"));
+          };
+      paint.run();
+      marks.add(paint);
+      item.setFocusable(true);
+      item.setOnClickListener(
+          v -> {
+            buzz(0);
+            if (many) {
+              a.multi[i] = !a.multi[i];
+              paint.run();
+              if (a.multiL != null) a.multiL.onClick(this, i, a.multi[i]);
+            } else if (single) {
+              a.checked = i;
+              for (Runnable r : marks) r.run();
+              if (a.itemsL != null) a.itemsL.onClick(this, i);
+            } else {
+              if (a.itemsL != null) a.itemsL.onClick(this, i);
+              dismiss();
+            }
+          });
+      return item;
+    }
+
+    private TextView dialogButton(CharSequence label, int which, int fill, int color) {
+      TextView b = text(label.toString(), 15, color);
+      b.setTypeface(null, Typeface.BOLD);
+      b.setGravity(Gravity.CENTER);
+      b.setMinHeight(dp(48));
+      b.setPadding(dp(12), dp(6), dp(12), dp(6));
+      b.setBackground(ripple(fill, 12));
+      b.setFocusable(true);
+      DialogInterface.OnClickListener l =
+          which == DialogInterface.BUTTON_POSITIVE
+              ? a.posL
+              : which == DialogInterface.BUTTON_NEGATIVE ? a.negL : a.neuL;
+      b.setOnClickListener(
+          v -> {
+            buzz(which == DialogInterface.BUTTON_POSITIVE ? 1 : 0);
+            if (l != null) l.onClick(this, which);
+            dismiss();
+          });
+      buttons.put(which, b);
+      return b;
+    }
+
+    private void addButtons(int side) {
+      if (a.pos == null && a.neg == null && a.neu == null) return;
+      LinearLayout area = column();
+      area.setPadding(side, dp(14), side, 0);
+      if (a.neu != null) {
+        TextView neutral = dialogButton(a.neu, DialogInterface.BUTTON_NEUTRAL, android.graphics.Color.TRANSPARENT, GREEN);
+        area.addView(neutral, new LinearLayout.LayoutParams(-1, -2));
+        if (a.pos != null || a.neg != null) gap(area, 6);
+      }
+      boolean stack =
+          (a.pos != null && a.pos.length() > 16) || (a.neg != null && a.neg.length() > 16);
+      LinearLayout line = stack ? column() : row();
+      TextView negative =
+          a.neg == null ? null : dialogButton(a.neg, DialogInterface.BUTTON_NEGATIVE, LIME, GREEN);
+      TextView positive =
+          a.pos == null
+              ? null
+              : dialogButton(a.pos, DialogInterface.BUTTON_POSITIVE, destructive(a.pos) ? RED : FILL, WHITE);
+      // Рядом: «Отмена» слева, действие справа; столбиком — действие сверху.
+      List<TextView> order = new ArrayList<>();
+      if (stack) {
+        if (positive != null) order.add(positive);
+        if (negative != null) order.add(negative);
+      } else {
+        if (negative != null) order.add(negative);
+        if (positive != null) order.add(positive);
+      }
+      for (int i = 0; i < order.size(); i++) {
+        LinearLayout.LayoutParams p =
+            stack ? new LinearLayout.LayoutParams(-1, -2) : new LinearLayout.LayoutParams(0, -2, 1);
+        if (i > 0) {
+          if (stack) p.topMargin = dp(8);
+          else p.leftMargin = dp(8);
+        }
+        line.addView(order.get(i), p);
+      }
+      if (!order.isEmpty()) area.addView(line, new LinearLayout.LayoutParams(-1, -2));
+      panel.addView(area, new LinearLayout.LayoutParams(-1, -2));
+    }
+
+    /** Кнопка окна, как у AlertDialog: свой обработчик нажатия заменяет закрытие окна. */
+    TextView getButton(int which) {
+      return buttons.get(which);
+    }
+
+    @Override
+    protected void onStart() {
+      super.onStart();
+      Window w = getWindow();
+      if (w != null) w.setLayout(-1, -1);
+    }
+
+    @Override
+    public void show() {
+      super.show();
+      if (!android.animation.ValueAnimator.areAnimatorsEnabled()) return;
+      android.view.animation.PathInterpolator ease =
+          new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f);
+      scrim.setAlpha(0);
+      scrim.animate().alpha(1).setDuration(180).start();
+      if (a.sheet) {
+        panel.setAlpha(0);
+        panel.post(
+            () -> {
+              panel.setTranslationY(panel.getHeight());
+              panel.setAlpha(1);
+              panel.animate().translationY(0).setDuration(240).setInterpolator(ease).start();
+            });
+      } else {
+        panel.setAlpha(0);
+        panel.setScaleX(0.96f);
+        panel.setScaleY(0.96f);
+        panel.animate().alpha(1).scaleX(1).scaleY(1).setDuration(200).setInterpolator(ease).start();
+      }
+    }
+
+    @Override
+    public void dismiss() {
+      if (closing) return;
+      if (!isShowing() || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+        finish();
+        return;
+      }
+      closing = true;
+      android.view.animation.PathInterpolator ease =
+          new android.view.animation.PathInterpolator(0.4f, 0f, 1f, 1f);
+      scrim.animate().alpha(0).setDuration(150).start();
+      ViewPropertyAnimator out =
+          a.sheet
+              ? panel.animate().translationY(panel.getHeight())
+              : panel.animate().alpha(0).scaleX(0.97f).scaleY(0.97f);
+      out.setDuration(160).setInterpolator(ease).withEndAction(this::finish).start();
+    }
+
+    private void finish() {
+      try {
+        Popup.super.dismiss();
+      } catch (RuntimeException ignored) {
+        // Окно уже снято вместе с экраном.
+      }
+    }
+  }
+
+  /** Пункт своего меню (вместо MenuItem). */
+  private interface PopPick {
+    boolean onMenuItemClick(PopItem item);
+  }
+
+  private static final class PopItem {
+    final int id;
+    final CharSequence title;
+    PopPick own;
+
+    PopItem(int id, CharSequence title) {
+      this.id = id;
+      this.title = title;
+    }
+
+    PopItem setOnMenuItemClickListener(PopPick listener) {
+      own = listener;
+      return this;
+    }
+
+    int getItemId() {
+      return id;
+    }
+  }
+
+  /** Замена PopupMenu с теми же вызовами: белая карточка рядом с кнопкой, «Удалить» — красным. */
+  private final class Pop {
+    final View anchor;
+    final List<PopItem> items = new ArrayList<>();
+    final PopList menu = new PopList();
+    PopPick all;
+
+    Pop(View anchor) {
+      this.anchor = anchor;
+    }
+
+    PopList getMenu() {
+      return menu;
+    }
+
+    void setOnMenuItemClickListener(PopPick listener) {
+      all = listener;
+    }
+
+    final class PopList {
+      PopItem add(CharSequence title) {
+        PopItem item = new PopItem(0, title);
+        items.add(item);
+        return item;
+      }
+
+      PopItem add(int group, int id, int order, CharSequence title) {
+        PopItem item = new PopItem(id, title);
+        items.add(item);
+        return item;
+      }
+    }
+
+    void show() {
+      if (items.isEmpty()) return;
+      FrameLayout outer = new FrameLayout(MainActivity.this);
+      int shadow = dp(12);
+      outer.setPadding(shadow, shadow, shadow, shadow);
+      LinearLayout card = column();
+      card.setPadding(dp(6), dp(6), dp(6), dp(6));
+      GradientDrawable background = shape(SURFACE, 14);
+      background.setStroke(dp(1), LINE);
+      card.setBackground(background);
+      card.setElevation(dp(8));
+      card.setMinimumWidth(dp(220));
+      outer.addView(card, new FrameLayout.LayoutParams(-2, -2));
+      PopupWindow window = new PopupWindow(outer, -2, -2, true);
+      window.setBackgroundDrawable(new ColorDrawable(android.graphics.Color.TRANSPARENT));
+      window.setOutsideTouchable(true);
+      window.setAnimationStyle(0);
+      for (PopItem item : items) {
+        boolean danger = destructive(item.title);
+        TextView row = text(item.title.toString(), 15, danger ? RED : INK);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinHeight(dp(48));
+        row.setPadding(dp(14), 0, dp(14), 0);
+        if (danger) {
+          row.setCompoundDrawablesWithIntrinsicBounds(new Glyph("trash", RED, 20), null, null, null);
+          row.setCompoundDrawablePadding(dp(12));
+        }
+        row.setBackground(ripple(android.graphics.Color.TRANSPARENT, 10));
+        row.setFocusable(true);
+        row.setOnClickListener(
+            v -> {
+              buzz(0);
+              window.dismiss();
+              boolean handled = item.own != null && item.own.onMenuItemClick(item);
+              if (!handled && all != null) all.onMenuItemClick(item);
+            });
+        card.addView(row, new LinearLayout.LayoutParams(-1, -2));
+      }
+      window.showAsDropDown(anchor, shadow, -anchor.getHeight() / 2 - shadow, Gravity.END);
+      if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+        card.setAlpha(0);
+        card.setScaleX(0.95f);
+        card.setScaleY(0.95f);
+        card.setPivotX(card.getMeasuredWidth());
+        card.setPivotY(0);
+        card.animate()
+            .alpha(1)
+            .scaleX(1)
+            .scaleY(1)
+            .setDuration(160)
+            .setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
+            .start();
+      }
+    }
+  }
+
+  private static final String[] MONTH_NAMES = {
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+  };
+
+  /** Часы и минуты кнопками «−» и «+» (минуты шагом 5); {@code hm} меняется на месте. */
+  private View timeControl(int[] hm, Runnable changed) {
+    LinearLayout line = row();
+    line.setGravity(Gravity.CENTER);
+    for (int part = 0; part < 2; part++) {
+      int index = part;
+      if (part == 1) {
+        TextView colon = text(":", 22, MUTED);
+        colon.setPadding(dp(6), 0, dp(6), 0);
+        line.addView(colon);
+      }
+      TextView value = text("", 22, INK);
+      value.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+      value.setGravity(Gravity.CENTER);
+      GradientDrawable box = shape(PAPER, 12);
+      box.setStroke(dp(1), LINE);
+      value.setBackground(box);
+      Runnable show =
+          () -> {
+            value.setText(String.format(Locale.ROOT, "%02d", hm[index]));
+            value.setContentDescription((index == 0 ? "Часы: " : "Минуты: ") + hm[index]);
+          };
+      show.run();
+      for (int step : new int[] {-1, 1}) {
+        TextView b = text(step < 0 ? "−" : "+", 22, GREEN);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(ripple(android.graphics.Color.TRANSPARENT, 10));
+        b.setContentDescription(
+            (step < 0 ? "Меньше " : "Больше ") + (index == 0 ? "часов" : "минут"));
+        b.setFocusable(true);
+        b.setOnClickListener(
+            v -> {
+              buzz(0);
+              if (index == 0) hm[0] = (hm[0] + step + 24) % 24;
+              else hm[1] = ((hm[1] / 5) * 5 + step * 5 + 60) % 60;
+              show.run();
+              changed.run();
+            });
+        if (step < 0) {
+          line.addView(b, new LinearLayout.LayoutParams(dp(40), dp(48)));
+          line.addView(value, new LinearLayout.LayoutParams(dp(60), dp(48)));
+        } else line.addView(b, new LinearLayout.LayoutParams(dp(40), dp(48)));
+      }
+    }
+    return line;
+  }
+
+  private TextView sheetChip(String label, boolean on, Runnable click) {
+    TextView chip = text(label, 13, on ? WHITE : GREEN);
+    chip.setTypeface(null, Typeface.BOLD);
+    chip.setSingleLine(true);
+    chip.setGravity(Gravity.CENTER);
+    chip.setMinHeight(dp(36));
+    chip.setPadding(dp(12), 0, dp(12), 0);
+    chip.setBackground(ripple(on ? FILL : LIME, 10));
+    chip.setSelected(on);
+    chip.setFocusable(true);
+    chip.setOnClickListener(
+        v -> {
+          buzz(0);
+          click.run();
+        });
+    return chip;
+  }
+
+  /** Выбор времени листом снизу (вместо TimePickerDialog): частые варианты и «−/+». */
+  private void timePicker(String title, int minutes, java.util.function.IntConsumer done) {
+    int[] hm = {minutes / 60, minutes % 60};
+    LinearLayout body = column();
+    Popup[] popup = {null};
+    Runnable[] refresh = {null};
+    refresh[0] =
+        () -> {
+          body.removeAllViews();
+          HorizontalScrollView chipsScroll = new HorizontalScrollView(MainActivity.this);
+          chipsScroll.setHorizontalScrollBarEnabled(false);
+          LinearLayout chips = row();
+          int[][] quick = {{8, 0}, {9, 0}, {12, 0}, {18, 0}, {21, 0}};
+          for (int i = 0; i < quick.length; i++) {
+            int[] q = quick[i];
+            TextView chip =
+                sheetChip(
+                    q[0] + ":00",
+                    hm[0] == q[0] && hm[1] == q[1],
+                    () -> {
+                      hm[0] = q[0];
+                      hm[1] = q[1];
+                      refresh[0].run();
+                    });
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, -2);
+            if (i > 0) p.leftMargin = dp(8);
+            chips.addView(chip, p);
+          }
+          chipsScroll.addView(chips);
+          body.addView(chipsScroll);
+          gap(body, 16);
+          body.addView(timeControl(hm, () -> refresh[0].run()));
+          if (popup[0] != null && popup[0].getButton(DialogInterface.BUTTON_POSITIVE) != null)
+            popup[0]
+                .getButton(DialogInterface.BUTTON_POSITIVE)
+                .setText(String.format(Locale.ROOT, "Готово · %d:%02d", hm[0], hm[1]));
+        };
+    body.setPadding(dp(10), dp(4), dp(10), 0);
+    popup[0] =
+        new Ask(this)
+            .asSheet()
+            .setTitle(title)
+            .setView(body)
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton("Готово", (d, w) -> done.accept(hm[0] * 60 + hm[1]))
+            .create();
+    refresh[0].run();
+    popup[0].show();
+  }
+
+  /**
+   * Дата и время листом снизу (вместо DatePickerDialog + TimePickerDialog): быстрые варианты,
+   * свой календарь месяца (неделя с понедельника, прошедшие дни недоступны) и время «−/+».
+   */
+  private void whenPicker(long initial, java.util.function.LongConsumer picked) {
+    Calendar cal = Calendar.getInstance();
+    cal.setTimeInMillis(initial);
+    int[] ymd = {cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)};
+    int[] hm = {cal.get(Calendar.HOUR_OF_DAY), (cal.get(Calendar.MINUTE) / 5) * 5};
+    int[] shown = {ymd[0], ymd[1]};
+    LinearLayout body = column();
+    body.setPadding(dp(10), dp(4), dp(10), 0);
+    Popup[] popup = {null};
+    Runnable[] refresh = {null};
+    java.util.function.Supplier<Long> moment =
+        () -> {
+          Calendar c = Calendar.getInstance();
+          c.clear();
+          c.set(ymd[0], ymd[1], ymd[2], hm[0], hm[1], 0);
+          return c.getTimeInMillis();
+        };
+    refresh[0] =
+        () -> {
+          body.removeAllViews();
+          long now = System.currentTimeMillis();
+          Calendar today = Calendar.getInstance();
+          // Быстрые варианты: сегодня вечером, завтра утром, в понедельник утром.
+          List<long[]> quick = new ArrayList<>();
+          List<String> quickNames = new ArrayList<>();
+          Calendar c = Calendar.getInstance();
+          c.set(Calendar.HOUR_OF_DAY, 18);
+          c.set(Calendar.MINUTE, 0);
+          c.set(Calendar.SECOND, 0);
+          c.set(Calendar.MILLISECOND, 0);
+          if (c.getTimeInMillis() > now + 300_000) {
+            quick.add(new long[] {c.getTimeInMillis()});
+            quickNames.add("Сегодня 18:00");
+          }
+          c.add(Calendar.DAY_OF_MONTH, 1);
+          c.set(Calendar.HOUR_OF_DAY, 9);
+          quick.add(new long[] {c.getTimeInMillis()});
+          quickNames.add("Завтра 9:00");
+          Calendar monday = (Calendar) c.clone();
+          while (monday.get(Calendar.DAY_OF_WEEK) != Calendar.MONDAY) monday.add(Calendar.DAY_OF_MONTH, 1);
+          if (monday.getTimeInMillis() != c.getTimeInMillis()) {
+            quick.add(new long[] {monday.getTimeInMillis()});
+            quickNames.add("В понедельник 9:00");
+          }
+          HorizontalScrollView chipsScroll = new HorizontalScrollView(MainActivity.this);
+          chipsScroll.setHorizontalScrollBarEnabled(false);
+          LinearLayout chips = row();
+          for (int i = 0; i < quick.size(); i++) {
+            long at = quick.get(i)[0];
+            TextView chip =
+                sheetChip(
+                    quickNames.get(i),
+                    moment.get() == at,
+                    () -> {
+                      Calendar q = Calendar.getInstance();
+                      q.setTimeInMillis(at);
+                      ymd[0] = q.get(Calendar.YEAR);
+                      ymd[1] = q.get(Calendar.MONTH);
+                      ymd[2] = q.get(Calendar.DAY_OF_MONTH);
+                      hm[0] = q.get(Calendar.HOUR_OF_DAY);
+                      hm[1] = q.get(Calendar.MINUTE);
+                      shown[0] = ymd[0];
+                      shown[1] = ymd[1];
+                      refresh[0].run();
+                    });
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, -2);
+            if (i > 0) p.leftMargin = dp(8);
+            chips.addView(chip, p);
+          }
+          chipsScroll.addView(chips);
+          body.addView(chipsScroll);
+          gap(body, 12);
+          // Заголовок месяца со стрелками.
+          LinearLayout head = row();
+          TextView month = text(MONTH_NAMES[shown[1]] + " " + shown[0], 15, INK);
+          month.setTypeface(null, Typeface.BOLD);
+          head.addView(month, new LinearLayout.LayoutParams(0, -2, 1));
+          boolean canBack =
+              shown[0] > today.get(Calendar.YEAR)
+                  || (shown[0] == today.get(Calendar.YEAR) && shown[1] > today.get(Calendar.MONTH));
+          for (int step : new int[] {-1, 1}) {
+            ImageView arrow = new ImageView(MainActivity.this);
+            arrow.setScaleType(ImageView.ScaleType.CENTER);
+            boolean enabled = step > 0 || canBack;
+            arrow.setImageDrawable(new Glyph("back", enabled ? GREEN : LINE, 18));
+            if (step > 0) arrow.setRotation(180);
+            arrow.setBackground(ripple(android.graphics.Color.TRANSPARENT, 10));
+            arrow.setContentDescription(step < 0 ? "Предыдущий месяц" : "Следующий месяц");
+            arrow.setEnabled(enabled);
+            arrow.setOnClickListener(
+                v -> {
+                  buzz(0);
+                  shown[1] += step;
+                  if (shown[1] < 0) {
+                    shown[1] = 11;
+                    shown[0]--;
+                  } else if (shown[1] > 11) {
+                    shown[1] = 0;
+                    shown[0]++;
+                  }
+                  refresh[0].run();
+                });
+            head.addView(arrow, new LinearLayout.LayoutParams(dp(44), dp(44)));
+          }
+          body.addView(head);
+          // Дни недели и числа месяца.
+          LinearLayout week = row();
+          for (String d : new String[] {"Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"}) {
+            TextView w = text(d, 12, MUTED);
+            w.setGravity(Gravity.CENTER);
+            w.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            week.addView(w, new LinearLayout.LayoutParams(0, dp(24), 1));
+          }
+          body.addView(week);
+          Calendar first = Calendar.getInstance();
+          first.clear();
+          first.set(shown[0], shown[1], 1);
+          int lead = (first.get(Calendar.DAY_OF_WEEK) + 5) % 7;
+          int days = first.getActualMaximum(Calendar.DAY_OF_MONTH);
+          Calendar startOfToday = Calendar.getInstance();
+          startOfToday.set(Calendar.HOUR_OF_DAY, 0);
+          startOfToday.set(Calendar.MINUTE, 0);
+          startOfToday.set(Calendar.SECOND, 0);
+          startOfToday.set(Calendar.MILLISECOND, 0);
+          LinearLayout line = null;
+          for (int cell = 0; cell < lead + days; cell++) {
+            if (cell % 7 == 0) {
+              line = row();
+              body.addView(line);
+            }
+            int day = cell - lead + 1;
+            if (day < 1) {
+              line.addView(new View(MainActivity.this), new LinearLayout.LayoutParams(0, dp(40), 1));
+              continue;
+            }
+            Calendar d = Calendar.getInstance();
+            d.clear();
+            d.set(shown[0], shown[1], day);
+            boolean past = d.getTimeInMillis() < startOfToday.getTimeInMillis();
+            boolean selected = ymd[0] == shown[0] && ymd[1] == shown[1] && ymd[2] == day;
+            boolean isToday = d.getTimeInMillis() == startOfToday.getTimeInMillis();
+            TextView number = text(String.valueOf(day), 14, past ? MUTED : selected ? WHITE : isToday ? GREEN : INK);
+            number.setGravity(Gravity.CENTER);
+            if (selected || isToday) number.setTypeface(null, Typeface.BOLD);
+            GradientDrawable g = shape(selected ? FILL : android.graphics.Color.TRANSPARENT, 10);
+            if (isToday && !selected) g.setStroke(dp(1), GREEN);
+            number.setBackground(
+                past ? g : new RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(0x2028634B), g, null));
+            number.setContentDescription(
+                day + " " + MONTH_NAMES[shown[1]].toLowerCase(Locale.ROOT) + (selected ? ", выбрано" : ""));
+            if (!past) {
+              number.setFocusable(true);
+              number.setOnClickListener(
+                  v -> {
+                    buzz(0);
+                    ymd[0] = shown[0];
+                    ymd[1] = shown[1];
+                    ymd[2] = day;
+                    refresh[0].run();
+                  });
+            }
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(40), 1);
+            p.setMargins(dp(1), dp(1), dp(1), dp(1));
+            line.addView(number, p);
+          }
+          if (line != null)
+            while (line.getChildCount() < 7)
+              line.addView(new View(MainActivity.this), new LinearLayout.LayoutParams(0, dp(40), 1));
+          View rule = new View(MainActivity.this);
+          rule.setBackgroundColor(LINE);
+          LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, dp(1));
+          rp.topMargin = dp(8);
+          rp.bottomMargin = dp(10);
+          body.addView(rule, rp);
+          body.addView(timeControl(hm, () -> refresh[0].run()));
+          // На кнопке — выбранный момент; прошедшее время подписано прямо на ней (подсказка внизу
+          // экрана была бы под затемнением листа).
+          if (popup[0] != null && popup[0].getButton(DialogInterface.BUTTON_POSITIVE) != null)
+            popup[0]
+                .getButton(DialogInterface.BUTTON_POSITIVE)
+                .setText(moment.get() <= now ? "Время уже прошло" : date(moment.get()));
+        };
+    popup[0] =
+        new Ask(this)
+            .asSheet()
+            .setTitle("Когда напомнить")
+            .setView(body)
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton("Готово", null)
+            .create();
+    refresh[0].run();
+    popup[0]
+        .getButton(DialogInterface.BUTTON_POSITIVE)
+        .setOnClickListener(
+            v -> {
+              long at = moment.get();
+              if (at <= System.currentTimeMillis()) {
+                buzz(2);
+                refresh[0].run();
+                return;
+              }
+              buzz(1);
+              popup[0].dismiss();
+              picked.accept(at);
+            });
+    popup[0].show();
   }
 
   private final class Glyph extends android.graphics.drawable.Drawable {
