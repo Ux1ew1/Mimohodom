@@ -27,6 +27,7 @@ public final class ReminderReceiver extends BroadcastReceiver {
     boolean snoozed = intent.getBooleanExtra("snoozed", false);
     try (Store store = new Store(c)) {
       Note n = store.note(id);
+      if (n != null && n.trashed > 0) n = null; // в корзине — как удалённая
       if (snoozed) {
         // Заметку удалили или перенесли событие, пока оповещение было отложено.
         long stored = Reminders.snoozedReminder(c, id);

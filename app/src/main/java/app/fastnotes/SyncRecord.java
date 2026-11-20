@@ -22,6 +22,8 @@ public final class SyncRecord {
   public boolean titleAuto, aiChecked;
   /** План заметки (JSON PlanTree). null — поля не было в записи: старая версия, свой план не трогаем. */
   public String plan;
+  /** Когда заметку положили в корзину (0 — не в корзине); null — поля не было в записи. */
+  public Long trashed;
   // папка
   public String name = "", key = "";
   public boolean auto;
@@ -89,7 +91,8 @@ public final class SyncRecord {
           .put("titleAuto", titleAuto)
           .put("aiChecked", aiChecked)
           .put("metadata", metadata)
-          .putOpt("plan", plan);
+          .putOpt("plan", plan)
+          .putOpt("trashed", trashed);
     } catch (JSONException e) {
       throw new IllegalStateException(e);
     }
@@ -119,6 +122,7 @@ public final class SyncRecord {
     r.aiChecked = o.optBoolean("aiChecked", false);
     r.metadata = o.optString("metadata", "");
     r.plan = o.has("plan") ? o.optString("plan", "") : null;
+    r.trashed = o.has("trashed") ? Math.max(0, o.optLong("trashed", 0)) : null;
     r.name = o.optString("name", "");
     r.key = o.optString("key", "");
     r.auto = o.optBoolean("auto", false);

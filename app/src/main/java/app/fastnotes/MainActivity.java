@@ -305,6 +305,13 @@ public final class MainActivity extends Activity
         () -> {
           // Вопросы помощника: после обновления или смены режима будильник ставится заново.
           CheckInJob.arm(getApplicationContext());
+          try (Store purgeStore = new Store(getApplicationContext())) {
+            // Корзина: заметки старше 30 дней удаляются насовсем, их картинки уберёт очистка ниже.
+            if (!purgeStore.purgeTrash(System.currentTimeMillis(), false).isEmpty())
+              CalendarSync.runAsync(getApplicationContext());
+          } catch (Exception ignored) {
+            // Не удалось сейчас — попробуем при следующем запуске.
+          }
           ImageFiles.cleanup(getApplicationContext(), 10 * 60_000L);
           java.io.File[] shots = new java.io.File(getCacheDir(), "camera").listFiles();
           if (shots != null)
@@ -493,7 +500,7 @@ public final class MainActivity extends Activity
       hideKeyboard();
       page = "settings";
       render();
-    } else if ("manager".equals(page)) {
+    } else if ("manager".equals(page) || "trash".equals(page)) {
       page = "notes";
       render();
     } else if ("chat".equals(page)) {
@@ -889,6 +896,7 @@ public final class MainActivity extends Activity
       case "edit" -> editor(editing);
       case "notes" -> notes();
       case "manager" -> managerPage();
+      case "trash" -> trashPage();
       case "chats" -> chats();
       case "chat" -> chatPage();
       case "settings" -> settings();
@@ -1495,6 +1503,23 @@ public final class MainActivity extends Activity
       content.addView(button("К заметкам", false, () -> navigate(0)));
       return;
     }
+    if (note != null && note.trashed > 0) {
+      editorActive = false;
+      heading(
+          "Заметка в корзине",
+          "«" + note.title + "». " + TrashPolicy.label(note.trashed, System.currentTimeMillis()) + ".");
+      content.addView(
+          button(
+              "Восстановить",
+              true,
+              () -> {
+                restoreNote(id);
+                render();
+              }));
+      gap(content, 8);
+      content.addView(button("К заметкам", false, () -> navigate(0)));
+      return;
+    }
     // Снимок для persistEditedNote: поля загружаются из базы, если черновика нет; с черновиком
     // остаётся снимок, сделанный при открытии этой заметки.
     if (id > 0
@@ -1774,25 +1799,170 @@ public final class MainActivity extends Activity
       io.execute(() -> ImageFiles.release(getApplicationContext(), name));
   }
 
+  /**
+   * Удаление заметки — в корзину на 30 дней. У верхней заметки колоды спрашиваем: колоду целиком
+   * или только сводку (исходные вернутся в список).
+   */
   private void deleteNote(long id) {
+    ManagerStore manager = new ManagerStore(store);
+    int inside = manager.top(id) == id ? manager.members(id).size() : 0;
+    if (inside == 0) {
+      moveToTrash(id, false);
+      return;
+    }
     new AlertDialog.Builder(this)
-        .setTitle("Удалить заметку?")
-        .setMessage("Заметка и её напоминание будут удалены без возможности восстановления.")
+        .setTitle("Удалить колоду?")
+        .setItems(
+            new String[] {
+              "Колоду целиком (" + (inside + 1) + " " + TrashPolicy.plural(inside + 1, "заметка", "заметки", "заметок") + ")",
+              "Только сводку, исходные вернуть в список"
+            },
+            (d, which) -> moveToTrash(id, which == 0))
+        .setNegativeButton("Отмена", null)
+        .show();
+  }
+
+  private void moveToTrash(long id, boolean wholeStack) {
+    List<Long> gone = store.trash(id, wholeStack);
+    for (long g : gone) Reminders.cancel(this, g);
+    if (!gone.isEmpty()) CalendarSync.runAsync(this);
+    clearDraft(id);
+    editorActive = false;
+    page = returnPage;
+    render();
+    toast(
+        gone.size() > 1
+            ? "В корзине: " + gone.size() + " " + TrashPolicy.plural(gone.size(), "заметка", "заметки", "заметок")
+            : "Заметка в корзине. Вернуть её можно 30 дней");
+  }
+
+  /** Возвращает заметку (и колоду, удалённую целиком) из корзины и заново ставит напоминания. */
+  private void restoreNote(long id) {
+    List<Long> back = store.restore(id);
+    long now = System.currentTimeMillis();
+    for (long r : back) {
+      Note n = store.note(r);
+      if (n != null && n.reminder > now) Reminders.schedule(this, n);
+    }
+    if (!back.isEmpty()) CalendarSync.runAsync(this);
+    toast(back.size() > 1 ? "Колода возвращена" : "Заметка возвращена");
+  }
+
+  /** Удаляет насовсем после подтверждения; картинки освобождаются. */
+  private void purgeNotes(String title, String message, java.util.function.Supplier<List<Note>> purge) {
+    new AlertDialog.Builder(this)
+        .setTitle(title)
+        .setMessage(message + " Вернуть их будет нельзя.")
         .setNegativeButton("Отмена", null)
         .setPositiveButton(
-            "Удалить",
+            "Удалить навсегда",
             (d, w) -> {
-              Note gone = store.note(id);
-              Reminders.cancel(this, id);
-              store.delete(id);
-              CalendarSync.runAsync(this);
-              clearDraft(id);
-              if (gone != null) releaseImage(gone.image, "");
-              editorActive = false;
-              page = returnPage;
+              List<Note> gone = purge.get();
+              for (Note n : gone) {
+                Reminders.cancel(this, n.id);
+                clearDraft(n.id);
+                releaseImage(n.image, "");
+              }
               render();
+              toast(gone.isEmpty() ? "Нечего удалять" : "Удалено навсегда: " + gone.size());
             })
         .show();
+  }
+
+  private void trashPage() {
+    LinearLayout header = row();
+    header.setGravity(Gravity.CENTER_VERTICAL);
+    TextView back =
+        quietAction(
+            "",
+            () -> {
+              page = "notes";
+              render();
+            });
+    back.setCompoundDrawablesWithIntrinsicBounds(new Glyph("back", GREEN, 22), null, null, null);
+    back.setContentDescription("Назад к заметкам");
+    header.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+    TextView title = text("Корзина", 26, INK);
+    title.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+    if (Build.VERSION.SDK_INT >= 28) title.setAccessibilityHeading(true);
+    header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+    content.addView(header);
+    secondary(content, "Каждая заметка удаляется насовсем через 30 дней после того, как попала сюда.");
+    gap(content, 12);
+    List<Note> items = store.trashed();
+    if (items.isEmpty()) {
+      secondary(content, "Корзина пуста.");
+      return;
+    }
+    content.addView(
+        compactButton(
+            "Очистить корзину",
+            false,
+            () ->
+                purgeNotes(
+                    "Очистить корзину?",
+                    "Все заметки из корзины будут удалены.",
+                    () -> store.purgeTrash(System.currentTimeMillis(), true))));
+    gap(content, 12);
+    long now = System.currentTimeMillis();
+    ManagerStore manager = new ManagerStore(store);
+    for (Note n : items) {
+      LinearLayout card = column();
+      pad(card, 14);
+      card.setBackground(shape(SURFACE, 12));
+      TextView name = text(n.title.isEmpty() ? "Без названия" : n.title, 16, INK);
+      name.setTypeface(null, Typeface.BOLD);
+      name.setMaxLines(2);
+      name.setEllipsize(TextUtils.TruncateAt.END);
+      card.addView(name);
+      String excerpt = Retrieval.excerpt(n.body, "", 140);
+      if (!excerpt.isEmpty()) {
+        gap(card, 4);
+        TextView body = text(excerpt, 13, MUTED);
+        body.setMaxLines(3);
+        body.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(body);
+      }
+      gap(card, 6);
+      int stacked = 0;
+      for (long member : manager.members(n.id)) {
+        Note m = store.note(member);
+        if (m != null && m.trashed == n.trashed) stacked++;
+      }
+      boolean wholeStack = stacked > 0;
+      card.addView(
+          text(
+              TrashPolicy.label(n.trashed, now)
+                  + (stacked > 0 ? " · колода, исходных: " + stacked : ""),
+              12,
+              stacked > 0 ? STACK_FG : RED));
+      gap(card, 8);
+      LinearLayout actions = row();
+      actions.addView(
+          compactButton(
+              "Восстановить",
+              true,
+              () -> {
+                restoreNote(n.id);
+                render();
+              }),
+          new LinearLayout.LayoutParams(0, -2, 1));
+      actions.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+      actions.addView(
+          compactButton(
+              "Удалить навсегда",
+              false,
+              () ->
+                  purgeNotes(
+                      "Удалить навсегда?",
+                      "«" + (n.title.isEmpty() ? "Без названия" : n.title) + "»"
+                          + (wholeStack ? " и исходные заметки колоды будут удалены." : " будет удалена."),
+                      () -> store.purge(n.id))),
+          new LinearLayout.LayoutParams(0, -2, 1));
+      card.addView(actions);
+      content.addView(card);
+      gap(content, 8);
+    }
   }
 
   private boolean persistEditedNote() {
@@ -2489,6 +2659,28 @@ public final class MainActivity extends Activity
     LinearLayout.LayoutParams videoParams = new LinearLayout.LayoutParams(-2, -2);
     videoParams.leftMargin = dp(8);
     chips.addView(videoChip, videoParams);
+    int inTrash = store.trashCount();
+    if (inTrash > 0) {
+      TextView trashChip = text("Корзина · " + inTrash, 14, MUTED);
+      trashChip.setTypeface(null, Typeface.BOLD);
+      trashChip.setGravity(Gravity.CENTER);
+      trashChip.setPadding(dp(12), dp(8), dp(14), dp(8));
+      trashChip.setCompoundDrawablesWithIntrinsicBounds(new Glyph("trash", MUTED, 18), null, null, null);
+      trashChip.setCompoundDrawablePadding(dp(6));
+      trashChip.setBackground(ripple(LINE, 18));
+      trashChip.setFocusable(true);
+      trashChip.setContentDescription("Корзина, заметок: " + inTrash);
+      trashChip.setOnClickListener(
+          v -> {
+            buzz(0);
+            hideKeyboard();
+            page = "trash";
+            render();
+          });
+      LinearLayout.LayoutParams trashParams = new LinearLayout.LayoutParams(-2, -2);
+      trashParams.leftMargin = dp(8);
+      chips.addView(trashChip, trashParams);
+    }
     scroller.addView(chips);
     return scroller;
   }

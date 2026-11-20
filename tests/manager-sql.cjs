@@ -58,11 +58,15 @@ check(!!pendingSql,'Production pending analysis SQL extracted');
 db.exec('ALTER TABLE notes ADD COLUMN ai_checked INTEGER DEFAULT 0');
 db.exec('ALTER TABLE notes ADD COLUMN updated INTEGER DEFAULT 1');
 db.exec('ALTER TABLE notes ADD COLUMN created INTEGER DEFAULT 1');
+db.exec('ALTER TABLE notes ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0');
 for(let id=45;id<=48;id++) db.prepare('INSERT INTO notes(id,title,body,created) VALUES(?,?,?,100)').run(id,'Авто','Текст');
 db.exec('INSERT INTO note_groups(top) VALUES(47)');
 db.exec('INSERT INTO note_members(note,top) VALUES(45,47),(46,47)');
 let candidates=db.prepare(pendingSql).all().map(n=>n.id);
 check(candidates.includes(48) && !candidates.some(id=>[45,46,47].includes(id)),'Standalone note eligible, whole stack excluded');
+db.exec('UPDATE notes SET trashed=5 WHERE id=48');
+check(!db.prepare(pendingSql).all().some(n=>n.id===48),'Note in trash is not analysed');
+db.exec('UPDATE notes SET trashed=0 WHERE id=48');
 // ManagerStore.topMap/membersMap (список читает стопки одним проходом) совпадают с top()/members() по заметке.
 const topOne=id=>{const r=db.prepare('SELECT top FROM note_groups WHERE top=? UNION SELECT top FROM note_members WHERE note=?').get(id,id);return r?r.top:0;};
 const topMap=new Map();
@@ -79,5 +83,16 @@ check(!candidates.some(id=>[45,46,47].includes(id)),'Expanded and edited stack r
 db.exec('DELETE FROM notes WHERE id=47');
 candidates=db.prepare(pendingSql).all().map(n=>n.id);
 check(candidates.includes(45) && candidates.includes(46),'Deleting top makes released standalone notes eligible');
+// Экран корзины (Store.trashed): исходные колоды, удалённой целиком, не показываются отдельно.
+const trashSql=[...storeSource.matchAll(/\.rawQuery\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+),/g)]
+  .map(x=>[...x[1].matchAll(/"(?:\\.|[^"\\])*"/g)].map(s=>JSON.parse(s[0])).join(''))
+  .find(sql=>sql.startsWith('SELECT * FROM notes WHERE trashed>0'));
+check(!!trashSql,'Production trash list SQL extracted');
+for(let id=60;id<=63;id++) db.prepare('INSERT INTO notes(id,title,body,created,trashed) VALUES(?,?,?,100,?)').run(id,'Т','т',id===63?0:500);
+db.exec('INSERT INTO note_groups(top) VALUES(60)');
+db.exec('INSERT INTO note_members(note,top) VALUES(61,60)');
+check(db.prepare(trashSql).all().map(n=>n.id).sort().join()==='60,62','Trash lists the stack top and loose notes, not members with it');
+db.exec('UPDATE notes SET trashed=0 WHERE id=60');
+check(db.prepare(trashSql).all().map(n=>n.id).sort().join()==='61,62','Member of a restored top is listed on its own');
 db.close();
 console.log(`PASS: ${checks} manager SQLite checks (production migration SQL)`);

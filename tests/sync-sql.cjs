@@ -282,4 +282,28 @@ const meta = db => db.prepare('SELECT * FROM sync_meta WHERE id=1').get();
   check(meta(db).seq === seq && after.sync_from === 'peer', 'план от другого устройства не перенумеровывается');
   check(db.prepare('PRAGMA table_info(chats)').all().some(c => c.name === 'note'), 'чат знает свою заметку');
 }
+
+// ---- Корзина (SQLite 13): перемещение уходит в обмен, время правки не сдвигается ----
+{
+  const db = build(false);
+  runSync(db);
+  for (const st of statements(method('void addPlans(SQLiteDatabase db)'))) db.exec(st.sql);
+  const trash = statements(method('void addTrash(SQLiteDatabase db)'));
+  check(trash.filter(x => x.sql.includes('CREATE TRIGGER')).length === 1, 'триггер корзины есть');
+  for (const st of trash) db.exec(st.sql);
+  db.prepare('INSERT INTO notes(title,body,created,updated,metadata,search_text) VALUES(?,?,?,?,?,?)').run('Старое', 'x', 10, 10, '{}', 'x');
+  stampPending(db);
+  const before = db.prepare('SELECT * FROM notes WHERE id=1').get();
+  db.prepare('UPDATE notes SET trashed=? WHERE id=1').run(5000);
+  const after = db.prepare('SELECT * FROM notes WHERE id=1').get();
+  check(after.sync_seq > before.sync_seq && after.updated === before.updated, 'в корзину: новая метка обмена, время правки прежнее');
+  const seq = meta(db).seq;
+  db.prepare('UPDATE notes SET trashed=0 WHERE id=1').run();
+  check(meta(db).seq === seq + 1, 'восстановление тоже уходит в обмен');
+  const seq2 = meta(db).seq;
+  db.prepare('UPDATE notes SET trashed=?,sync_seq=?,sync_from=? WHERE id=1').run(7000, 9999, 'peer');
+  check(meta(db).seq === seq2, 'корзина от соседа не перенумеровывается');
+  db.prepare('DELETE FROM notes WHERE id=1').run();
+  check(db.prepare("SELECT count(*) c FROM tombstones WHERE kind='note'").get().c === 1, 'удаление насовсем оставляет надгробие');
+}
 console.log(`sync-sql OK (${count} проверок)`);

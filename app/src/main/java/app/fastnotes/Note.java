@@ -16,6 +16,8 @@ public final class Note {
   public int suggestionLead = -1;
   /** Номер папки или {@link FolderPolicy#ALL}, если заметка лежит только в «Все заметки». */
   public long folder;
+  /** Когда заметку положили в корзину; 0 — не в корзине. */
+  public long trashed;
 
   public Note(long id, String title, String body, long created, long updated, long reminder) {
     this.id = id;

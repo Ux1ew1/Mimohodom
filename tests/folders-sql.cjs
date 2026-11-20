@@ -53,6 +53,10 @@ const kept = db.prepare('SELECT title,body,created,updated,folder FROM notes WHE
 check(kept.title === 'Заметка 3' && kept.created === 3000 && kept.updated === 6000 && kept.folder === 0, 'Migration keeps notes and puts them in All notes');
 check(db.prepare('SELECT count(*) AS n FROM notes_fts').get().n === 5, 'Search index untouched by migration');
 
+// Корзина (SQLite 13): FolderStore считает только заметки вне корзины, поэтому столбец нужен до запросов.
+const trashSql = statements(method(store, "void addTrash(SQLiteDatabase db)"));
+for (const s of trashSql) db.exec(s);
+
 // Запросы из FolderStore.
 const sqlOf = prefix => {
   const found = [...folders.matchAll(new RegExp(literal.source, 'g'))].map(m => join(m[1])).find(s => s.startsWith(prefix));
@@ -74,7 +78,11 @@ db.prepare(move).run(work, 1, 1);
 db.prepare(move).run(work, 2, 2);
 check(db.prepare('SELECT count(*) AS n FROM notes WHERE folder=?').get(work).n === 2, 'Notes move into a folder');
 check(db.prepare('SELECT updated FROM notes WHERE id=1').get().updated === 2000, 'Moving does not change updated');
-check(db.prepare(list).all().find(f => f.id === work)['(SELECT count(*) FROM notes n WHERE n.folder=f.id)'] === 2, 'Folder note counts');
+const folderCount = () => Object.values(db.prepare(list).all().find(f => f.id === work))[3];
+check(folderCount() === 2, 'Folder note counts');
+db.exec('UPDATE notes SET trashed=5 WHERE id=1');
+check(folderCount() === 1, 'Notes in trash are not counted in a folder');
+db.exec('UPDATE notes SET trashed=0 WHERE id=1');
 check(db.prepare('SELECT n.* FROM notes_fts JOIN notes n ON n.id=notes_fts.rowid WHERE notes_fts MATCH ?').all('заметка*').length === 5, 'Search still finds moved notes');
 
 // Стопка: итог переносит участников.
@@ -108,6 +116,11 @@ check(db.prepare("SELECT plan FROM notes WHERE id=1").get().plan === "", "Old no
 check(db.prepare("PRAGMA table_info(chats)").all().some(c => c.name === "note"), "Chats have note column");
 check(method(store, "void onCreate(SQLiteDatabase db)").includes("addPlans(db)"), "Fresh install also gets plans");
 check(/oldV < 12\)\s*addPlans\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 11 -> 12 adds plans");
-check(/super\(context, name, null, 12\)/.test(store), "Database version is 12");
+// Версия 13: корзина (столбец добавлен выше, перед запросами FolderStore).
+check(trashSql.length === 1 && trashSql[0].includes("trashed INTEGER NOT NULL DEFAULT 0"), "Read actual trash migration SQL");
+check(db.prepare("SELECT trashed FROM notes WHERE id=1").get().trashed === 0, "Old notes are not in trash");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addTrash(db)"), "Fresh install also gets trash");
+check(/oldV < 13\)\s*addTrash\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 12 -> 13 adds trash");
+check(/super\(context, name, null, 13\)/.test(store), "Database version is 13");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

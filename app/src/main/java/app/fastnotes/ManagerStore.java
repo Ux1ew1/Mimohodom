@@ -45,6 +45,7 @@ public final class ManagerStore {
     try (Cursor c =
         db.rawQuery(
             "SELECT n.id,r.revision,r.failed FROM notes n LEFT JOIN manager_review r ON r.note=n.id"
+                + " WHERE n.trashed=0"
                 + " ORDER BY CASE WHEN r.note IS NULL OR n.updated>r.attempted THEN 0 ELSE 1"
                 + " END,COALESCE(r.attempted,0),n.id",
             null)) {
@@ -368,7 +369,9 @@ public final class ManagerStore {
     for (int i = 0; i < sources.length(); i++) {
       JSONObject source = sources.getJSONObject(i);
       Note n = store.note(source.getLong("id"));
-      if (n == null || !ManagerAnalysis.fingerprint(n).equals(source.getString("revision")))
+      if (n == null
+          || n.trashed > 0
+          || !ManagerAnalysis.fingerprint(n).equals(source.getString("revision")))
         return false;
     }
     JSONObject groups = p.optJSONObject("groups");

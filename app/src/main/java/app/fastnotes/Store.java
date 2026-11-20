@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 12);
+    super(context, name, null, 13);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -80,6 +80,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addChatSync(db);
     addSuggestionLead(db);
     addPlans(db);
+    addTrash(db);
   }
 
   @Override
@@ -97,6 +98,27 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 10) addChatSync(db);
     if (oldV < 11) addSuggestionLead(db);
     if (oldV < 12) addPlans(db);
+    if (oldV < 13) addTrash(db);
+  }
+
+  /**
+   * Корзина: время, когда заметку удалили (0 — не в корзине). Заметка в корзине не видна нигде,
+   * кроме экрана корзины, и через 30 дней удаляется насовсем (TrashPolicy). Перемещение в корзину
+   * уходит в обмен, не сдвигая время правки. Безопасно вызывается повторно.
+   */
+  private void addTrash(SQLiteDatabase db) {
+    if (!hasColumn(db, "trashed"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0");
+    String stamp =
+        "UPDATE sync_meta SET seq=seq+1,hlc=max(hlc+1,CAST((julianday('now')-2440587.5)*86400000"
+            + " AS INTEGER)) WHERE id=1;";
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS notes_sync_trash AFTER UPDATE OF trashed ON notes WHEN"
+            + " new.sync_seq=old.sync_seq AND new.trashed<>old.trashed BEGIN "
+            + stamp
+            + "UPDATE notes SET uid=CASE WHEN new.uid='' THEN lower(hex(randomblob(16))) ELSE"
+            + " new.uid END,sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq"
+            + " FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
   }
 
   /**
@@ -401,13 +423,15 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     n.folder = c.getLong(16);
     int leadColumn = c.getColumnIndex("suggestion_lead");
     if (leadColumn >= 0) n.suggestionLead = c.getInt(leadColumn);
+    int trashColumn = c.getColumnIndex("trashed");
+    if (trashColumn >= 0) n.trashed = c.getLong(trashColumn);
     return n;
   }
 
   public List<Note> notes() {
     List<Note> out = new ArrayList<>();
     try (Cursor c =
-        getReadableDatabase().rawQuery("SELECT * FROM notes ORDER BY updated DESC,id DESC", null)) {
+        getReadableDatabase().rawQuery("SELECT * FROM notes WHERE trashed=0 ORDER BY updated DESC,id DESC", null)) {
       while (c.moveToNext()) out.add(read(c));
     }
     return out;
@@ -415,7 +439,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
 
   @Override
   public int totalNotes() {
-    try (Cursor c = getReadableDatabase().rawQuery("SELECT count(*) FROM notes", null)) {
+    try (Cursor c = getReadableDatabase().rawQuery("SELECT count(*) FROM notes WHERE trashed=0", null)) {
       c.moveToFirst();
       return c.getInt(0);
     }
@@ -439,7 +463,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
         getReadableDatabase()
             .rawQuery(
                 "SELECT n.* FROM notes_fts JOIN notes n ON n.id=notes_fts.rowid WHERE notes_fts"
-                    + " MATCH ? ORDER BY n.updated DESC LIMIT 200",
+                    + " MATCH ? AND n.trashed=0 ORDER BY n.updated DESC LIMIT 200",
                 new String[] {match})) {
       while (c.moveToNext()) result.add(read(c));
     }
@@ -461,7 +485,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
       try (Cursor c =
           getReadableDatabase()
               .rawQuery(
-                  "SELECT * FROM notes WHERE reminder>=? ORDER BY reminder LIMIT 16",
+                  "SELECT * FROM notes WHERE reminder>=? AND trashed=0 ORDER BY reminder LIMIT 16",
                   new String[] {"" + System.currentTimeMillis()})) {
         while (c.moveToNext()) {
           Note n = read(c);
@@ -471,7 +495,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (result.isEmpty())
       try (Cursor c =
           getReadableDatabase()
-              .rawQuery("SELECT * FROM notes ORDER BY updated DESC LIMIT 24", null)) {
+              .rawQuery("SELECT * FROM notes WHERE trashed=0 ORDER BY updated DESC LIMIT 24", null)) {
         while (c.moveToNext()) result.add(read(c));
       }
     return result;
@@ -510,7 +534,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT count(*) FROM notes WHERE suggestion>?",
+                "SELECT count(*) FROM notes WHERE suggestion>? AND trashed=0",
                 new String[] {"" + System.currentTimeMillis()})) {
       c.moveToFirst();
       return c.getInt(0);
@@ -553,9 +577,131 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     return id;
   }
 
+  /** Удаляет заметку насовсем, мимо корзины (слияние видео, удаление из корзины). */
   public void delete(long id) {
     getWritableDatabase().delete("notes", "id=?", new String[] {"" + id});
     new ManagerStore(this).cleanup();
+  }
+
+  /**
+   * Кладёт заметку в корзину и возвращает номера всех заметок, ушедших в корзину. Исходная заметка
+   * колоды выходит из неё. У верхней заметки колоды {@code wholeStack} решает: колода целиком (все
+   * исходные получают то же время и вернутся вместе с верхней) или только верхняя, а исходные
+   * возвращаются в список отдельными заметками.
+   */
+  public List<Long> trash(long id, boolean wholeStack) {
+    SQLiteDatabase db = getWritableDatabase();
+    List<Long> out = new ArrayList<>();
+    db.beginTransaction();
+    try {
+      Note n = note(id);
+      if (n == null || n.trashed > 0) return out;
+      ManagerStore manager = new ManagerStore(this);
+      long top = manager.top(id), now = System.currentTimeMillis();
+      if (top != 0 && top != id) {
+        db.delete("note_members", "note=?", new String[] {"" + id});
+        manager.cleanup();
+      } else if (top == id && wholeStack) {
+        for (long member : manager.members(id)) {
+          Note m = note(member);
+          if (m != null && m.trashed == 0) out.add(member);
+        }
+      } else if (top == id) db.delete("note_groups", "top=?", new String[] {"" + id});
+      out.add(0, id);
+      for (long target : out)
+        db.execSQL("UPDATE notes SET trashed=? WHERE id=? AND trashed=0", new Object[] {now, target});
+      db.setTransactionSuccessful();
+      return out;
+    } finally {
+      db.endTransaction();
+    }
+  }
+
+  /** Возвращает заметку из корзины; верхняя заметка колоды возвращается вместе с исходными. */
+  public List<Long> restore(long id) {
+    SQLiteDatabase db = getWritableDatabase();
+    List<Long> out = new ArrayList<>();
+    db.beginTransaction();
+    try {
+      Note n = note(id);
+      if (n == null || n.trashed == 0) return out;
+      out.add(id);
+      for (long member : new ManagerStore(this).members(id)) {
+        Note m = note(member);
+        if (m != null && m.trashed == n.trashed) out.add(member);
+      }
+      for (long target : out)
+        db.execSQL("UPDATE notes SET trashed=0 WHERE id=?", new Object[] {target});
+      db.setTransactionSuccessful();
+      return out;
+    } finally {
+      db.endTransaction();
+    }
+  }
+
+  /**
+   * Заметки корзины, новые сверху. Исходные заметки колоды, удалённой целиком, не показываются
+   * отдельно: они вернутся и удалятся вместе с верхней.
+   */
+  public List<Note> trashed() {
+    List<Note> out = new ArrayList<>();
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery(
+                "SELECT * FROM notes WHERE trashed>0 AND id NOT IN (SELECT m.note FROM note_members"
+                    + " m JOIN notes t ON t.id=m.top WHERE t.trashed>0) ORDER BY trashed DESC,id"
+                    + " DESC",
+                null)) {
+      while (c.moveToNext()) out.add(read(c));
+    }
+    return out;
+  }
+
+  public int trashCount() {
+    return trashed().size();
+  }
+
+  /** Удаляет заметку из корзины насовсем (с исходными колоды); возвращает удалённые заметки. */
+  public List<Note> purge(long id) {
+    SQLiteDatabase db = getWritableDatabase();
+    List<Note> out = new ArrayList<>();
+    db.beginTransaction();
+    try {
+      Note n = note(id);
+      if (n == null || n.trashed == 0) return out;
+      for (long member : new ManagerStore(this).members(id)) {
+        Note m = note(member);
+        if (m != null && m.trashed == n.trashed) out.add(m);
+      }
+      out.add(0, n);
+      for (Note gone : out) delete(gone.id);
+      db.setTransactionSuccessful();
+      return out;
+    } finally {
+      db.endTransaction();
+    }
+  }
+
+  /** Удаляет насовсем всё, что пролежало в корзине 30 дней ({@code all} — всю корзину сразу). */
+  public List<Note> purgeTrash(long now, boolean all) {
+    List<Note> out = new ArrayList<>();
+    for (Note n : trashed())
+      if (all || TrashPolicy.expired(n.trashed, now)) out.addAll(purge(n.id));
+    // Исходные, оставшиеся в корзине без верхней (например, после обмена), — по своему сроку.
+    List<Long> loose = new ArrayList<>();
+    try (Cursor c =
+        getReadableDatabase().rawQuery("SELECT id,trashed FROM notes WHERE trashed>0", null)) {
+      while (c.moveToNext())
+        if (all || TrashPolicy.expired(c.getLong(1), now)) loose.add(c.getLong(0));
+    }
+    for (long id : loose) {
+      Note n = note(id);
+      if (n != null) {
+        delete(id);
+        out.add(n);
+      }
+    }
+    return out;
   }
 
   /** Имена всех файлов изображений, на которые ссылаются заметки (в поле может быть список). */
@@ -613,7 +759,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT * FROM notes WHERE instr(body,?)>0"
+                "SELECT * FROM notes WHERE instr(body,?)>0 AND trashed=0"
                     + " AND id NOT IN (SELECT top FROM note_groups)"
                     + " AND id NOT IN (SELECT note FROM note_members)"
                     + " ORDER BY updated DESC LIMIT 100",
@@ -655,7 +801,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT id FROM notes WHERE instr(body,?)>0 ORDER BY id LIMIT 1",
+                "SELECT id FROM notes WHERE instr(body,?)>0 AND trashed=0 ORDER BY id LIMIT 1",
                 new String[] {text})) {
       return c.moveToFirst() ? c.getLong(0) : 0;
     }
@@ -666,7 +812,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT * FROM notes WHERE ai_checked<>updated"
+                "SELECT * FROM notes WHERE ai_checked<>updated AND trashed=0"
                     + " AND id NOT IN (SELECT top FROM note_groups)"
                     + " AND id NOT IN (SELECT note FROM note_members)"
                     + " ORDER BY created DESC LIMIT 5",
