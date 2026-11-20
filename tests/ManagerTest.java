@@ -108,6 +108,15 @@ public final class ManagerTest {
     check(parse(row, notes).size() == 1, "Truncated source allowed for links");
     JSONObject payload = ManagerAnalysis.payload(notes, "test");
     check(payload.getInt("max_tokens") == ManagerAnalysis.MAX_TOKENS && ManagerAnalysis.MAX_TOKENS == 1600, "Review output budget 1600 (stage 5 headroom)");
+    // Настройка «Максимальная длина ответа»: коротко 300, обычно 2000, подробно 3000.
+    check(ManagerAnalysis.answerTokens(0) == 2000, "No setting is normal 2000");
+    check(ManagerAnalysis.answerTokens(300) == 300, "Short stays 300");
+    check(ManagerAnalysis.answerTokens(600) == 2000, "Old normal 600 becomes 2000");
+    check(ManagerAnalysis.answerTokens(1200) == 3000, "Old detailed 1200 becomes 3000");
+    check(ManagerAnalysis.answerTokens(2000) == 2000 && ManagerAnalysis.answerTokens(3000) == 3000, "New values kept");
+    check(ManagerAnalysis.answerMode(300) == 0 && ManagerAnalysis.answerMode(600) == 1 && ManagerAnalysis.answerMode(1200) == 2, "Spinner position");
+    check(ManagerAnalysis.reviewTokens(300) == 1600, "Review never below 1600");
+    check(ManagerAnalysis.reviewTokens(0) == 2000 && ManagerAnalysis.reviewTokens(3000) == 3000, "Review follows the setting");
     JSONArray sent =
         new JSONArray(payload.getJSONArray("messages").getJSONObject(1).getString("content"));
     check(

@@ -71,6 +71,11 @@ final class ManagerJob {
     payload =
         ManagerAnalysis.withContext(
             payload, manager.knownGroups(batch), manager.answers(batch), stacks);
+    // Потолок ответа — по настройке «Максимальная длина ответа», но не меньше 1600.
+    payload.put(
+        "max_tokens",
+        ManagerAnalysis.reviewTokens(
+            context.getSharedPreferences("settings", 0).getInt("maxTokens", 0)));
     JSONObject response = Polza.request("chat/completions", key, payload);
     List<JSONObject> proposals;
     Map<Long, Analysis.Result> results = Collections.emptyMap();
@@ -83,8 +88,8 @@ final class ManagerJob {
       JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
       if ("length".equals(choice.optString("finish_reason")))
         throw new ReviewAnalysis.Failure(
-            "Ответ модели оборвался по лимиту 1600 токенов. Попробуйте другую модель или более"
-                + " короткие заметки.");
+            "Ответ модели оборвался по лимиту длины. Выберите «Подробно» в настройках ИИ или"
+                + " другую модель.");
       proposals =
           ManagerAnalysis.parse(
               choice.getJSONObject("message").getString("content"), batch, stacks);

@@ -5206,7 +5206,7 @@ public final class MainActivity extends Activity
         key,
         local ? LocalLlm.modelId(this) : prefs.getString("model", ""),
         query,
-        prefs.getInt("maxTokens", 600),
+        ManagerAnalysis.answerTokens(prefs.getInt("maxTokens", 0)),
         image,
         imageModel());
     render();
@@ -6829,18 +6829,17 @@ public final class MainActivity extends Activity
         secondary(content, "Максимальная длина ответа");
         Spinner tokens = new Spinner(this);
         String[] choices = {
-          "Коротко — до 300 токенов", "Обычно — до 600 токенов", "Подробно — до 1200 токенов"
+          "Коротко — до 300 токенов", "Обычно — до 2000 токенов", "Подробно — до 3000 токенов"
         };
         tokens.setAdapter(
             new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, choices));
-        int current = prefs.getInt("maxTokens", 600);
-        tokens.setSelection(current == 300 ? 0 : current == 1200 ? 2 : 1);
+        tokens.setSelection(ManagerAnalysis.answerMode(prefs.getInt("maxTokens", 0)));
         tokens.setMinimumHeight(dp(50));
         content.addView(tokens);
         onPick(
             tokens,
             position ->
-                prefs.edit().putInt("maxTokens", new int[] {300, 600, 1200}[position]).apply());
+                prefs.edit().putInt("maxTokens", ManagerAnalysis.ANSWER_TOKENS[position]).apply());
         gap(content, 12);
         secondary(
             content,

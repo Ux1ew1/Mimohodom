@@ -67,8 +67,8 @@ public final class ReviewAnalysis {
     JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
     if ("length".equals(choice.optString("finish_reason")))
       throw new Failure(
-          "Ответ модели оборвался по лимиту 1600 токенов. Попробуйте другую модель или более"
-              + " короткие заметки.");
+          "Ответ модели оборвался по лимиту длины. Выберите «Подробно» в настройках ИИ или"
+              + " другую модель.");
     String text = choice.getJSONObject("message").optString("content", "");
     if (text.trim().isEmpty())
       throw new Failure("Модель вернула пустой ответ. Попробуйте другую модель.");
