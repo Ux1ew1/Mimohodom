@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 15);
+    super(context, name, null, 16);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -83,6 +83,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addTrash(db);
     AgentLog.create(db);
     addReminderTimes(db);
+    addChatOrigin(db);
   }
 
   @Override
@@ -103,6 +104,47 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (oldV < 13) addTrash(db);
     if (oldV < 14) AgentLog.create(db);
     if (oldV < 15) addReminderTimes(db);
+    if (oldV < 16) {
+      addChatOrigin(db);
+      moveCheckInMarks(db);
+    }
+  }
+
+  /**
+   * Кто начал чат ({@link ChatOrigin}: user, agent, note) вместо настройки {@code checkInChat.<id>},
+   * чтобы цвет и подпись чата совпадали на всех устройствах. Смена происхождения или заметки чата
+   * уходит в обмен. Безопасно вызывается повторно.
+   */
+  private void addChatOrigin(SQLiteDatabase db) {
+    if (!hasColumn(db, "chats", "origin"))
+      db.execSQL("ALTER TABLE chats ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'");
+    String stamp =
+        "UPDATE sync_meta SET seq=seq+1,hlc=max(hlc+1,CAST((julianday('now')-2440587.5)*86400000"
+            + " AS INTEGER)) WHERE id=1;";
+    db.execSQL(
+        "CREATE TRIGGER IF NOT EXISTS chats_sync_link AFTER UPDATE OF note,origin ON chats WHEN"
+            + " new.sync_seq=old.sync_seq AND (new.note<>old.note OR new.origin<>old.origin) BEGIN "
+            + stamp
+            + "UPDATE chats SET sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),sync_seq=(SELECT seq"
+            + " FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id;END");
+    db.execSQL("UPDATE chats SET origin='note' WHERE note<>0 AND origin='user'");
+  }
+
+  /**
+   * Перенос прежних отметок «чат начат помощником» из настроек в {@code chats.origin}. Сами ключи
+   * остаются (их больше никто не читает): если обновление базы не завершится, отметки не пропадут.
+   */
+  private void moveCheckInMarks(SQLiteDatabase db) {
+    SharedPreferences prefs = appContext.getSharedPreferences("settings", 0);
+    for (Map.Entry<String, ?> e : prefs.getAll().entrySet()) {
+      if (!e.getKey().startsWith("checkInChat.") || !Boolean.TRUE.equals(e.getValue())) continue;
+      try {
+        long id = Long.parseLong(e.getKey().substring("checkInChat.".length()));
+        db.execSQL("UPDATE chats SET origin='agent' WHERE id=?", new Object[] {id});
+      } catch (NumberFormatException ignored) {
+        // повреждённый ключ пропускаем
+      }
+    }
   }
 
   /**
@@ -1003,10 +1045,26 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   public long newChat(String title) {
+    return newChat(title, ChatOrigin.USER, 0);
+  }
+
+  /** Новый чат с происхождением ({@link ChatOrigin}) и заметкой (0 — без заметки) одной записью. */
+  public long newChat(String title, String origin, long note) {
     ContentValues v = new ContentValues();
     v.put("title", title);
     v.put("created", System.currentTimeMillis());
+    v.put("origin", ChatOrigin.clean(origin));
+    v.put("note", note);
     return getWritableDatabase().insertOrThrow("chats", null, v);
+  }
+
+  /** Кто начал чат: {@link ChatOrigin#USER}, {@link ChatOrigin#AGENT} или {@link ChatOrigin#NOTE}. */
+  public String chatOrigin(long chat) {
+    try (Cursor c =
+        getReadableDatabase()
+            .rawQuery("SELECT origin FROM chats WHERE id=?", new String[] {"" + chat})) {
+      return c.moveToFirst() ? ChatOrigin.clean(c.getString(0)) : ChatOrigin.USER;
+    }
   }
 
   /** Сохранённый план заметки (JSON PlanTree) или пустая строка. */
@@ -1027,6 +1085,46 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("plan", plan == null ? "" : plan);
     if (getWritableDatabase().update("notes", v, "id=?", new String[] {"" + note}) != 1)
       throw new IllegalStateException("Заметка уже удалена");
+  }
+
+  /**
+   * «Применить» в чате по заметке: правка (название, дописать, даты) и/или план из черновика
+   * сообщения одной транзакцией, черновик закрывается. Отметки плана, поставленные после ответа
+   * агента, сохраняются. Возвращает заметку до правки — по ней вызывающий переставит будильник.
+   */
+  public Note applyNoteDraft(long message, long noteId, NoteEdit edit, PlanTree plan) {
+    SQLiteDatabase db = getWritableDatabase();
+    db.beginTransaction();
+    try {
+      Note old = note(noteId);
+      if (old == null || old.trashed > 0) throw new IllegalStateException("Заметку удалили");
+      if (edit != null) {
+        NoteEdit.Result r =
+            edit.apply(
+                old.title,
+                old.body,
+                old.reminder,
+                old.repeat,
+                old.reminderTimes,
+                System.currentTimeMillis());
+        boolean changed =
+            !r.title.equals(old.title)
+                || !r.body.equals(old.body.trim())
+                || r.reminder != old.reminder
+                || r.repeat != old.repeat
+                || !r.times.equals(old.reminderTimes);
+        if (changed) save(noteId, r.title, r.body, r.reminder, r.repeat, old.lead, r.times);
+      }
+      if (plan != null) {
+        plan.keepDone(PlanTree.parse(plan(noteId)));
+        savePlan(noteId, plan.toJson());
+      }
+      dismissDraft(message);
+      db.setTransactionSuccessful();
+      return old;
+    } finally {
+      db.endTransaction();
+    }
   }
 
   /** Отметки «План 3/8» всех заметок с планом одним запросом — для списка заметок. */
@@ -1053,9 +1151,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   public long newNoteChat(long note, String title) {
-    long id = newChat(title);
-    getWritableDatabase().execSQL("UPDATE chats SET note=? WHERE id=?", new Object[] {note, id});
-    return id;
+    return newChat(title, ChatOrigin.NOTE, note);
   }
 
   /** Заметка, к которой привязан чат, или 0. */
@@ -1071,9 +1167,12 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     List<String[]> out = new ArrayList<>();
     try (Cursor c =
         getReadableDatabase()
-            .rawQuery("SELECT id,title,created,note FROM chats ORDER BY id DESC", null)) {
+            .rawQuery("SELECT id,title,created,note,origin FROM chats ORDER BY id DESC", null)) {
       while (c.moveToNext())
-        out.add(new String[] {c.getString(0), c.getString(1), c.getString(2), c.getString(3)});
+        out.add(
+            new String[] {
+              c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4)
+            });
     }
     return out;
   }
@@ -1166,7 +1265,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     SQLiteDatabase db = getWritableDatabase();
     db.beginTransaction();
     try {
-      long id = newChat(title);
+      long id = newChat(title, ChatOrigin.AGENT, 0);
       message(id, "assistant", question, new JSONArray());
       db.setTransactionSuccessful();
       return id;

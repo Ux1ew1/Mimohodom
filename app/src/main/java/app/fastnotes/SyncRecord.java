@@ -34,6 +34,11 @@ public final class SyncRecord {
   public boolean auto;
   // чат (title и created общие с заметкой) и сообщение (body и created общие)
   public boolean checkin;
+  /**
+   * Кто начал чат ({@link ChatOrigin}) и uid его заметки (пусто — без заметки); null — поля не было
+   * в записи (компьютер, телефон до 0.10.11): своё значение не трогаем.
+   */
+  public String origin, noteUid;
   public String chat = "", role = "", draft = "";
   public JSONArray sources = new JSONArray();
   // стопка: uid исходных заметок (uid записи — верхняя заметка)
@@ -75,7 +80,12 @@ public final class SyncRecord {
       o.put("deleted", false);
       if (isFolder())
         return o.put("name", name).put("key", key).put("created", created).put("auto", auto);
-      if (isChat()) return o.put("title", title).put("created", created).put("checkin", checkin);
+      if (isChat())
+        return o.put("title", title)
+            .put("created", created)
+            .put("checkin", checkin)
+            .putOpt("origin", origin)
+            .putOpt("note", noteUid);
       if (isMessage())
         return o.put("chat", chat)
             .put("role", role)
@@ -134,6 +144,10 @@ public final class SyncRecord {
     r.key = o.optString("key", "");
     r.auto = o.optBoolean("auto", false);
     r.checkin = o.optBoolean("checkin", false);
+    if ("chat".equals(r.kind)) {
+      r.origin = o.has("origin") ? o.optString("origin", "") : null;
+      r.noteUid = o.has("note") ? o.optString("note", "") : null;
+    }
     r.chat = o.optString("chat", "");
     r.role = o.optString("role", "");
     r.draft = o.optString("draft", "");

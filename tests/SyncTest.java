@@ -109,6 +109,13 @@ public final class SyncTest {
     chat.created = 5;
     SyncRecord chatBack = SyncRecord.fromJson(chat.toJson());
     check(chatBack.isChat() && chatBack.title.equals("Про борщ") && chatBack.created == 5, "запись чата");
+    check(chatBack.origin == null && chatBack.noteUid == null, "чат без происхождения и заметки — полей нет");
+    chat.origin = "note";
+    chat.noteUid = "n42";
+    SyncRecord linked = SyncRecord.fromJson(new JSONObject(chat.toJson().toString()));
+    check("note".equals(linked.origin) && "n42".equals(linked.noteUid), "происхождение и заметка чата");
+    chat.origin = null;
+    chat.noteUid = null;
     SyncRecord message = new SyncRecord();
     message.kind = "message";
     message.uid = "m1";

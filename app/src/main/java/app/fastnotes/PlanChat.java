@@ -32,6 +32,8 @@ public final class PlanChat {
     public List<String> options = new ArrayList<>();
     /** Предложенный план или null, если в этом ответе плана нет. */
     public PlanTree plan;
+    /** Предложенная правка самой заметки или null. */
+    public NoteEdit edit;
   }
 
   public static final class Split {
@@ -63,14 +65,21 @@ public final class PlanChat {
         + " plan. Если план уже есть и пользователь просит изменить его — пришли plan целиком с"
         + " изменениями, неизменённые пункты и отметки done сохрани.\n"
         + "5. Не выдумывай факты: чего не знаешь, оставь шагом «Уточнить …».\n"
+        + "6. Если пользователь просит изменить саму заметку — переименовать, дописать в неё"
+        + " текст, напомнить о дате — пришли edit: {\"title\":\"новое название или пусто\","
+        + "\"append\":\"текст, который дописать в конец, или пусто\",\"remind\":[\"ГГГГ-ММ-ДД"
+        + " ЧЧ:ММ\"],\"replace\":false}. replace=true, только если пользователь просит заменить"
+        + " прежние напоминания, иначе даты добавятся к ним. Только то, о чём просили; сам ты"
+        + " ничего не меняешь — пользователь применит правку кнопкой. В say коротко скажи, что"
+        + " изменится. Без такой просьбы edit — null.\n"
         + "Вид пункта kind: step — действие (внутри могут быть шаги); time — дата или срок, поле at"
         + " «ГГГГ-ММ-ДД ЧЧ:ММ» или «ГГГГ-ММ-ДД»; person — человек (who — имя, text — его роль или"
         + " задача); item — что взять или подготовить; place — место; note — важная пометка."
         + " Ответственного за шаг пиши в who. До 3 уровней вложенности, до 60 пунктов.\n"
         + "Ответ — только JSON без текста вокруг: {\"say\":\"короткий ответ или вопрос по-русски на"
-        + " «вы»\",\"options\":[\"…\"],\"plan\":null}. С планом: {\"say\":\"…\",\"options\":[],"
-        + "\"plan\":{\"nodes\":[{\"kind\":\"step\",\"text\":\"…\",\"who\":\"\",\"at\":\"\","
-        + "\"done\":false,\"children\":[]}]}}";
+        + " «вы»\",\"options\":[\"…\"],\"plan\":null,\"edit\":null}. С планом: {\"say\":\"…\","
+        + "\"options\":[],\"plan\":{\"nodes\":[{\"kind\":\"step\",\"text\":\"…\",\"who\":\"\","
+        + "\"at\":\"\",\"done\":false,\"children\":[]}]},\"edit\":null}";
   }
 
   /** Сведения о заметке: текст берётся свежим при каждом запросе, а не на момент создания чата. */
@@ -122,6 +131,11 @@ public final class PlanChat {
 
   /** Разбирает ответ модели. Не JSON — показываем как обычный текст без вариантов и плана. */
   public static Reply parse(String raw, ZoneId zone) {
+    return parse(raw, zone, System.currentTimeMillis());
+  }
+
+  /** Как {@link #parse(String, ZoneId)}; {@code now} отсекает прошедшие даты правки. */
+  public static Reply parse(String raw, ZoneId zone, long now) {
     Reply r = new Reply();
     String text = raw == null ? "" : raw.trim();
     int start = text.indexOf('{'), end = text.lastIndexOf('}');
@@ -132,7 +146,7 @@ public final class PlanChat {
       } catch (Exception ignored) {
         o = null;
       }
-    if (o == null || !(o.has("say") || o.has("plan") || o.has("options"))) {
+    if (o == null || !(o.has("say") || o.has("plan") || o.has("options") || o.has("edit"))) {
       r.say = clipSay(text);
       return r;
     }
@@ -143,8 +157,14 @@ public final class PlanChat {
       PlanTree tree = PlanTree.fromModel(plan, zone);
       if (!tree.isEmpty()) r.plan = tree;
     }
-    if (r.plan != null) r.options.clear(); // к плану — кнопки «Сохранить», а не варианты
-    if (r.say.isEmpty()) r.say = r.plan != null ? "Вот план. Сохранить его в заметку?" : "Готово.";
+    r.edit = NoteEdit.fromModel(o.optJSONObject("edit"), zone, now);
+    // К плану и правке — кнопки «Сохранить»/«Применить», а не варианты ответа.
+    if (r.plan != null || r.edit != null) r.options.clear();
+    if (r.say.isEmpty())
+      r.say =
+          r.edit != null
+              ? "Применить изменения к заметке?"
+              : r.plan != null ? "Вот план. Сохранить его в заметку?" : "Готово.";
     return r;
   }
 

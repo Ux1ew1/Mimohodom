@@ -50,14 +50,6 @@ public final class CheckInJob extends JobService {
     return CheckIn.every(prefs(c).getInt(EVERY, CheckIn.DEFAULT_EVERY));
   }
 
-  public static boolean isCheckInChat(Context c, long chat) {
-    return chat > 0 && prefs(c).getBoolean("checkInChat." + chat, false);
-  }
-
-  public static void forgetChat(Context c, long chat) {
-    prefs(c).edit().remove("checkInChat." + chat).apply();
-  }
-
   /** Сообщение о последнем запуске для экрана настроек. */
   public static String status(Context c) {
     return prefs(c).getString(STATUS, "");
@@ -248,7 +240,6 @@ public final class CheckInJob extends JobService {
       long chat = store.newAssistantChat(Note.autoTitle("", question), question);
       prefs(c)
           .edit()
-          .putBoolean("checkInChat." + chat, true)
           .putLong(LAST, now)
           .putLong(CHAT, chat)
           .putInt(MISSED, streak)
@@ -279,7 +270,7 @@ public final class CheckInJob extends JobService {
     for (String[] chat : store.chats()) {
       long id = Long.parseLong(chat[0]);
       if (past.size() >= 3) break;
-      if (isCheckInChat(c, id))
+      if (ChatOrigin.AGENT.equals(chat.length > 4 ? chat[4] : ""))
         past.add(CheckIn.pastLine(store.firstMessage(id), store.userText(id)));
     }
     return CheckIn.prompt(now, zone, events, recent, past);

@@ -64,6 +64,7 @@ jobs:
           ./scripts/test-reminders.ps1
           ./scripts/test-reminder-batch.ps1
           ./scripts/test-plan.ps1
+          ./scripts/test-note-chat.ps1
           ./scripts/test-trash.ps1
           ./scripts/test-agent-actions.ps1
           ./scripts/test-images.ps1

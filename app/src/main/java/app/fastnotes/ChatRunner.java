@@ -74,10 +74,11 @@ public final class ChatRunner {
     usage = "";
     Context app = context.getApplicationContext();
     boolean local = LocalLlm.enabled(context);
-    boolean checkin = CheckInJob.isCheckInChat(context, chat);
     worker.execute(
         () -> {
           try (Store store = new Store(app, local)) {
+            // Чат начат помощником (вопрос «как дела»): помнит факты из ответов.
+            boolean checkin = ChatOrigin.AGENT.equals(store.chatOrigin(chat));
             JSONArray history = store.messages(chat);
             String stored = ChatImages.attach(query, ImageList.parse(image));
             String currentContent = stored;
@@ -350,11 +351,16 @@ public final class ChatRunner {
     if ("length".equals(choice.optString("finish_reason")) && !text.trim().endsWith("}"))
       throw new java.io.IOException(
           "Ответ модели оборвался. Попросите план короче или выберите другую модель.");
-    PlanChat.Reply reply = PlanChat.parse(text, zone);
+    PlanChat.Reply reply = PlanChat.parse(text, zone, System.currentTimeMillis());
     JSONObject draft = null;
-    if (reply.plan != null) {
-      reply.plan.keepDone(current);
-      draft = new JSONObject().put("plan", reply.plan.toJson()).put("note", noteId);
+    // План и правка заметки не применяются сами: они ложатся в черновик, применяет пользователь.
+    if (reply.plan != null || reply.edit != null) {
+      draft = new JSONObject().put("note", noteId);
+      if (reply.plan != null) {
+        reply.plan.keepDone(current);
+        draft.put("plan", reply.plan.toJson());
+      }
+      if (reply.edit != null) draft.put("edit", reply.edit.toJson());
     }
     if (!store.chatExists(chat)) return;
     store.message(chat, "assistant", PlanChat.store(reply), new JSONArray(), draft);

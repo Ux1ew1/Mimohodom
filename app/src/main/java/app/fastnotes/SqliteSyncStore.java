@@ -541,8 +541,10 @@ public final class SqliteSyncStore implements SyncStore {
     String[] args = {"" + since, "" + snapshot, exclude, "" + (limit + 1)};
     try (Cursor c =
         db().rawQuery(
-                "SELECT uid,title,created,sync_ts,sync_seq FROM chats WHERE sync_seq>? AND"
-                    + " sync_seq<=? AND sync_from<>? AND uid<>'' ORDER BY sync_seq LIMIT ?",
+                "SELECT c.uid,c.title,c.created,c.sync_ts,c.sync_seq,c.origin,"
+                    + "ifnull((SELECT n.uid FROM notes n WHERE n.id=c.note),'') FROM chats c WHERE"
+                    + " c.sync_seq>? AND c.sync_seq<=? AND c.sync_from<>? AND c.uid<>'' ORDER BY"
+                    + " c.sync_seq LIMIT ?",
                 args)) {
       while (c.moveToNext()) {
         SyncRecord r = new SyncRecord();
@@ -551,6 +553,9 @@ public final class SqliteSyncStore implements SyncStore {
         r.title = c.getString(1);
         r.created = c.getLong(2);
         r.ts = c.getLong(3);
+        r.origin = ChatOrigin.clean(c.getString(5));
+        r.checkin = ChatOrigin.checkin(r.origin);
+        r.noteUid = c.getString(6);
         items.add(new Item(c.getLong(4), r));
       }
     }
@@ -674,10 +679,13 @@ public final class SqliteSyncStore implements SyncStore {
   private boolean applyChat(String peer, SyncRecord r) {
     SQLiteDatabase db = db();
     long localId = -1, localTs = 0;
-    try (Cursor c = db.rawQuery("SELECT id,sync_ts FROM chats WHERE uid=?", new String[] {r.uid})) {
+    String localOrigin = null;
+    try (Cursor c =
+        db.rawQuery("SELECT id,sync_ts,origin FROM chats WHERE uid=?", new String[] {r.uid})) {
       if (c.moveToFirst()) {
         localId = c.getLong(0);
         localTs = c.getLong(1);
+        localOrigin = c.getString(2);
       }
     }
     if (r.deleted) {
@@ -701,6 +709,10 @@ public final class SqliteSyncStore implements SyncStore {
     ContentValues v = new ContentValues();
     v.put("title", r.title.trim().isEmpty() ? "Чат" : r.title.trim());
     v.put("created", r.created);
+    v.put("origin", ChatOrigin.fromRecord(r.origin, r.checkin, localOrigin));
+    // Заметка чата по uid; запись без поля (компьютер) свою привязку не трогает.
+    if (r.noteUid != null)
+      v.put("note", r.noteUid.isEmpty() ? 0 : Math.max(0, scalar("SELECT id FROM notes WHERE uid=?", r.noteUid)));
     v.put("sync_ts", r.ts);
     v.put("sync_from", peer);
     if (localId >= 0) {

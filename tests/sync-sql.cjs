@@ -328,4 +328,33 @@ const meta = db => db.prepare('SELECT * FROM sync_meta WHERE id=1').get();
   db.prepare('UPDATE notes SET reminder_times=?,sync_seq=?,sync_from=? WHERE id=1').run('[300]', 9999, 'peer');
   check(meta(db).seq === seq, 'список от соседа не перенумеровывается');
 }
+// ---- Кто начал чат (SQLite 16): смена происхождения или заметки уходит в обмен ----
+{
+  const db = build(false);
+  runSync(db);
+  runChatSync(db);
+  for (const st of statements(method('void addPlans(SQLiteDatabase db)'))) db.exec(st.sql);
+  db.prepare("INSERT INTO chats(title,created) VALUES('Обычный',100)").run();
+  db.prepare("INSERT INTO chats(title,created) VALUES('План: ремонт',200)").run();
+  db.prepare('UPDATE chats SET note=7 WHERE id=2').run();
+  const origin = statements(method('void addChatOrigin(SQLiteDatabase db)'));
+  check(origin.length === 3 && origin[0].sql.includes("origin TEXT NOT NULL DEFAULT 'user'"), 'столбец, триггер и пометка чатов по заметке');
+  const seq0 = meta(db).seq;
+  for (const st of origin) db.exec(st.sql);
+  db.exec(origin[1].sql); db.exec(origin[2].sql); // повторно безопасно
+  check(db.prepare('SELECT origin FROM chats WHERE id=1').get().origin === 'user', 'обычный чат — user');
+  check(db.prepare('SELECT origin FROM chats WHERE id=2').get().origin === 'note', 'чат по заметке помечен note');
+  check(meta(db).seq === seq0 + 1, 'пометка при обновлении уходит в обмен');
+  db.prepare("UPDATE chats SET origin='agent' WHERE id=1").run();
+  const c1 = db.prepare('SELECT * FROM chats WHERE id=1').get();
+  check(c1.sync_seq === meta(db).seq && c1.sync_from === '', 'перенос пометки помощника двигает seq');
+  const seq1 = meta(db).seq;
+  db.prepare("UPDATE chats SET origin='agent' WHERE id=1").run();
+  check(meta(db).seq === seq1, 'то же происхождение seq не двигает');
+  db.prepare("UPDATE chats SET origin='note',note=3,sync_seq=999,sync_from='peer' WHERE id=1").run();
+  check(meta(db).seq === seq1, 'чат от соседа не перенумеровывается');
+  db.prepare("INSERT INTO chats(title,created,origin,note) VALUES('Новый по заметке',300,'note',5)").run();
+  check(db.prepare("SELECT origin FROM chats WHERE id=3").get().origin === 'note', 'новый чат сразу с происхождением');
+}
+
 console.log(`sync-sql OK (${count} проверок)`);

@@ -3838,16 +3838,19 @@ public final class MainActivity extends Activity
             any = true;
             long id = Long.parseLong(c[0]);
             // Чаты, начатые помощником, — фиолетовые, как его итоги; чаты по заметке подписаны.
-            boolean byAgent = CheckInJob.isCheckInChat(this, id);
-            boolean byNote = c.length > 3 && !"0".equals(c[3]);
+            // Происхождение хранится в chats.origin и приходит с компьютера вместе с чатом.
+            String origin = c.length > 4 ? ChatOrigin.clean(c[4]) : ChatOrigin.USER;
+            boolean byAgent = ChatOrigin.AGENT.equals(origin);
+            boolean byNote = !byAgent && (ChatOrigin.NOTE.equals(origin) || (c.length > 3 && !"0".equals(c[3])));
             LinearLayout item = row();
             item.setPadding(dp(12), dp(6), dp(4), dp(6));
             item.setBackground(shape(byAgent ? STACK_BG : SURFACE, 10));
             LinearLayout words = column();
             if (byAgent || byNote) {
-              TextView origin = text(byAgent ? "От помощника" : "По заметке", 10, byAgent ? STACK_FG : GREEN);
-              origin.setTypeface(null, Typeface.BOLD);
-              words.addView(origin);
+              TextView mark =
+                  text(ChatOrigin.label(byAgent ? ChatOrigin.AGENT : ChatOrigin.NOTE), 10, byAgent ? STACK_FG : GREEN);
+              mark.setTypeface(null, Typeface.BOLD);
+              words.addView(mark);
             }
             TextView title = text(c[1], 14, INK);
             title.setMaxLines(2);
@@ -3935,7 +3938,6 @@ public final class MainActivity extends Activity
                           prefs.edit().remove("chatDraft." + id).remove("chatImage." + id).apply();
                           for (String name : chatPictures)
                             io.execute(() -> ImageFiles.release(getApplicationContext(), name));
-                          CheckInJob.forgetChat(this, id);
                           if (chat == id) {
                             chatInput = null;
                             chat = 0;
@@ -4000,7 +4002,10 @@ public final class MainActivity extends Activity
     JSONArray history = chat == 0 ? new JSONArray() : store.messages(chat);
     if (history.length() == 0 && planOf != null) {
       gap(messages, 12);
-      chatNote(messages, "Агент задаст несколько вопросов по задаче и соберёт план.");
+      chatNote(
+          messages,
+          "Агент задаст несколько вопросов по задаче и соберёт план. Можно попросить переименовать"
+              + " заметку, дописать в неё или напомнить о дате — изменения применяются кнопкой.");
       gap(messages, 6);
       messages.addView(
           compactButton(
@@ -4094,8 +4099,10 @@ public final class MainActivity extends Activity
           }
         }
         String draftJson = m.optString("draft", "");
-        if (!user && !draftJson.isEmpty() && new JSONObject(draftJson).has("plan")) {
-          planDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
+        if (!user
+            && !draftJson.isEmpty()
+            && (new JSONObject(draftJson).has("plan") || new JSONObject(draftJson).has("edit"))) {
+          noteDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
         } else if (!user && !draftJson.isEmpty() && ReminderBatch.isBatch(new JSONObject(draftJson))) {
           reminderBatchView(bubble, m.getLong("id"), new JSONObject(draftJson));
         } else if (!user && !draftJson.isEmpty()) {
@@ -4734,35 +4741,63 @@ public final class MainActivity extends Activity
         .show();
   }
 
-  /** Черновик плана в ответе агента: пункты текстом и «Сохранить план». */
-  private void planDraftView(LinearLayout bubble, long message, JSONObject draft) {
+  /**
+   * Черновик в ответе агента в чате по заметке: план и/или правка заметки (название, дописать,
+   * даты). Ничего не меняется без нажатия «Сохранить план» / «Применить».
+   */
+  private void noteDraftView(LinearLayout bubble, long message, JSONObject draft) {
     long noteId = draft.optLong("note");
-    PlanTree plan = PlanTree.parse(draft.optString("plan"));
+    PlanTree plan = draft.has("plan") ? PlanTree.parse(draft.optString("plan")) : null;
+    if (plan != null && plan.isEmpty()) plan = null;
+    NoteEdit edit = NoteEdit.fromJson(draft.optJSONObject("edit"));
+    java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+    if (edit != null) {
+      gap(bubble, 6);
+      chatNote(bubble, "Изменения заметки");
+      StringBuilder shown = new StringBuilder();
+      for (String line : edit.describe(zone)) shown.append(shown.length() > 0 ? "\n" : "").append("• ").append(line);
+      TextView lines = text(shown.toString(), 13, INK);
+      lines.setLineSpacing(dp(2), 1);
+      lines.setTextIsSelectable(true);
+      bubble.addView(lines);
+    }
+    if (plan != null) {
+      gap(bubble, 6);
+      chatNote(bubble, "Черновик плана");
+      List<String> outlineLines = plan.outline(zone);
+      StringBuilder shown = new StringBuilder();
+      for (int k = 0; k < outlineLines.size() && k < 40; k++)
+        shown.append(k > 0 ? "\n" : "").append(outlineLines.get(k));
+      if (outlineLines.size() > 40) shown.append("\n… ещё ").append(outlineLines.size() - 40);
+      TextView outline = text(shown.toString(), 13, INK);
+      outline.setLineSpacing(dp(2), 1);
+      outline.setTextIsSelectable(true);
+      bubble.addView(outline);
+    }
+    if (edit == null && plan == null) return;
     gap(bubble, 6);
-    chatNote(bubble, "Черновик плана");
-    List<String> lines = plan.outline(java.time.ZoneId.systemDefault());
-    StringBuilder shown = new StringBuilder();
-    for (int k = 0; k < lines.size() && k < 40; k++) shown.append(k > 0 ? "\n" : "").append(lines.get(k));
-    if (lines.size() > 40) shown.append("\n… ещё ").append(lines.size() - 40);
-    TextView outline = text(shown.toString(), 13, INK);
-    outline.setLineSpacing(dp(2), 1);
-    outline.setTextIsSelectable(true);
-    bubble.addView(outline);
-    gap(bubble, 6);
+    PlanTree finalPlan = plan;
     LinearLayout row = row();
     row.addView(
         compactButton(
-            "Сохранить план",
+            edit == null ? "Сохранить план" : "Применить",
             true,
             () -> {
               try {
-                // Отметки, поставленные после ответа агента, не теряются.
-                plan.keepDone(PlanTree.parse(store.plan(noteId)));
-                store.savePlan(noteId, plan.toJson());
-                store.dismissDraft(message);
-                toast("План сохранён в заметке");
+                Note before = store.applyNoteDraft(message, noteId, edit, finalPlan);
+                Note after = store.note(noteId);
+                if (edit != null) {
+                  Reminders.scheduleEdited(getApplicationContext(), before, after);
+                  BackgroundAnalysis.enqueue(this);
+                  NoteEdit.Result check =
+                      edit.apply("", "", 0, 0, "", System.currentTimeMillis());
+                  toast(
+                      check.datesPassed
+                          ? "Изменения применены, но даты напоминания уже прошли"
+                          : "Изменения применены к заметке");
+                } else toast("План сохранён в заметке");
               } catch (Exception e) {
-                toast(e.getMessage() == null ? "Не удалось сохранить план" : e.getMessage());
+                toast(e.getMessage() == null ? "Не удалось применить" : e.getMessage());
               }
               stash();
               render();
@@ -4771,7 +4806,7 @@ public final class MainActivity extends Activity
     row.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
     row.addView(
         compactButton(
-            "Не сохранять",
+            edit == null ? "Не сохранять" : "Не применять",
             false,
             () -> {
               store.dismissDraft(message);

@@ -7,6 +7,10 @@ New-Item -ItemType Directory -Force "$projectRoot/.tools/plan-tests" | Out-Null
 $sources = @(
   "$projectRoot/app/src/main/java/app/fastnotes/PlanTree.java",
   "$projectRoot/app/src/main/java/app/fastnotes/PlanChat.java",
+  "$projectRoot/app/src/main/java/app/fastnotes/NoteEdit.java",
+  "$projectRoot/app/src/main/java/app/fastnotes/ChatOrigin.java",
+  "$projectRoot/app/src/main/java/app/fastnotes/ReminderPolicy.java",
+  "$projectRoot/app/src/main/java/app/fastnotes/ReminderBatch.java",
   "$projectRoot/tests/PlanTreeTest.java"
 )
 & "$javaRoot/bin/javac.exe" -encoding UTF-8 -cp $jsonJar -d "$projectRoot/.tools/plan-tests" $sources
