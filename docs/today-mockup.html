@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Мимоходом · Сегодня</title>
+<style>
+:root{--ink:#1e3028;--green:#28634b;--muted:#65736a;--line:#dce2d8;--paper:#f7f8f2;--lime:#e9f1d6;--purple:#75449b}
+*{box-sizing:border-box}body{margin:0;background:#e6eae1;color:var(--ink);font:15px/1.45 Roboto,"Segoe UI",Arial,sans-serif}
+button,input,textarea{font:inherit;color:inherit}button{cursor:pointer;border:0;background:none}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;vertical-align:middle;flex:none}
+.gallery{max-width:910px;margin:auto;padding:17px 23px}.mast,.caption,.top,.spread,.dock,.row,.buttons,.tabs{display:flex;align-items:center}.mast,.top,.spread{justify-content:space-between}.brand{font:25px Georgia,serif;letter-spacing:-1px}.mast small,.caption,.muted{color:var(--muted)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:22px}.caption{font-size:13px;margin:14px 3px 7px}.phone{display:flex;flex-direction:column;position:relative;height:min(788px,calc(100dvh - 108px));min-height:470px;background:white;border:1px solid #ced7cb;border-radius:24px;overflow:hidden;box-shadow:0 5px 20px #26382d0c}
+.top{padding:8px 18px;border-bottom:1px solid #edf0e9;min-height:51px}.top button,.link,.row{display:inline-flex;align-items:center;gap:7px}.top button,.link{color:var(--green);min-height:34px;font-size:14px;font-weight:600}.scroll{overflow:auto;flex:1;min-height:0;padding:19px 21px 22px;scrollbar-width:thin}
+h1,h2,h3,p{margin:0}h1{font:39px/1.12 Georgia,serif;letter-spacing:-1.4px}h2{font:23px/1.2 Georgia,serif;letter-spacing:-.5px}h3{font-size:16px}.date{color:var(--muted);margin:4px 0 21px}.block{margin:17px 0 8px}.block:first-of-type{margin-top:0}
+.event{border-radius:15px;background:#edf0e2;padding:15px}.clock{display:flex;align-items:center;gap:7px;font-weight:650;color:var(--green);font-variant-numeric:tabular-nums}.event-title{display:block;text-align:left;font-size:20px;font-weight:650;padding:5px 0}.event p{font-size:14px;color:#526257}.event .link{padding:4px 0 0}.mini{width:66px;height:76px;object-fit:cover;object-position:34% 60%;border-radius:9px;margin-left:9px}
+.plan{border:1px solid var(--line);border-radius:14px;padding:13px 15px}.counter{font-size:13px;color:var(--muted)}progress{width:100%;height:5px;accent-color:var(--green);display:block;margin:9px 0}.step{display:flex;align-items:center;gap:8px;min-height:36px;cursor:pointer}.step input{width:17px;height:17px;accent-color:var(--green)}.step:has(:checked) span{text-decoration:line-through;color:var(--muted)}.helper{background:#f3edf8;border-radius:14px;padding:13px 15px}.helper small{color:var(--purple)}.helper p{font-size:17px;font-weight:600;margin:4px 0}.helper .link{color:var(--purple);padding-left:0}
+.dock{justify-content:center;gap:9px;align-self:center;margin:6px auto 11px;padding:4px 7px;background:white;border:1px solid var(--line);border-radius:20px;box-shadow:0 3px 13px #24392c0c}.dock button{padding:7px 12px;border-radius:14px}.dock .active{background:var(--lime);color:var(--green)}.tabs{display:none}.quiet{border-top:1px solid var(--line);padding-top:13px;margin-top:16px}
+.panel{border:0;border-radius:20px;color:var(--ink);padding:20px;width:min(355px,90vw)}.panel::backdrop{background:#1e30285f}.option{display:block;text-align:left;width:100%;padding:13px 0;border-top:1px solid var(--line)}.panel .spread{margin-bottom:14px}.panel .spread button{padding:8px}.primary{background:var(--green);color:white;padding:10px 16px;border-radius:10px;font-weight:600}.field{display:block;width:100%;padding:11px;border:1px solid #aebba8;border-radius:10px;margin:10px 0 14px}.result{display:block;text-align:left;width:100%;padding:15px;background:var(--paper);border-radius:12px;margin:10px 0}.note-body{white-space:pre-line;margin:15px 0}.preview{width:100%;border-radius:12px}.toast{background:var(--ink);color:white;position:absolute;bottom:66px;left:15px;right:15px;padding:9px 13px;border-radius:10px;font-size:13px;pointer-events:none}
+@media(max-width:700px){.gallery{padding:0}.mast,.caption{display:none}.tabs{justify-content:center;gap:6px;padding:6px;background:#e6eae1}.tabs button{border-radius:16px;padding:6px 11px;font-size:13px}.tabs [aria-pressed=true]{background:white}.pair{display:block}.example:not(.selected){display:none}.phone{height:calc(100dvh - 43px);min-height:0;border:0;border-radius:0}}
+</style>
+<main class="gallery"><header class="mast"><span class="brand">Мимоходом</span><small>Экран «Сегодня»</small></header>
+<nav class="tabs" aria-label="Примеры дня"></nav><div class="pair"></div></main>
+<dialog class="panel"></dialog>
+<script>
+const paths={back:'m14 5-7 7 7 7',bell:'M5 16h14l-2-3V9a5 5 0 0 0-10 0v4z M10 19q2 3 4 0',clock:'M12 7v6l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',notes:'M5 3h14v18H5z M8 8h8 M8 12h8',plus:'M12 4v16M4 12h16',chat:'M3 4h18v12H9l-6 4z',next:'m9 6 6 6-6 6',close:'m6 6 12 12M18 6 6 18'};
+const icon=k=>'<svg aria-hidden="true" viewBox="0 0 24 24"><path d="'+paths[k]+'"/></svg>';
+const escapeText=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const button=(action,label,cls='link')=>'<button class="'+cls+'" data-act="'+action+'">'+label+'</button>';
+const days=[{name:'Насыщенный день',title:'Забрать керамику',time:'18:00',place:'Мастерская на Покровке',body:'Вход со двора, вторая дверь справа. Взять коробку для чашки.',busy:true},{name:'Спокойный день',title:'Вернуть книгу',time:'17:30',place:'Районная библиотека',body:'Книга в сумке у двери. Библиотека открыта до семи.',busy:false}];
+const dialog=document.querySelector('dialog'),tabs=document.querySelector('.tabs');
+function dock(page){return '<nav class="dock" aria-label="Разделы">'+[['notes','notes','Заметки'],['new','plus','Новая заметка'],['chats','chat','Чаты']].map(([id,i,label])=>'<button aria-label="'+label+'" title="'+label+'" data-act="'+id+'" class="'+(page===id?'active':'')+'">'+icon(i)+'</button>').join('')+'</nav>'}
+function agenda(d){
+ const event='<h2 class="block">Напоминание</h2><section class="event"><div class="spread"><div><div class="clock">'+icon('clock')+d.time+'</div>'+button('event',d.title,'event-title')+'<p>'+d.place+'</p></div>'+(d.busy?'<img class="mini" alt="Керамическая чашка" src="note-ceramic-cup.jpg">':'')+'</div>'+button('move','Перенести')+'</section>';
+ const plan='<h2 class="block">План на сегодня</h2><section class="plan"><div class="spread"><h3>К поездке в Тулу</h3><span class="counter">'+(2+Number(d.checked))+' из 5</span></div><progress max="5" value="'+(2+Number(d.checked))+'"></progress><label class="step"><input type="checkbox" '+(d.checked?'checked':'')+'><span>Купить билеты на электричку</span></label></section>';
+ const helper='<h2 class="block">Помощник</h2><section class="helper"><small>К поездке в Тулу</small><p>Во сколько выезжаете?</p>'+(d.answer?'<div>Ваш ответ · '+escapeText(d.answer)+'</div>':'')+button('answer',d.answer?'Изменить ответ':'Ответить')+'</section>';
+ return '<h1>Сегодня</h1><p class="date">Суббота, 21 ноября</p>'+(d.tomorrow?'':event)+(d.busy?plan+helper:'')+(d.tomorrow?'<div class="quiet">'+(!d.busy?'<h2>На сегодня всё</h2>':'')+'<p class="muted">Завтра, 09:00 · '+d.title+'</p>'+button('undo','Вернуть на сегодня')+'</div>':'');
+}
+function draw(host,d){
+ let header=button(d.page==='event'?'today':'notes',icon('back')+(d.page==='event'?'Сегодня':'Заметки')),body='';
+ switch(d.page){
+ case 'today':body=agenda(d);break;
+ case 'event':body='<h1>'+d.title+'</h1><p class="date">'+(d.tomorrow?'Завтра, 09:00':'Сегодня, '+d.time)+'</p><p>'+d.place+'</p><p class="note-body">'+d.body+'</p>'+(d.busy?'<img class="preview" src="note-ceramic-cup.jpg" alt="Чашка из мастерской">':'');break;
+ case 'notes':header='<span class="brand">Мимоходом</span>';body='<h1>Заметки</h1>'+button('event',d.title,'result')+d.notes.map(n=>'<p class="result">'+escapeText(n)+'</p>').join('');break;
+ case 'new':body='<h1>Новая заметка</h1><textarea class="field" aria-label="Текст новой заметки" placeholder="Что хочется запомнить?">'+escapeText(d.draft)+'</textarea>'+button('save','Сохранить','primary');break;
+ case 'chats':body='<h1>Чаты</h1>'+(d.busy?'<h2 class="block">Помощник</h2><section class="helper"><p>Во сколько выезжаете?</p><div>'+escapeText(d.answer)+'</div>'+button('answer',d.answer?'Изменить ответ':'Ответить')+'</section>':'<p class="date">Чатов пока нет.</p>');break;
+ }
+ host.innerHTML='<header class="top">'+header+(d.page!=='today'?'<button data-act="today" aria-label="Открыть Сегодня">'+icon('bell')+'</button>':'')+'</header><div class="scroll">'+body+'</div>'+dock(d.page);
+}
+function sheet(title,body){dialog.innerHTML='<div class="spread"><h2>'+title+'</h2><button aria-label="Закрыть" data-close>'+icon('close')+'</button></div>'+body;dialog.showModal();dialog.querySelector('[data-close]').onclick=()=>dialog.close()}
+dialog.onclick=e=>{if(e.target===dialog)dialog.close()};
+days.forEach((d,i)=>{
+ Object.assign(d,{page:'today',checked:false,tomorrow:false,answer:'',notes:[],draft:''});
+ const example=document.createElement('section');example.className='example'+(i?'':' selected');example.innerHTML='<h2 class="caption">'+d.name+'</h2><article class="phone" aria-label="'+d.name+'"></article>';document.querySelector('.pair').append(example);
+ const host=example.querySelector('article');draw(host,d);
+ host.onchange=e=>{if(e.target.type==='checkbox'){d.checked=e.target.checked;const label=host.querySelector('.counter');label.textContent=(2+Number(d.checked))+' из 5';host.querySelector('progress').value=2+Number(d.checked)}};
+ host.oninput=e=>{if(d.page==='new')d.draft=e.target.value};
+ host.onclick=e=>{
+   const a=e.target.closest('[data-act]')?.dataset.act;if(!a)return;
+   if(a==='answer'){sheet('Во сколько выезжаете?','<form><label>Ваш ответ<input required class="field" maxlength="250" value="'+escapeText(d.answer)+'"></label><button class="primary">Ответить</button></form>');
+     dialog.querySelector('form').onsubmit=ev=>{ev.preventDefault();const value=dialog.querySelector('input').value.trim();if(!value)return;d.answer=value;dialog.close();draw(host,d)};return}
+   if(a==='move'){sheet('Перенести напоминание','<p class="date">'+d.title+'</p>'+button('later','Сегодня, 20:00','option')+button('tomorrow','Завтра, 09:00','option'));
+     dialog.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>{d.tomorrow=b.dataset.act==='tomorrow';if(!d.tomorrow)d.time='20:00';dialog.close();draw(host,d)});return}
+   if(a==='undo')d.tomorrow=false;
+   else if(a==='save'){if(!d.draft.trim())return;d.notes.unshift(d.draft.trim());d.draft='';d.page='notes'}
+   else d.page=a;
+   draw(host,d);
+ };
+ const tab=document.createElement('button');tab.textContent=d.name;tab.setAttribute('aria-pressed',!i);tabs.append(tab);tab.onclick=()=>{document.querySelectorAll('.example').forEach((x,j)=>x.classList.toggle('selected',i===j));[...tabs.children].forEach((x,j)=>x.setAttribute('aria-pressed',i===j))};
+});
+</script>
+</html>
