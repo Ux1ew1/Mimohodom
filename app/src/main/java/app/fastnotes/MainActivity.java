@@ -184,7 +184,7 @@ public final class MainActivity extends Activity
       };
   private String search = "", chatSearch = "";
   /** Лента чатов: открыт ли поиск, фильтр, развёрнут ли «Помощник» и ответ из его карточки. */
-  private boolean chatSearchOpen, helperOpen;
+  private boolean chatSearchOpen, helperOpen, notesSearchOpen;
   private int chatFilter = ChatFeed.ALL;
   private long helperReplyChat;
   private String helperReply = "";
@@ -869,6 +869,7 @@ public final class MainActivity extends Activity
     chatInput = null;
     if (suggestionsPopup != null) suggestionsPopup.dismiss();
     dockSpace = null;
+    if (!"notes".equals(page)) notesSearchOpen = false;
     if (!"chats".equals(page)) {
       // Поиск и ответ в карточке помощника живут, пока открыта лента чатов.
       chatSearchOpen = false;
@@ -2577,36 +2578,63 @@ public final class MainActivity extends Activity
     render();
   }
 
+  /**
+   * Страница «Заметки» (0.10.24, вариант А с холста): заголовок, поиск строкой под ним, ряд
+   * папок и «кладка» — два столбца карточек, высота каждой по её содержимому.
+   */
   private void notes() {
-    content.addView(topBar(true, true, true), new LinearLayout.LayoutParams(-1, dp(44)));
-    EditText find = searchField;
-    if (focusSearch) {
-      // Быстрое действие «Поиск»: раскрыть поле и открыть клавиатуру.
-      focusSearch = false;
-      find.post(
-          () -> {
-            find.requestFocus();
-            getSystemService(InputMethodManager.class).showSoftInput(find, 0);
-          });
-    }
-    gap(content, 14);
-    LinearLayout controls = row();
-    TextView count = text("", 13, MUTED);
-    controls.addView(count, new LinearLayout.LayoutParams(0, -2, 1));
     boolean grid = prefs.getBoolean("grid", true);
-    TextView switcher =
-        iconButton(
-            grid ? "Списком" : "Плиткой",
+    FrameLayout bar = (FrameLayout) topBar(false, false, true);
+    TextView heading = text("Заметки", 30, INK);
+    heading.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+    if (Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
+    bar.addView(
+        heading, new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL));
+    View layout =
+        barIcon(
             grid ? "list" : "grid",
+            grid ? "Показать списком" : "Показать плиткой",
             () -> {
               prefs.edit().putBoolean("grid", !grid).apply();
               render();
             });
-    controls.addView(switcher);
-    content.addView(controls);
-    gap(content, 10);
+    FrameLayout.LayoutParams layoutParams =
+        new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.CENTER_VERTICAL);
+    layoutParams.rightMargin = dp(96);
+    bar.addView(layout, layoutParams);
+    View findButton =
+        barIcon(
+            "search",
+            "Поиск по заметкам",
+            () -> {
+              notesSearchOpen = true;
+              render();
+            });
+    FrameLayout.LayoutParams findParams =
+        new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.CENTER_VERTICAL);
+    findParams.rightMargin = dp(140);
+    bar.addView(findButton, findParams);
+    content.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
+    gap(content, 2);
+    if (focusSearch) {
+      // Быстрое действие «Поиск»: открыть строку поиска и клавиатуру.
+      focusSearch = false;
+      notesSearchOpen = true;
+    }
+    EditText find = null;
+    if (notesSearchOpen || !search.isEmpty())
+      find =
+          searchRow(
+              "Поиск по заметкам",
+              search,
+              notesSearchOpen && search.isEmpty(),
+              () -> {
+                search = "";
+                notesSearchOpen = false;
+              });
+    TextView count = text("", 13, MUTED);
     content.addView(folderChips());
-    gap(content, 12);
+    gap(content, 14);
     LinearLayout listing = column();
     // Список прокручивается под плавающей панелью, поэтому внизу оставлен запас.
     listing.setPadding(0, 0, 0, dp(100));
@@ -2630,6 +2658,7 @@ public final class MainActivity extends Activity
             if (!search.trim().isEmpty() || top == 0 || top == n.id) visibleNotes.add(n);
           }
           count.setText(getString(R.string.notes_count, visibleNotes.size()));
+          listing.setContentDescription(count.getText());
           if (visibleNotes.isEmpty())
             listing.addView(
                 text(
@@ -2641,38 +2670,41 @@ public final class MainActivity extends Activity
                     17,
                     MUTED));
           int columns = grid ? (getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2) : 1;
-          int width =
-              (getResources().getConfiguration().screenWidthDp - 44 - (columns - 1) * 10) / columns;
-          LinearLayout line = null;
-          int occupied = 0;
+          // Кладка: карточки идут в столбцы, каждая — в тот, где сейчас меньше «высоты» (оценка
+          // по содержимому, без замеров). Раскрытая колода прерывает кладку своим блоком.
+          LinearLayout[] cols = null;
+          float[] filled = new float[columns];
           for (Note n : visibleNotes) {
             List<Long> members = groups.getOrDefault(n.id, Collections.emptyList());
             boolean expanded =
                 !members.isEmpty() && manager.expanded(n.id) && search.trim().isEmpty();
             if (expanded) {
-              line = null;
-              occupied = 0;
+              cols = null;
               LinearLayout group = column();
-              group.addView(text("В колоде: " + members.size() + " " + TrashPolicy.plural(members.size(), "исходная заметка", "исходные заметки", "исходных заметок"), 15, MUTED));
+              TextView deckLabel =
+                  text(
+                      "Колода · "
+                          + members.size()
+                          + " "
+                          + TrashPolicy.plural(
+                              members.size(), "исходная заметка", "исходные заметки", "исходных заметок"),
+                      12,
+                      STACK_FG);
+              deckLabel.setTypeface(null, Typeface.BOLD);
+              deckLabel.setPadding(0, dp(4), 0, dp(8));
+              group.addView(deckLabel);
               List<Note> all = new ArrayList<>();
               all.add(n);
               for (long member : members) {
                 Note source = store.note(member);
                 if (source != null) all.add(source);
               }
-              LinearLayout cards = null;
+              LinearLayout[] deckCols = masonryRow(group, columns);
+              float[] deckFilled = new float[columns];
               List<View> fan = new ArrayList<>();
               for (int i = 0; i < all.size(); i++) {
-                if (i % columns == 0) {
-                  cards = row();
-                  group.addView(cards);
-                  gap(group, 10);
-                }
                 View card = i == 0 ? groupedCard(n, grid, true) : noteCard(all.get(i), grid);
-                LinearLayout.LayoutParams lp =
-                    new LinearLayout.LayoutParams(dp(width), card.getLayoutParams().height);
-                if (i % columns != 0) lp.leftMargin = dp(10);
-                cards.addView(card, lp);
+                placeCard(deckCols, deckFilled, card, cardWeight(all.get(i)));
                 fan.add(card);
               }
               listing.addView(group);
@@ -2681,20 +2713,13 @@ public final class MainActivity extends Activity
                 fanOpen = 0;
                 fanOut(fan);
               }
-              gap(listing, 10);
+              gap(listing, 6);
             } else {
-              if (line == null || occupied == columns) {
-                line = row();
-                listing.addView(line);
-                gap(listing, 10);
-                occupied = 0;
+              if (cols == null) {
+                cols = masonryRow(listing, columns);
+                Arrays.fill(filled, 0);
               }
-              View card = groupedCard(n, grid, false);
-              LinearLayout.LayoutParams lp =
-                  new LinearLayout.LayoutParams(dp(width), card.getLayoutParams().height);
-              if (occupied > 0) lp.leftMargin = dp(10);
-              line.addView(card, lp);
-              occupied++;
+              placeCard(cols, filled, groupedCard(n, grid, false), cardWeight(n) + (members.isEmpty() ? 0 : 0.6f));
             }
           }
           membersCache = null;
@@ -2702,14 +2727,55 @@ public final class MainActivity extends Activity
           questionCache = null;
         };
     refresh.run();
-    watch(
-        find,
-        () -> {
-          search = find.getText().toString();
-          // Список перестраивается после короткой паузы в наборе, а не на каждый символ.
-          find.removeCallbacks(refresh);
-          find.postDelayed(refresh, SEARCH_DELAY_MS);
-        });
+    if (find != null) {
+      EditText field = find;
+      watch(
+          field,
+          () -> {
+            search = field.getText().toString();
+            // Список перестраивается после короткой паузы в наборе, а не на каждый символ.
+            field.removeCallbacks(refresh);
+            field.postDelayed(refresh, SEARCH_DELAY_MS);
+          });
+    }
+  }
+
+  /** Ряд столбцов кладки: {@code columns} вертикальных столбцов с зазором 10 dp. */
+  private LinearLayout[] masonryRow(LinearLayout parent, int columns) {
+    LinearLayout line = new LinearLayout(this);
+    line.setOrientation(LinearLayout.HORIZONTAL);
+    line.setGravity(Gravity.TOP);
+    LinearLayout[] cols = new LinearLayout[columns];
+    for (int i = 0; i < columns; i++) {
+      cols[i] = column();
+      LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1);
+      if (i > 0) p.leftMargin = dp(10);
+      line.addView(cols[i], p);
+    }
+    parent.addView(line, new LinearLayout.LayoutParams(-1, -2));
+    return cols;
+  }
+
+  /** Кладёт карточку в столбец, где сейчас меньше всего (по оценке {@link #cardWeight}). */
+  private void placeCard(LinearLayout[] cols, float[] filled, View card, float weight) {
+    int target = 0;
+    for (int i = 1; i < cols.length; i++) if (filled[i] < filled[target] - 0.01f) target = i;
+    LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+    p.bottomMargin = dp(10);
+    cols[target].addView(card, p);
+    filled[target] += weight;
+  }
+
+  /** Примерная высота карточки в строках: заголовок, текст, фото, метки. */
+  private float cardWeight(Note n) {
+    float w = 2.2f + Math.min(2, n.title.length() / 18);
+    if (!n.body.isEmpty()) w += Math.min(6, 1 + n.body.length() / 26f);
+    if (!n.image.isEmpty()) w += 4.5f;
+    if (n.reminder > 0) w += 1;
+    if (!planBadge(n.id).isEmpty()) w += 1.4f;
+    if (n.suggestion > 0) w += 1;
+    if (questionCache != null && questionCache.contains(n.id)) w += 1;
+    return w;
   }
 
   private static final long SEARCH_DELAY_MS = 150;
@@ -2848,14 +2914,18 @@ public final class MainActivity extends Activity
     HorizontalScrollView scroller = new HorizontalScrollView(this);
     scroller.setHorizontalScrollBarEnabled(false);
     LinearLayout chips = row();
-    chips.addView(folderChip("Все заметки", folder == FolderPolicy.ALL, FolderPolicy.ALL, null));
+    chips.addView(
+        folderChip("Все · " + store.totalNotes(), folder == FolderPolicy.ALL, FolderPolicy.ALL, null));
     for (FolderStore.Folder f : folders.list())
       chips.addView(folderChip(f.name + " · " + f.notes, folder == f.id, f.id, f));
-    TextView add = text("＋ Папка", 14, GREEN);
-    add.setTypeface(null, Typeface.BOLD);
-    add.setGravity(Gravity.CENTER);
-    add.setPadding(dp(14), dp(8), dp(14), dp(8));
-    add.setBackground(ripple(LIME, 18));
+    // «Новая папка» — квадратная кнопка с плюсом и пунктирной рамкой (0.10.24).
+    ImageView add = new ImageView(this);
+    add.setScaleType(ImageView.ScaleType.CENTER);
+    add.setImageDrawable(new Glyph("add", GREEN, 16));
+    GradientDrawable dashed = shape(android.graphics.Color.TRANSPARENT, 10);
+    dashed.setStroke(dp(1), STROKE, dp(4), dp(3));
+    add.setBackground(
+        new RippleDrawable(android.content.res.ColorStateList.valueOf(0x2028634B), dashed, null));
     add.setFocusable(true);
     add.setContentDescription("Создать папку");
     add.setOnClickListener(
@@ -2875,16 +2945,12 @@ public final class MainActivity extends Activity
                 render();
               });
         });
-    LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-2, -2);
-    addParams.leftMargin = dp(8);
+    LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(dp(36), dp(36));
+    addParams.leftMargin = dp(6);
     chips.addView(add, addParams);
-    TextView suggest = text("Подобрать папки", 14, GREEN);
-    suggest.setTypeface(null, Typeface.BOLD);
-    suggest.setGravity(Gravity.CENTER);
-    suggest.setPadding(dp(12), dp(8), dp(14), dp(8));
-    suggest.setCompoundDrawablesWithIntrinsicBounds(new Glyph("spark", GREEN, 18), null, null, null);
-    suggest.setCompoundDrawablePadding(dp(6));
-    suggest.setBackground(ripple(LIME, 18));
+    TextView suggest = text("Подобрать папки", 13, GREEN);
+    styleChip(suggest, LIME);
+    suggest.setCompoundDrawablesWithIntrinsicBounds(new Glyph("spark", GREEN, 16), null, null, null);
     suggest.setFocusable(true);
     suggest.setContentDescription("Подобрать папки по темам заметок");
     suggest.setOnClickListener(
@@ -2892,16 +2958,12 @@ public final class MainActivity extends Activity
           buzz(0);
           showFolderSuggestions();
         });
-    LinearLayout.LayoutParams suggestParams = new LinearLayout.LayoutParams(-2, -2);
-    suggestParams.leftMargin = dp(8);
+    LinearLayout.LayoutParams suggestParams = new LinearLayout.LayoutParams(-2, dp(36));
+    suggestParams.leftMargin = dp(6);
     chips.addView(suggest, suggestParams);
-    TextView videoChip = text("Сводка видео", 14, GREEN);
-    videoChip.setTypeface(null, Typeface.BOLD);
-    videoChip.setGravity(Gravity.CENTER);
-    videoChip.setPadding(dp(12), dp(8), dp(14), dp(8));
-    videoChip.setCompoundDrawablesWithIntrinsicBounds(new Glyph("video", GREEN, 18), null, null, null);
-    videoChip.setCompoundDrawablePadding(dp(6));
-    videoChip.setBackground(ripple(LIME, 18));
+    TextView videoChip = text("Сводка видео", 13, GREEN);
+    styleChip(videoChip, LIME);
+    videoChip.setCompoundDrawablesWithIntrinsicBounds(new Glyph("video", GREEN, 16), null, null, null);
     videoChip.setFocusable(true);
     videoChip.setContentDescription("Сделать сводку видео YouTube по ссылке");
     videoChip.setOnClickListener(
@@ -2909,18 +2971,14 @@ public final class MainActivity extends Activity
           buzz(0);
           askVideoLink();
         });
-    LinearLayout.LayoutParams videoParams = new LinearLayout.LayoutParams(-2, -2);
-    videoParams.leftMargin = dp(8);
+    LinearLayout.LayoutParams videoParams = new LinearLayout.LayoutParams(-2, dp(36));
+    videoParams.leftMargin = dp(6);
     chips.addView(videoChip, videoParams);
     int inTrash = store.trashCount();
     if (inTrash > 0) {
-      TextView trashChip = text("Корзина · " + inTrash, 14, MUTED);
-      trashChip.setTypeface(null, Typeface.BOLD);
-      trashChip.setGravity(Gravity.CENTER);
-      trashChip.setPadding(dp(12), dp(8), dp(14), dp(8));
-      trashChip.setCompoundDrawablesWithIntrinsicBounds(new Glyph("trash", MUTED, 18), null, null, null);
-      trashChip.setCompoundDrawablePadding(dp(6));
-      trashChip.setBackground(ripple(LINE, 18));
+      TextView trashChip = text("Корзина · " + inTrash, 13, MUTED);
+      styleChip(trashChip, LINE);
+      trashChip.setCompoundDrawablesWithIntrinsicBounds(new Glyph("trash", MUTED, 16), null, null, null);
       trashChip.setFocusable(true);
       trashChip.setContentDescription("Корзина, заметок: " + inTrash);
       trashChip.setOnClickListener(
@@ -2930,8 +2988,8 @@ public final class MainActivity extends Activity
             page = "trash";
             render();
           });
-      LinearLayout.LayoutParams trashParams = new LinearLayout.LayoutParams(-2, -2);
-      trashParams.leftMargin = dp(8);
+      LinearLayout.LayoutParams trashParams = new LinearLayout.LayoutParams(-2, dp(36));
+      trashParams.leftMargin = dp(6);
       chips.addView(trashChip, trashParams);
     }
     scroller.addView(chips);
@@ -3090,13 +3148,23 @@ public final class MainActivity extends Activity
     return askNextMerge() || askNextFolder();
   }
 
-  private View folderChip(String label, boolean selected, long id, FolderStore.Folder f) {
-    TextView chip = text(label, 14, selected ? WHITE : INK);
-    chip.setTypeface(null, selected ? Typeface.BOLD : Typeface.NORMAL);
+  /** Кнопка-фильтр в ряду папок: 36 dp, скругление 10, 13 sp жирным (0.10.24). */
+  private void styleChip(TextView chip, int fill) {
+    chip.setTypeface(null, Typeface.BOLD);
     chip.setGravity(Gravity.CENTER);
     chip.setSingleLine(true);
-    chip.setPadding(dp(14), dp(8), dp(14), dp(8));
-    chip.setBackground(ripple(selected ? FILL : SURFACE, 18));
+    chip.setMinHeight(dp(36));
+    chip.setPadding(dp(12), 0, dp(12), 0);
+    chip.setCompoundDrawablePadding(dp(6));
+    chip.setBackground(ripple(fill, 10));
+  }
+
+  private View folderChip(String label, boolean selected, long id, FolderStore.Folder f) {
+    TextView chip = text(label, 13, selected ? WHITE : GREEN);
+    styleChip(chip, selected ? FILL : LIME);
+    LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(-2, dp(36));
+    if (id != FolderPolicy.ALL) chipParams.leftMargin = dp(6);
+    chip.setLayoutParams(chipParams);
     chip.setFocusable(true);
     chip.setSelected(selected);
     chip.setContentDescription(f == null ? "Все заметки" : "Папка " + f.name);
@@ -3207,34 +3275,162 @@ public final class MainActivity extends Activity
         .show();
   }
 
+  /**
+   * Карточка заметки для кладки (0.10.24): высота по содержимому, обложка-фото сверху, время
+   * напоминания, название, текст, полоска плана, метки помощника, дата. Меню — долгим нажатием.
+   */
   private View noteCard(Note n, boolean grid) {
+    boolean inDeck = new ManagerStore(store).top(n.id) != 0;
+    List<Long> sources = membersOf(n.id);
     LinearLayout card = column();
-    pad(card, 16);
-    card.setBackground(
-        ripple(
-            new ManagerStore(store).top(n.id) != 0
-                ? STACK_BG
-                : n.reminder > 0 ? REMINDER_BG : SURFACE,
-            12));
+    card.setBackground(ripple(inDeck ? STACK_BG : n.reminder > 0 ? REMINDER_BG : SURFACE, 12));
+    card.setClipToOutline(true);
+    card.setOutlineProvider(rounded(12));
     card.setOnClickListener(
         v -> {
           buzz(0);
           openNote(n.id);
         });
-    TextView title = text(n.title, 17, INK);
-    title.setTypeface(null, Typeface.BOLD);
-    title.setMaxLines(grid ? 2 : 1);
-    title.setEllipsize(TextUtils.TruncateAt.END);
-    LinearLayout titleRow = row();
-    titleRow.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-    TextView menu = text("⋮", 24, INK);
-    menu.setGravity(Gravity.CENTER);
-    menu.setContentDescription("Меню заметки «" + n.title + "»");
-    titleRow.addView(menu, new LinearLayout.LayoutParams(dp(48), dp(48)));
-    menu.setOnClickListener(
+    card.setOnLongClickListener(
         v -> {
+          buzz(0);
+          showNoteMenu(card, n);
+          return true;
+        });
+    if (!n.image.isEmpty()) {
+      // Фото — обложкой во всю ширину карточки; при нескольких — счётчик в углу.
+      int imageCount = ImageList.count(n.image);
+      FrameLayout cover = new FrameLayout(this);
+      ImageView thumb = new ImageView(this);
+      thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+      thumb.setBackgroundColor(LIME);
+      thumb.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+      ImageThumbs.load(this, thumb, ImageList.cover(n.image), 360);
+      cover.addView(thumb, new FrameLayout.LayoutParams(-1, -1));
+      if (imageCount > 1) {
+        TextView badge = text("+" + (imageCount - 1), 11, WHITE);
+        badge.setTypeface(null, Typeface.BOLD);
+        badge.setBackground(shape(0xAA000000, 6));
+        badge.setPadding(dp(6), dp(2), dp(6), dp(2));
+        FrameLayout.LayoutParams bp =
+            new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
+        bp.setMargins(0, 0, dp(8), dp(8));
+        cover.addView(badge, bp);
+      }
+      card.addView(cover, new LinearLayout.LayoutParams(-1, dp(grid ? 96 : 120)));
+    }
+    LinearLayout inner = column();
+    inner.setPadding(dp(14), dp(14), dp(14), dp(14));
+    card.addView(inner, new LinearLayout.LayoutParams(-1, -2));
+    if (n.reminder > 0) {
+      TextView when =
+          text(date(n.reminder) + moreDates(n.repeat, n.reminderTimes), 12, GREEN);
+      when.setTypeface(null, Typeface.BOLD);
+      when.setCompoundDrawablesWithIntrinsicBounds(new Glyph("clock", GREEN, 14), null, null, null);
+      when.setCompoundDrawablePadding(dp(6));
+      when.setMaxLines(2);
+      inner.addView(when);
+      gap(inner, 8);
+    }
+    if (!sources.isEmpty()) {
+      TextView deck =
+          text(
+              "Колода · "
+                  + (sources.size() + 1)
+                  + " "
+                  + TrashPolicy.plural(sources.size() + 1, "заметка", "заметки", "заметок"),
+              12,
+              STACK_FG);
+      deck.setTypeface(null, Typeface.BOLD);
+      inner.addView(deck);
+      gap(inner, 6);
+    }
+    TextView title = text(n.title, 16, inDeck ? (dark ? INK : 0xFF3E2352) : INK);
+    title.setTypeface(null, Typeface.BOLD);
+    title.setMaxLines(grid ? 3 : 1);
+    title.setEllipsize(TextUtils.TruncateAt.END);
+    inner.addView(title);
+    if (!n.body.isEmpty()) {
+      gap(inner, 6);
+      TextView body = text(Retrieval.excerpt(n.body, "", 320), 13, inDeck ? STACK_FG : MUTED);
+      body.setLineSpacing(dp(2), 1);
+      body.setMaxLines(grid ? 6 : 2);
+      body.setEllipsize(TextUtils.TruncateAt.END);
+      inner.addView(body);
+    }
+    String planned = planBadge(n.id);
+    if (!planned.isEmpty()) {
+      gap(inner, 10);
+      java.util.regex.Matcher m = Pattern.compile("(\\d+)/(\\d+)").matcher(planned);
+      if (m.find()) {
+        int done = Integer.parseInt(m.group(1)), total = Math.max(1, Integer.parseInt(m.group(2)));
+        FrameLayout track = new FrameLayout(this);
+        track.setBackground(shape(LINE, 2));
+        View fill = new View(this);
+        fill.setBackground(shape(FILL, 2));
+        track.addView(fill, new FrameLayout.LayoutParams(0, -1));
+        track.addOnLayoutChangeListener(
+            (v, l, t, r, b, ol, ot, or, ob) -> {
+              int width = Math.round((r - l) * Math.min(1f, done / (float) total));
+              ViewGroup.LayoutParams fp = fill.getLayoutParams();
+              if (fp.width != width) {
+                fp.width = width;
+                fill.post(() -> fill.setLayoutParams(fp));
+              }
+            });
+        track.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        inner.addView(track, new LinearLayout.LayoutParams(-1, dp(4)));
+        gap(inner, 6);
+        planned = "План: " + done + " из " + m.group(2);
+      }
+      TextView plan = text(planned, 12, GREEN);
+      plan.setTypeface(null, Typeface.BOLD);
+      inner.addView(plan);
+    }
+    if (n.suggestion > 0) {
+      gap(inner, 6);
+      inner.addView(cardMark("Есть предложение ИИ", GREEN));
+    }
+    if (questionCache != null && questionCache.contains(n.id)) {
+      gap(inner, 6);
+      inner.addView(cardMark("Вопрос помощника", STACK_FG));
+    }
+    if (n.reminder == 0) {
+      gap(inner, 8);
+      int imageCount = n.image.isEmpty() ? 0 : ImageList.count(n.image);
+      inner.addView(
+          text(
+              shortDate(n.created) + (imageCount > 0 ? " · " + imageCount + " фото" : ""),
+              12,
+              MUTED));
+    }
+    card.setContentDescription(
+        n.title
+            + (n.reminder > 0 ? ", напомнить " + date(n.reminder) : "")
+            + ", "
+            + Retrieval.excerpt(n.body, "", 200)
+            + ", создана "
+            + date(n.created)
+            + ". Долгое нажатие — меню");
+    card.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+    return card;
+  }
+
+  /** Метка на карточке: точка цвета и короткая подпись. */
+  private TextView cardMark(String label, int color) {
+    TextView mark = text(label, 12, color);
+    mark.setTypeface(null, Typeface.BOLD);
+    GradientDrawable dot = shape(color, 4);
+    dot.setSize(dp(8), dp(8));
+    mark.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null);
+    mark.setCompoundDrawablePadding(dp(6));
+    return mark;
+  }
+
+  /** Меню заметки (долгое нажатие на карточку): удалить, папка, колода. */
+  private void showNoteMenu(View anchor, Note n) {
           ManagerStore manager = new ManagerStore(store);
-          Pop popup = new Pop(menu);
+          Pop popup = new Pop(anchor);
           popup
               .getMenu()
               .add("Удалить")
@@ -3292,68 +3488,6 @@ public final class MainActivity extends Activity
                       return true;
                     });
           popup.show();
-        });
-    card.addView(titleRow);
-    List<Long> sources = membersOf(n.id);
-    if (!sources.isEmpty())
-      card.addView(text("Исходных: " + sources.size(), 11, STACK_FG));
-    gap(card, 8);
-    TextView body =
-        text(n.body.isEmpty() ? "Без текста" : Retrieval.excerpt(n.body, "", 320), 14, MUTED);
-    body.setMaxLines(grid ? 4 : 2);
-    body.setEllipsize(TextUtils.TruncateAt.END);
-    card.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
-    gap(card, 12);
-    String planned = planBadge(n.id);
-    if (!planned.isEmpty()) card.addView(text(planned, 11, GREEN));
-    if (n.suggestion > 0) {
-      TextView suggestion = text("Есть предложение ИИ", 11, GREEN);
-      card.addView(suggestion);
-    }
-    if (questionCache != null && questionCache.contains(n.id))
-      card.addView(text("Вопрос помощника", 11, GREEN));
-    TextView stamp =
-        text(
-            n.reminder > 0
-                ? "Напомнить\n" + date(n.reminder) + moreDates(n.repeat, n.reminderTimes)
-                : shortDate(n.created),
-            11,
-            n.reminder > 0 ? GREEN : MUTED);
-    if (n.image.isEmpty()) card.addView(stamp);
-    else {
-      int imageCount = ImageList.count(n.image);
-      LinearLayout bottom = row();
-      bottom.addView(stamp, new LinearLayout.LayoutParams(0, -2, 1));
-      FrameLayout cell = new FrameLayout(this);
-      ImageView thumb = new ImageView(this);
-      thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
-      thumb.setBackground(shape(LIME, 8));
-      thumb.setClipToOutline(true);
-      thumb.setOutlineProvider(rounded(8));
-      thumb.setContentDescription(
-          imageCount > 1 ? "Изображений в заметке: " + imageCount : "Изображение в заметке");
-      ImageThumbs.load(this, thumb, ImageList.cover(n.image), 160);
-      cell.addView(thumb, new FrameLayout.LayoutParams(-1, -1));
-      if (imageCount > 1) {
-        TextView badge = text("+" + (imageCount - 1), 10, WHITE);
-        badge.setTypeface(null, Typeface.BOLD);
-        badge.setBackground(shape(0xAA000000, 6));
-        badge.setPadding(dp(4), dp(1), dp(4), dp(1));
-        cell.addView(badge, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END));
-      }
-      bottom.addView(cell, new LinearLayout.LayoutParams(dp(40), dp(40)));
-      card.addView(bottom);
-    }
-    int columns = getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2;
-    int tileSize =
-        (getResources().getConfiguration().screenWidthDp - 44 - (columns - 1) * 10) / columns;
-    int minimum = Math.round(156 * getResources().getConfiguration().fontScale);
-    card.setLayoutParams(
-        new android.widget.AbsListView.LayoutParams(
-            -1, dp(grid ? Math.max(tileSize, minimum) : minimum)));
-    card.setContentDescription(
-        n.title + ", " + Retrieval.excerpt(n.body, "", 320) + ", создана " + date(n.created));
-    return card;
   }
 
   /**
@@ -3364,28 +3498,31 @@ public final class MainActivity extends Activity
     View card = noteCard(n, grid);
     int layers = DeckGeometry.layers(membersOf(n.id).size());
     if (layers == 0 || expanded) return card;
+    // Высота карточки в кладке своя у каждой, поэтому слои растягиваются по высоте самой карточки
+    // (MATCH_PARENT со сдвигом вниз), а запас снизу считается по средней высоте карточки.
     FrameLayout stack = new FrameLayout(this);
-    int height = card.getLayoutParams().height;
     int screen = getResources().getConfiguration().screenWidthDp;
     int columns = grid ? (screen >= 600 ? 3 : 2) : 1;
     int widthDp = (screen - 44 - (columns - 1) * 10) / columns;
-    int heightDp = Math.round(height / getResources().getDisplayMetrics().density);
-    int extra = DeckGeometry.extra(layers, widthDp, heightDp);
-    stack.setLayoutParams(new LinearLayout.LayoutParams(-1, height + dp(extra)));
+    int extra = dp(DeckGeometry.extra(layers, widthDp, 160));
     for (int i = layers; i > 0; i--) {
       View layer = new View(this);
       GradientDrawable shape = shape(STACK_LAYER, 12);
       shape.setStroke(dp(1), STACK_LINE);
       layer.setBackground(shape);
-      FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, height);
+      FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -1);
       lp.topMargin = dp(DeckGeometry.dy(i));
+      lp.bottomMargin = extra - dp(DeckGeometry.dy(i));
       lp.leftMargin = dp(DeckGeometry.INSET);
       lp.rightMargin = dp(DeckGeometry.INSET);
       layer.setTranslationX(dp(DeckGeometry.dx(i)));
       layer.setRotation(DeckGeometry.angle(i));
       stack.addView(layer, lp);
     }
-    stack.addView(card, new FrameLayout.LayoutParams(-1, height));
+    FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(-1, -2);
+    cardParams.bottomMargin = extra;
+    stack.addView(card, cardParams);
+    stack.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
     return stack;
   }
 
@@ -4118,59 +4255,16 @@ public final class MainActivity extends Activity
     gap(content, 4);
 
     EditText find = null;
-    if (chatSearchOpen || !chatSearch.isEmpty()) {
-      LinearLayout box = row();
-      box.setGravity(Gravity.CENTER_VERTICAL);
-      box.setPadding(dp(14), 0, dp(6), 0);
-      GradientDrawable boxBackground = shape(SURFACE, 12);
-      boxBackground.setStroke(dp(1), LINE);
-      box.setBackground(boxBackground);
-      ImageView glass = new ImageView(this);
-      glass.setImageDrawable(new Glyph("search", MUTED, 20));
-      box.addView(glass, new LinearLayout.LayoutParams(dp(20), dp(20)));
-      find = new EditText(this);
-      find.setBackground(null);
-      find.setHint("Поиск по чатам");
-      find.setContentDescription("Поиск по чатам");
-      find.setHintTextColor(MUTED);
-      find.setTextColor(INK);
-      find.setTextSize(15);
-      find.setSingleLine(true);
-      find.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
-      find.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-      find.setPadding(dp(8), 0, dp(8), 0);
-      find.setText(chatSearch);
-      find.setOnEditorActionListener(
-          (v, action, event) -> {
-            hideKeyboard();
-            return true;
-          });
-      box.addView(find, new LinearLayout.LayoutParams(0, -1, 1));
-      ImageView clear = new ImageView(this);
-      clear.setScaleType(ImageView.ScaleType.CENTER);
-      clear.setImageDrawable(new Glyph("close", GREEN, 18));
-      clear.setBackground(ripple(LIME, 10));
-      clear.setContentDescription("Закрыть поиск");
-      clear.setOnClickListener(
-          v -> {
-            buzz(0);
-            chatSearch = "";
-            chatSearchOpen = false;
-            hideKeyboard();
-            render();
-          });
-      box.addView(clear, new LinearLayout.LayoutParams(dp(32), dp(32)));
-      content.addView(box, new LinearLayout.LayoutParams(-1, dp(44)));
-      gap(content, 10);
-      if (chatSearchOpen && chatSearch.isEmpty()) {
-        EditText target = find;
-        target.post(
-            () -> {
-              target.requestFocus();
-              getSystemService(InputMethodManager.class).showSoftInput(target, 0);
-            });
-      }
-    }
+    if (chatSearchOpen || !chatSearch.isEmpty())
+      find =
+          searchRow(
+              "Поиск по чатам",
+              chatSearch,
+              chatSearchOpen && chatSearch.isEmpty(),
+              () -> {
+                chatSearch = "";
+                chatSearchOpen = false;
+              });
 
     // «Спросить у заметок…» начинает новый чат. Черновик нового чата (текст и картинки)
     // сохраняется, пока его не отправят или не уберут вручную: файлы вложений нельзя осиротить.
@@ -4259,6 +4353,68 @@ public final class MainActivity extends Activity
             refresh.run();
           });
     }
+  }
+
+  /**
+   * Строка поиска под заголовком страницы (ленты чатов и заметок): поле с рамкой и «Закрыть».
+   * {@code reset} сбрасывает запрос и признак «поиск открыт»; «Назад» тоже закрывает поиск.
+   */
+  private EditText searchRow(String hint, String value, boolean focus, Runnable reset) {
+    LinearLayout box = row();
+    box.setPadding(dp(14), 0, dp(6), 0);
+    GradientDrawable boxBackground = shape(SURFACE, 12);
+    boxBackground.setStroke(dp(1), LINE);
+    box.setBackground(boxBackground);
+    ImageView glass = new ImageView(this);
+    glass.setImageDrawable(new Glyph("search", MUTED, 20));
+    box.addView(glass, new LinearLayout.LayoutParams(dp(20), dp(20)));
+    EditText field = new EditText(this);
+    field.setBackground(null);
+    field.setHint(hint);
+    field.setContentDescription(hint);
+    field.setHintTextColor(MUTED);
+    field.setTextColor(INK);
+    field.setTextSize(15);
+    field.setSingleLine(true);
+    field.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+    field.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+    field.setPadding(dp(8), 0, dp(8), 0);
+    field.setText(value);
+    field.setOnEditorActionListener(
+        (v, action, event) -> {
+          hideKeyboard();
+          return true;
+        });
+    box.addView(field, new LinearLayout.LayoutParams(0, -1, 1));
+    ImageView clear = new ImageView(this);
+    clear.setScaleType(ImageView.ScaleType.CENTER);
+    clear.setImageDrawable(new Glyph("close", GREEN, 18));
+    clear.setBackground(ripple(LIME, 10));
+    clear.setContentDescription("Закрыть поиск");
+    Runnable close =
+        () -> {
+          reset.run();
+          hideKeyboard();
+          render();
+        };
+    clear.setOnClickListener(
+        v -> {
+          buzz(0);
+          close.run();
+        });
+    box.addView(clear, new LinearLayout.LayoutParams(dp(32), dp(32)));
+    content.addView(box, new LinearLayout.LayoutParams(-1, dp(44)));
+    gap(content, 10);
+    searchField = field;
+    searchOpen = true;
+    closeSearch = close;
+    if (focus)
+      field.post(
+          () -> {
+            field.requestFocus();
+            getSystemService(InputMethodManager.class).showSoftInput(field, 0);
+          });
+    return field;
   }
 
   /** Строка ленты: значок вида чата, название, строка последнего сообщения и время. */
