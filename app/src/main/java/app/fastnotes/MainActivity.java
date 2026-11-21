@@ -101,7 +101,7 @@ public final class MainActivity extends Activity
 
   /** Фон страницы: у новой заметки и ленты чатов — белый лист на весь экран, у остальных — бумажный. */
   private int pageColor() {
-    return "home".equals(page) || "chats".equals(page) ? SURFACE : PAPER;
+    return "edit".equals(page) || "home".equals(page) || "chats".equals(page) ? SURFACE : PAPER;
   }
 
   /** Тема окна и системных панелей под выбранную палитру (значки панелей светлые на тёмном). */
@@ -163,7 +163,7 @@ public final class MainActivity extends Activity
    */
   private Note editorBase;
   private String returnPage = "notes";
-  private TextView reminderButton, analysisStatusView;
+  private TextView reminderButton, folderButton, analysisStatusView;
   private Popup managerPreview, analysisLogDialog;
   private TextView analysisLogText;
   private final SharedPreferences.OnSharedPreferenceChangeListener analysisListener =
@@ -345,6 +345,8 @@ public final class MainActivity extends Activity
     if (intent == null) return;
     long requested = intent.getLongExtra("note", 0);
     if (requested > 0) {
+      editorSearch = null;
+      planCollapsed = false;
       editing = requested;
       page = "edit";
       tab = 0;
@@ -913,7 +915,7 @@ public final class MainActivity extends Activity
     // Плавающая нижняя панель перекрывает низ страницы, поэтому внизу оставляем под неё место.
     boolean notesList = "notes".equals(page);
     // У новой заметки место под панелью держит её нижняя полоса со значками (dockSpace).
-    boolean compactBottom = "chat".equals(page) || "home".equals(page);
+    boolean compactBottom = "edit".equals(page) || "chat".equals(page) || "home".equals(page);
     content.setPadding(dp(22), dp(8), dp(22), notesList ? 0 : dp(compactBottom ? 16 : 100));
     if ("notes".equals(page) || "chat".equals(page)) {
       root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -933,7 +935,10 @@ public final class MainActivity extends Activity
       case "settings.sync" -> settingsSync();
       case "settings.app" -> settingsApp();
     }
-    bottomNav();
+    if ("edit".equals(page)) {
+      dock = null;
+      dockFade = null;
+    } else bottomNav();
     rendering = false;
   }
 
@@ -1605,31 +1610,41 @@ public final class MainActivity extends Activity
             || !prefs.contains("draft." + id + ".title"))) editorBase = note;
     if (id > 0) {
       LinearLayout toolbar = row();
-      ImageButton back = new ImageButton(this);
-      back.setImageDrawable(new Glyph("back", GREEN, 22));
-      back.setBackground(ripple(LIME, 10));
-      back.setContentDescription("Назад");
-      back.setOnClickListener(v -> goBack());
-      toolbar.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+      TextView back = iconButton(switch (returnPage) {
+        case "chat" -> "Чат"; case "manager" -> "Помощник"; case "notes" -> "Заметки"; default -> "Назад";
+      }, "back", this::goBack);
+      back.setBackground(ripple(SURFACE, 10));
+      toolbar.addView(back);
       toolbar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
       TextView menu = button("⋮", false, () -> {});
       menu.setTextSize(24);
       menu.setPadding(0, 0, 0, 0);
       menu.setContentDescription("Меню заметки");
+      menu.setBackground(ripple(SURFACE, 10));
       menu.setOnClickListener(
           v -> {
             Pop popup = new Pop(menu);
-            popup.getMenu().add("Удалить заметку");
+            popup.getMenu().add(0, 1, 0, "Редактировать название");
+            popup.getMenu().add(0, 2, 0, "Переместить в папку");
+            if (!noteImage.isEmpty()) popup.getMenu().add(0, 4, 0, "Действия с фотографией");
+            popup.getMenu().add(0, 3, 0, "Удалить заметку");
             popup.setOnMenuItemClickListener(
                 item -> {
-                  deleteNote(id);
+                  if (item.getItemId() == 1) {
+                    titleField.requestFocus();
+                    getSystemService(InputMethodManager.class).showSoftInput(titleField, 0);
+                  } else if (item.getItemId() == 2) chooseEditorFolder();
+                  else if (item.getItemId() == 4) showImageActions();
+                  else deleteNote(id);
                   return true;
                 });
             popup.show();
           });
       toolbar.addView(menu, new LinearLayout.LayoutParams(dp(48), dp(48)));
-      toolbar.setPadding(dp(22), dp(4), dp(22), dp(4));
+      toolbar.setPadding(dp(8), dp(2), dp(14), dp(2));
+      toolbar.setFocusableInTouchMode(true);
       root.addView(toolbar, 0);
+      toolbar.requestFocus();
     } else {
       // Новая заметка — лист на весь экран: сверху только сегодняшняя дата и значки.
       FrameLayout bar = (FrameLayout) topBar(false, false, true);
@@ -1646,8 +1661,7 @@ public final class MainActivity extends Activity
       content.addView(bar, new LinearLayout.LayoutParams(-1, dp(44)));
       gap(content, 12);
     }
-    boolean fullPage = id == 0;
-    if (id > 0) heading("Ваша заметка", "");
+    boolean newNote = id == 0;
     String p = draftPrefix();
     noteImage = prefs.getString(p + "image", note == null ? "" : note.image);
     if (selectedImageFor != id) {
@@ -1655,64 +1669,53 @@ public final class MainActivity extends Activity
       stripScroll = 0;
       selectedImageFor = id;
     }
-    // Название, текст и значки действий лежат на одном листе с тенью.
-    // У открытой заметки — лист с рамкой и тенью; у новой рамки нет, лист — вся страница.
     LinearLayout sheet = column();
-    if (!fullPage) {
-      GradientDrawable sheetBackground = shape(SURFACE, 14);
-      sheetBackground.setStroke(dp(1), STROKE);
-      sheet.setBackground(sheetBackground);
-      sheet.setElevation(dp(6));
-    }
     boolean large = prefs.getBoolean("large", false);
-    titleField = input(fullPage ? "Название" : "Название — необязательно", false);
+    titleField = input("Название", false);
     titleField.setBackground(null);
-    if (fullPage) {
-      titleField.setTypeface(Typeface.create("serif", Typeface.NORMAL));
-      titleField.setTextSize(large ? 32 : 30);
-      titleField.setPadding(0, 0, 0, dp(4));
-    } else {
-      titleField.setTypeface(null, Typeface.BOLD);
-      titleField.setTextSize(large ? 22 : 20);
-      titleField.setPadding(dp(16), dp(16), dp(16), dp(10));
+    titleField.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+    titleField.setTextSize(large ? 32 : 30);
+    titleField.setPadding(0, 0, 0, dp(4));
+    if (!newNote) {
+      titleField.setSingleLine(false);
+      titleField.setImeOptions(EditorInfo.IME_ACTION_NEXT);
     }
     titleField.setText(prefs.getString(p + "title", note == null ? "" : note.title));
     titleField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(160)});
     sheet.addView(titleField, new LinearLayout.LayoutParams(-1, -2));
-    if (fullPage) {
+    LinearLayout meta = row();
+    if (newNote) {
       TextView hint =
           text("Можно без названия — возьмём первую строку. Черновик сохраняется сам.", 12, MUTED);
       sheet.addView(hint);
       gap(sheet, 10);
     } else {
-      View titleRule = new View(this);
-      titleRule.setBackgroundColor(LINE);
-      LinearLayout.LayoutParams titleRuleParams = new LinearLayout.LayoutParams(-1, dp(1));
-      titleRuleParams.leftMargin = dp(16);
-      titleRuleParams.rightMargin = dp(16);
-      sheet.addView(titleRule, titleRuleParams);
+      HorizontalScrollView chipScroll = new HorizontalScrollView(this);
+      chipScroll.setHorizontalScrollBarEnabled(false);
+      chipScroll.addView(meta);
+      sheet.addView(chipScroll);
     }
     bodyField = input("Что хочется запомнить?", true);
     bodyField.setBackground(null);
-    if (fullPage) {
-      bodyField.setPadding(0, dp(4), 0, dp(16));
-      bodyField.setLineSpacing(dp(3), 1f);
-      bodyField.setMinHeight(dp(160));
-    } else {
-      bodyField.setPadding(dp(16), dp(12), dp(16), dp(16));
-      bodyField.setMinLines(10);
-      bodyField.setMinHeight(dp(280));
-    }
+    bodyField.setPadding(0, dp(newNote ? 4 : 12), 0, dp(12));
+    bodyField.setLineSpacing(dp(3), 1f);
+    bodyField.setMinHeight(dp(newNote ? 160 : 44));
     bodyField.setText(prefs.getString(p + "body", note == null ? "" : note.body));
     bodyField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(100000)});
     // Новая заметка: текст занимает всё свободное место, касание в любом месте ставит курсор.
-    sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, fullPage ? 0 : -2, fullPage ? 1 : 0));
-    if (!noteImage.isEmpty()) {
-      List<String> images = ImageList.parse(noteImage);
+    sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, newNote ? 0 : -2, newNote ? 1 : 0));
+    List<String> images = ImageList.parse(noteImage);
+    if (!images.isEmpty()) {
       selectedImage = Math.max(0, Math.min(selectedImage, images.size() - 1));
       LinearLayout imageBox = column();
-      imageBox.setPadding(fullPage ? 0 : dp(12), 0, fullPage ? 0 : dp(12), dp(10));
-      imageBox.addView(imageStrip(images));
+      imageBox.setPadding(0, 0, 0, dp(10));
+      if (!newNote) {
+        ImageView cover = imageTile(images.get(selectedImage), 480, 12);
+        cover.setContentDescription("Открыть фотографию " + (selectedImage + 1) + " из " + images.size());
+        cover.setOnClickListener(v -> showImageViewer(images, selectedImage));
+        imageBox.addView(cover, new LinearLayout.LayoutParams(-1, dp(150)));
+      }
+      if (newNote || images.size() > 1) imageBox.addView(imageStrip(images));
       gap(imageBox, 6);
       LinearLayout imageBar = row();
       imageBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -1733,12 +1736,11 @@ public final class MainActivity extends Activity
       TextView actions = compactButton("Действия", false, this::showImageActions);
       actions.setMinHeight(dp(44));
       imageBar.addView(actions, actionParams);
-      imageBox.addView(imageBar);
+      if (newNote || images.size() > 1) imageBox.addView(imageBar);
       sheet.addView(imageBox);
     }
     View footerRule = new View(this);
     footerRule.setBackgroundColor(LINE);
-    if (!fullPage) sheet.addView(footerRule, new LinearLayout.LayoutParams(-1, dp(1)));
     reminder = prefs.getLong(p + "reminder", note == null ? 0 : note.reminder);
     repeatMode = prefs.getInt(p + "repeat", note == null ? 0 : note.repeat);
     reminderTimes = prefs.getString(p + "times", note == null ? "" : note.reminderTimes);
@@ -1750,7 +1752,7 @@ public final class MainActivity extends Activity
     footer.setPadding(dp(12), dp(10), dp(12), dp(10));
     footer.setGravity(Gravity.CENTER_VERTICAL);
     // У новой заметки значки прокручиваются вбок, чтобы длинные подписи не сдвигали «Сохранить».
-    LinearLayout tools = fullPage ? row() : footer;
+    LinearLayout tools = row();
     ImageView imageTool = new ImageView(this);
     imageTool.setScaleType(ImageView.ScaleType.CENTER);
     imageTool.setImageDrawable(new Glyph("image", GREEN, 20));
@@ -1763,7 +1765,7 @@ public final class MainActivity extends Activity
           buzz(0);
           pickImage(false);
         });
-    tools.addView(imageTool, new LinearLayout.LayoutParams(dp(40), dp(40)));
+    if (newNote) tools.addView(imageTool, new LinearLayout.LayoutParams(dp(40), dp(40)));
     reminderButton = text("", 13, GREEN);
     reminderButton.setTypeface(null, Typeface.BOLD);
     reminderButton.setGravity(Gravity.CENTER);
@@ -1783,8 +1785,8 @@ public final class MainActivity extends Activity
     refreshReminder();
     LinearLayout.LayoutParams reminderParams = new LinearLayout.LayoutParams(-2, dp(40));
     reminderParams.leftMargin = dp(8);
-    tools.addView(reminderButton, reminderParams);
-    TextView folderButton = text("", 13, GREEN);
+    if (newNote) tools.addView(reminderButton, reminderParams);
+    folderButton = text("", 13, GREEN);
     folderButton.setTypeface(null, Typeface.BOLD);
     folderButton.setGravity(Gravity.CENTER);
     folderButton.setMinWidth(dp(40));
@@ -1796,29 +1798,21 @@ public final class MainActivity extends Activity
     folderButton.setCompoundDrawablesWithIntrinsicBounds(
         new Glyph("folder", GREEN, 20), null, null, null);
     folderButton.setFocusable(true);
-    Runnable showFolder =
-        () -> {
-          FolderStore.Folder current = new FolderStore(store).folder(editFolder);
-          folderButton.setText(current == null ? "" : "  " + current.name);
-          folderButton.setContentDescription(
-              current == null ? "Папка: без папки" : "Папка: " + current.name);
-        };
-    showFolder.run();
-    folderButton.setOnClickListener(
-        v -> {
-          buzz(0);
-          chooseFolder(
-              editFolder,
-              picked -> {
-                editFolder = picked;
-                stash();
-                showFolder.run();
-              });
-        });
+    folderButton.setOnClickListener(v -> chooseEditorFolder());
+    refreshEditorFolder();
     LinearLayout.LayoutParams folderParams = new LinearLayout.LayoutParams(-2, dp(40));
-    folderParams.leftMargin = dp(8);
-    tools.addView(folderButton, folderParams);
-    if (fullPage) {
+    if (newNote) {
+      folderParams.leftMargin = dp(8);
+      tools.addView(folderButton, folderParams);
+    } else {
+      folderButton.setBackground(ripple(PAPER, 18));
+      folderParams.rightMargin = dp(6);
+      meta.addView(folderButton, folderParams);
+      reminderParams.leftMargin = 0;
+      reminderButton.setBackground(ripple(LIME, 18));
+      meta.addView(reminderButton, reminderParams);
+    }
+    if (newNote) {
       // Сводка видео — значок в полосе вместо отдельной большой кнопки под листом.
       if (!LocalLlm.enabled(this)) {
         ImageView videoTool = new ImageView(this);
@@ -1840,10 +1834,7 @@ public final class MainActivity extends Activity
       toolScroll.setHorizontalScrollBarEnabled(false);
       toolScroll.addView(tools);
       footer.addView(toolScroll, new LinearLayout.LayoutParams(0, -2, 1));
-    }
-    if (id == 0) {
       // Компактная кнопка сохранения в правом краю нижней полосы листа.
-      if (!fullPage) footer.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
       TextView save = text("Сохранить", 14, WHITE);
       save.setTypeface(null, Typeface.BOLD);
       save.setGravity(Gravity.CENTER);
@@ -1857,10 +1848,8 @@ public final class MainActivity extends Activity
             saveNote();
           });
       LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(-2, dp(40));
-      if (fullPage) saveParams.leftMargin = dp(8);
+      saveParams.leftMargin = dp(8);
       footer.addView(save, saveParams);
-    }
-    if (fullPage) {
       // Полоса значков прижата к низу экрана над плавающей панелью, а с клавиатурой — над ней.
       LinearLayout strip = column();
       strip.setBackgroundColor(pageColor());
@@ -1872,8 +1861,12 @@ public final class MainActivity extends Activity
       root.addView(strip, new LinearLayout.LayoutParams(-1, -2));
       content.addView(sheet, new LinearLayout.LayoutParams(-1, 0, 1));
     } else {
-      sheet.addView(footer);
-      content.addView(sheet, new LinearLayout.LayoutParams(-1, -2));
+      content.addView(sheet);
+      openedNoteActions(id, footer, footerRule);
+      if (editorSearch != null) {
+        revealEditorMatch(editorSearch);
+        editorSearch = null;
+      }
     }
     if (id > 0) questionSection(id);
     if (id > 0) planSection(id);
@@ -1920,10 +1913,6 @@ public final class MainActivity extends Activity
               }));
       content.addView(proposal);
     }
-    if (!fullPage) {
-      gap(content, 16);
-      secondary(content, "Изменения сохраняются при выходе из заметки.");
-    }
     editorActive = true;
     watch(titleField, this::stash);
     watch(bodyField, this::stash);
@@ -1937,6 +1926,94 @@ public final class MainActivity extends Activity
             getSystemService(InputMethodManager.class).showSoftInput(target, 0);
           });
     }
+  }
+
+  private void chooseEditorFolder() {
+    chooseFolder(editFolder, picked -> {
+      editFolder = picked;
+      stash();
+      refreshEditorFolder();
+    });
+  }
+
+  private void refreshEditorFolder() {
+    FolderStore.Folder folder = new FolderStore(store).folder(editFolder);
+    folderButton.setText(folder == null ? "" : "  " + folder.name);
+    folderButton.setContentDescription(folder == null ? "Папка: без папки" : "Папка: " + folder.name);
+    folderButton.setVisibility(editing != 0 && folder == null ? View.GONE : View.VISIBLE);
+  }
+
+  private void openedNoteActions(long id, LinearLayout footer, View rule) {
+    LinearLayout strip = column();
+    strip.addView(rule, new LinearLayout.LayoutParams(-1, dp(1)));
+    TextView add = iconButton("Добавить", "plus", () ->
+        new Ask(this).setTitle("Добавить").setItems(
+            new String[] {"Фотографию", "Напоминание", "Папку", "Пункт плана"},
+            (dialog, which) -> {
+              switch (which) {
+                case 0 -> pickImage(false);
+                case 1 -> pickReminder();
+                case 2 -> chooseEditorFolder();
+                case 3 -> askPlanText("Новый пункт", "", "Добавить", value -> {
+                  PlanTree plan = PlanTree.parse(store.plan(id));
+                  if (plan.add(null, PlanTree.STEP, value) != null) {
+                    planCollapsed = false;
+                    savePlan(id, plan, () -> { stash(); render(); });
+                  }
+                });
+              }
+            }).setNegativeButton("Отмена", null).show());
+    footer.addView(add);
+    footer.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+    TextView discuss = iconButton("Обсудить", "chat", () -> openPlanChat(id, false));
+    discuss.setBackground(ripple(SURFACE, 12));
+    footer.addView(discuss);
+    TextView done = button("Готово", true, () -> {
+      if (!persistEditedNote()) return;
+      hideKeyboard();
+      render();
+      toast("Сохранено");
+    });
+    footer.addView(done);
+    done.setVisibility(View.GONE);
+    View.OnFocusChangeListener mode = (v, focused) -> {
+      if (focused) {
+        done.setVisibility(View.VISIBLE);
+        discuss.setVisibility(View.GONE);
+      }
+    };
+    titleField.setOnFocusChangeListener(mode);
+    bodyField.setOnFocusChangeListener(mode);
+    strip.addView(footer);
+    root.addView(strip);
+  }
+
+  private void revealEditorMatch(Pattern pattern) {
+    EditText field = bodyField;
+    Matcher match = pattern.matcher(field.getText());
+    if (!match.find()) {
+      field = titleField;
+      match = pattern.matcher(field.getText());
+      if (!match.find()) return;
+    }
+    EditText target = field;
+    int offset = match.start();
+    Editable value = target.getText();
+    android.text.style.BackgroundColorSpan highlight = new android.text.style.BackgroundColorSpan(LIME);
+    value.setSpan(highlight, offset, match.end(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    ScrollView viewport = (ScrollView) content.getParent();
+    target.post(() -> {
+      Layout layout = target.getLayout();
+      if (!target.isAttachedToWindow() || layout == null) return;
+      int line = layout.getLineForOffset(Math.min(offset, value.length()));
+      Rect bounds = new Rect();
+      viewport.offsetDescendantRectToMyCoords(target, bounds);
+      int y = bounds.top + target.getTotalPaddingTop() + layout.getLineTop(line);
+      if (y < viewport.getScrollY() || y + layout.getLineBottom(line) - layout.getLineTop(line)
+          > viewport.getScrollY() + viewport.getHeight())
+        viewport.scrollTo(0, Math.max(0, y - viewport.getHeight() / 3));
+      target.postDelayed(() -> value.removeSpan(highlight), 3500);
+    });
   }
 
   /** Удаляет файл прежней картинки, если ни заметка, ни черновик на неё больше не ссылаются. */
@@ -2211,9 +2288,17 @@ public final class MainActivity extends Activity
 
   private String reminderLabel() {
     if (reminder == 0) return "";
+    String when = date(reminder);
+    if ("edit".equals(page)) {
+      java.time.ZonedDateTime at = java.time.Instant.ofEpochMilli(reminder).atZone(ZoneId.systemDefault());
+      java.time.LocalDate today = java.time.LocalDate.now(at.getZone());
+      String day = at.toLocalDate().equals(today) ? "Сегодня" :
+          at.toLocalDate().equals(today.plusDays(1)) ? "Завтра" : "";
+      if (!day.isEmpty()) when = day + ", " + at.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+    }
     if (repeatMode == ReminderPolicy.REPEAT_LIST)
-      return date(reminder) + moreDates(repeatMode, reminderTimes);
-    return date(reminder) + (repeatMode != 0 ? "  ↻" : "");
+      return when + moreDates(repeatMode, reminderTimes);
+    return when + (repeatMode != 0 ? "  ↻" : "");
   }
 
   /** « +2» после даты: сколько ещё дат серии впереди; пусто, если серии нет. */
@@ -2320,6 +2405,7 @@ public final class MainActivity extends Activity
   private void refreshReminder() {
     if (reminderButton == null) return;
     String label = reminderLabel();
+    if ("edit".equals(page)) reminderButton.setVisibility(label.isEmpty() ? View.GONE : View.VISIBLE);
     reminderButton.setText(label);
     reminderButton.setCompoundDrawablePadding(label.isEmpty() ? 0 : dp(6));
     reminderButton.setContentDescription(
@@ -2564,7 +2650,16 @@ public final class MainActivity extends Activity
     }
   }
 
+  private Pattern editorSearch;
+  private boolean planCollapsed;
+
   private void openNote(long id) {
+    openNote(id, null);
+  }
+
+  private void openNote(long id, Pattern searchPattern) {
+    editorSearch = searchPattern;
+    planCollapsed = false;
     stash();
     if ("edit".equals(page)) {
       // Из открытой заметки в другую («Поделиться», готовая сводка видео): сохраняем текущую,
@@ -3347,7 +3442,7 @@ public final class MainActivity extends Activity
         v -> {
           buzz(0);
           rememberNotePosition(card, n.id);
-          openNote(n.id);
+          openNote(n.id, notesHighlight);
         });
     card.setOnLongClickListener(
         v -> {
@@ -3748,7 +3843,7 @@ public final class MainActivity extends Activity
             () -> {
               manager.state(p.optLong("id"), "accepted");
               if (suggestionsPopup != null) suggestionsPopup.dismiss();
-              openPlanChat(noteId);
+              openPlanChat(noteId, true);
             }));
     gap(parent, 6);
     parent.addView(
@@ -5694,7 +5789,7 @@ public final class MainActivity extends Activity
   }
 
   /** Открывает чат по заметке; новый чат сразу просит агента начать разбор. */
-  private void openPlanChat(long noteId) {
+  private void openPlanChat(long noteId, boolean startPlan) {
     stash();
     if ("edit".equals(page) && !persistEditedNote()) return;
     Note n = store.note(noteId);
@@ -5707,7 +5802,7 @@ public final class MainActivity extends Activity
     page = "chat";
     tab = 2;
     render();
-    if (fresh && chatInput != null) {
+    if (fresh && startPlan && chatInput != null) {
       chatInput.setText(PlanChat.START);
       send();
     }
@@ -5715,52 +5810,29 @@ public final class MainActivity extends Activity
 
   /** Блок «План» под листом редактора: пункты с галочками, правка долгим нажатием. */
   private void planSection(long noteId) {
-    gap(content, 12);
     LinearLayout box = column();
     content.addView(box);
     Runnable[] fill = new Runnable[1];
-    fill[0] =
-        () -> {
-          box.removeAllViews();
-          PlanTree plan = PlanTree.parse(store.plan(noteId));
-          java.time.ZoneId zone = java.time.ZoneId.systemDefault();
-          LinearLayout head = row();
-          head.setGravity(Gravity.CENTER_VERTICAL);
-          TextView title = text(plan.isEmpty() ? "План" : plan.badge(), 15, GREEN);
-          title.setTypeface(null, Typeface.BOLD);
-          if (Build.VERSION.SDK_INT >= 28) title.setAccessibilityHeading(true);
-          head.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-          head.addView(
-              compactButton(
-                  plan.isEmpty() ? "Разобрать план" : "Обсудить", plan.isEmpty(), () -> openPlanChat(noteId)));
-          box.addView(head);
-          if (plan.isEmpty()) {
-            chatNote(
-                box,
-                "Агент спросит о том, чего не хватает (сроки, люди, что взять) и соберёт шаги.");
-            return;
-          }
-          gap(box, 6);
-          LinearLayout card = column();
-          card.setPadding(dp(6), dp(6), dp(6), dp(6));
-          card.setBackground(shape(SURFACE, 12));
-          planRows(card, plan, plan.nodes, 0, noteId, zone, fill[0]);
-          box.addView(card);
-          gap(box, 6);
-          box.addView(
-              compactButton(
-                  "＋ Пункт",
-                  false,
-                  () ->
-                      askPlanText(
-                          "Новый пункт",
-                          "",
-                          "Добавить",
-                          text -> {
-                            if (plan.add(null, PlanTree.STEP, text) != null)
-                              savePlan(noteId, plan, fill[0]);
-                          })));
-        };
+    fill[0] = () -> {
+      box.removeAllViews();
+      PlanTree plan = PlanTree.parse(store.plan(noteId));
+      if (plan.isEmpty()) return;
+      gap(box, 12);
+      View rule = new View(this);
+      rule.setBackgroundColor(LINE);
+      box.addView(rule, new LinearLayout.LayoutParams(-1, dp(1)));
+      String count = plan.checkable() == 0 ? "" : " · " + plan.done() + " из " + plan.checkable();
+      TextView heading = text("План" + count, 16, INK);
+      heading.setTypeface(null, Typeface.BOLD);
+      heading.setGravity(Gravity.CENTER_VERTICAL);
+      heading.setMinHeight(dp(48));
+      heading.setFocusable(true);
+      heading.setCompoundDrawablesWithIntrinsicBounds(null, null, new Glyph(planCollapsed ? "down" : "up", GREEN, 18), null);
+      heading.setContentDescription((planCollapsed ? "Раскрыть план" : "Свернуть план") + count);
+      heading.setOnClickListener(v -> { planCollapsed = !planCollapsed; fill[0].run(); });
+      box.addView(heading);
+      if (!planCollapsed) planRows(box, plan, plan.nodes, 0, noteId, ZoneId.systemDefault(), fill[0]);
+    };
     fill[0].run();
   }
 
