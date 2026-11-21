@@ -98,6 +98,11 @@ public final class CoreTest {
             && !SearchQuery.build("\" OR 1=1; DROP TABLE notes --").contains(";"),
         "FTS query grammar cannot be injected");
     check(SearchQuery.build("!!!").isEmpty(), "Punctuation is not executable FTS syntax");
+    java.util.regex.Pattern intercom = SearchQuery.highlight("домофон");
+    String apartment = "Ключи у Лены. ".repeat(30) + "Домофон: 4821.";
+    check(SearchQuery.preview(apartment, intercom).equals("…Домофон: 4821."), "Late match and code lead the preview");
+    check(SearchQuery.highlight("елка").matcher("Ёлка").find(), "Highlight ё in original text");
+    check(SearchQuery.highlight("48").matcher("4821").find(), "Short numeric prefix");
     System.out.println("PASS: " + count + " core checks");
   }
 }

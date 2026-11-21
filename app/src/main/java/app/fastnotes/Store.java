@@ -535,6 +535,10 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
 
   public List<Note> searchNotes(String query) {
     if (query.trim().isEmpty()) return notes();
+    return searchNotes(query, FolderPolicy.ALL);
+  }
+
+  public List<Note> searchNotes(String query, long folder) {
     String match = SearchQuery.build(query);
     List<Note> result = new ArrayList<>();
     if (match.length() == 0) return result;
@@ -542,8 +546,9 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
         getReadableDatabase()
             .rawQuery(
                 "SELECT n.* FROM notes_fts JOIN notes n ON n.id=notes_fts.rowid WHERE notes_fts"
-                    + " MATCH ? AND n.trashed=0 ORDER BY n.updated DESC LIMIT 200",
-                new String[] {match})) {
+                    + " MATCH ? AND n.trashed=0 AND (?='0' OR n.folder=?)"
+                    + " ORDER BY n.updated DESC,n.id DESC LIMIT 200",
+                new String[] {match, Long.toString(folder), Long.toString(folder)})) {
       while (c.moveToNext()) result.add(read(c));
     }
     return result;

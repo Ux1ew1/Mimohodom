@@ -1,5 +1,11 @@
 # Проверка сборки — 5 ноября 2026
 
+## Android 0.10.25 — поиск и колоды, 21 ноября 2026
+
+Локально прошли `assembleDebug`, `assembleDebugAndroidTest` и `lintDebug` (0 ошибок, 23 предупреждения). Прошли `test-core.ps1`, `test-deck.ps1`, `test-folders.ps1` и `node tests/metadata-sql.cjs`. Проверены фрагмент с кодом домофона в конце длинной заметки, подсветка «ё», числовой префикс и поиск в папке при 201 более свежем совпадении вне неё.
+
+Сборка `dist/mimohodom-0.10.25-debug.apk` содержит `app.fastnotes`, versionCode 68. Подпись проверена и совпадает с 0.10.24. Список подключённых устройств ADB пуст. Проверка жестов, прокрутки и TalkBack на Android остаётся открытой.
+
 ## Android 0.10.24: заметки «кладкой» — 21 ноября 2026
 
 **Проверено на машине агента:** `assembleDebug lintDebug assembleDebugAndroidTest` прошли; все JVM- и node-тесты прошли (интерфейс они не затрагивают); `dist/mimohodom-0.10.24-debug.apk` — `versionCode 67`, сертификат тот же.

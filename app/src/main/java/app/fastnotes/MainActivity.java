@@ -2638,7 +2638,8 @@ public final class MainActivity extends Activity
     LinearLayout listing = column();
     // Список прокручивается под плавающей панелью, поэтому внизу оставлен запас.
     listing.setPadding(0, 0, 0, dp(100));
-    content.addView(pullToSync(scroll(listing)), new LinearLayout.LayoutParams(-1, 0, 1));
+    ScrollView viewport = scroll(listing);
+    content.addView(pullToSync(viewport), new LinearLayout.LayoutParams(-1, 0, 1));
     Runnable refresh =
         () -> {
           listing.removeAllViews();
@@ -2650,7 +2651,8 @@ public final class MainActivity extends Activity
           deckViews.clear();
           planCache = store.planBadges();
           questionCache = manager.questionNotes();
-          List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search);
+          notesHighlight = SearchQuery.highlight(search);
+          List<Note> found = search.trim().isEmpty() ? store.notes() : store.searchNotes(search, folder);
           visibleNotes.clear();
           for (Note n : found) {
             if (folder != FolderPolicy.ALL && n.folder != folder) continue;
@@ -2659,7 +2661,7 @@ public final class MainActivity extends Activity
           }
           count.setText(getString(R.string.notes_count, visibleNotes.size()));
           listing.setContentDescription(count.getText());
-          if (visibleNotes.isEmpty())
+          if (visibleNotes.isEmpty()) {
             listing.addView(
                 text(
                     !search.isEmpty()
@@ -2669,6 +2671,12 @@ public final class MainActivity extends Activity
                             : "В этой папке пока пусто.",
                     17,
                     MUTED));
+            if (!search.trim().isEmpty() && folder != FolderPolicy.ALL)
+              listing.addView(button("Искать во всех папках", false, () -> {
+                folder = FolderPolicy.ALL;
+                render();
+              }));
+          }
           int columns = grid ? (getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2) : 1;
           // Кладка: карточки идут в столбцы, каждая — в тот, где сейчас меньше «высоты» (оценка
           // по содержимому, без замеров). Раскрытая колода прерывает кладку своим блоком.
@@ -2681,18 +2689,9 @@ public final class MainActivity extends Activity
             if (expanded) {
               cols = null;
               LinearLayout group = column();
-              TextView deckLabel =
-                  text(
-                      "Колода · "
-                          + members.size()
-                          + " "
-                          + TrashPolicy.plural(
-                              members.size(), "исходная заметка", "исходные заметки", "исходных заметок"),
-                      12,
-                      STACK_FG);
-              deckLabel.setTypeface(null, Typeface.BOLD);
-              deckLabel.setPadding(0, dp(4), 0, dp(8));
-              group.addView(deckLabel);
+              group.setBackground(shape(STACK_BG, 15));
+              group.setPadding(dp(10), 0, dp(10), dp(2));
+              group.addView(deckToggle(n.id, members.size() + 1, true));
               List<Note> all = new ArrayList<>();
               all.add(n);
               for (long member : members) {
@@ -2703,7 +2702,7 @@ public final class MainActivity extends Activity
               float[] deckFilled = new float[columns];
               List<View> fan = new ArrayList<>();
               for (int i = 0; i < all.size(); i++) {
-                View card = i == 0 ? groupedCard(n, grid, true) : noteCard(all.get(i), grid);
+                View card = noteCard(all.get(i), grid, true);
                 placeCard(deckCols, deckFilled, card, cardWeight(all.get(i)));
                 fan.add(card);
               }
@@ -2719,7 +2718,7 @@ public final class MainActivity extends Activity
                 cols = masonryRow(listing, columns);
                 Arrays.fill(filled, 0);
               }
-              placeCard(cols, filled, groupedCard(n, grid, false), cardWeight(n) + (members.isEmpty() ? 0 : 0.6f));
+              placeCard(cols, filled, groupedCard(n, grid), cardWeight(n) + (members.isEmpty() ? 0 : 0.6f));
             }
           }
           membersCache = null;
@@ -2727,6 +2726,17 @@ public final class MainActivity extends Activity
           questionCache = null;
         };
     refresh.run();
+    if (notesAnchor != 0) {
+      View anchor = listing.findViewWithTag(notesAnchor);
+      int offset = notesAnchorOffset;
+      notesAnchor = 0;
+      if (anchor != null) viewport.post(() -> {
+        if (!anchor.isAttachedToWindow()) return;
+        Rect bounds = new Rect();
+        viewport.offsetDescendantRectToMyCoords(anchor, bounds);
+        viewport.scrollTo(0, bounds.top - offset);
+      });
+    }
     if (find != null) {
       EditText field = find;
       watch(
@@ -3279,16 +3289,64 @@ public final class MainActivity extends Activity
    * Карточка заметки для кладки (0.10.24): высота по содержимому, обложка-фото сверху, время
    * напоминания, название, текст, полоска плана, метки помощника, дата. Меню — долгим нажатием.
    */
-  private View noteCard(Note n, boolean grid) {
+  private Pattern notesHighlight;
+  private long notesAnchor;
+  private int notesAnchorOffset;
+
+  private void rememberNotePosition(View view, long id) {
+    ViewParent parent = view.getParent();
+    while (parent instanceof View && !(parent instanceof ScrollView)) parent = parent.getParent();
+    if (parent instanceof ScrollView viewport) {
+      Rect bounds = new Rect();
+      viewport.offsetDescendantRectToMyCoords(view, bounds);
+      notesAnchorOffset = bounds.top - viewport.getScrollY();
+      notesAnchor = id;
+    }
+  }
+
+  private CharSequence highlightNoteText(String value) {
+    if (notesHighlight == null) return value;
+    SpannableString styled = new SpannableString(value);
+    Matcher matches = notesHighlight.matcher(value);
+    while (matches.find()) {
+      styled.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), matches.start(), matches.end(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+      styled.setSpan(new android.text.style.BackgroundColorSpan(LIME), matches.start(), matches.end(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    }
+    return styled;
+  }
+
+  private TextView deckToggle(long top, int count, boolean expanded) {
+    String number = count + " " + TrashPolicy.plural(count, "заметка", "заметки", "заметок");
+    TextView toggle = text("Колода · " + number, 13, STACK_FG);
+    toggle.setTypeface(null, Typeface.BOLD);
+    toggle.setMinHeight(dp(48));
+    toggle.setGravity(Gravity.CENTER_VERTICAL);
+    toggle.setCompoundDrawablesWithIntrinsicBounds(null, null, new Glyph(expanded ? "up" : "down", STACK_FG, 16), null);
+    toggle.setContentDescription((expanded ? "Свернуть колоду, " : "Раскрыть колоду, ") + number);
+    toggle.setTag(-top);
+    toggle.setFocusable(true);
+    toggle.setOnClickListener(v -> {
+      rememberNotePosition(v, -top);
+      toggleDeck(new ManagerStore(store), top);
+    });
+    return toggle;
+  }
+
+  private View noteCard(Note n, boolean grid, boolean expanded) {
     boolean inDeck = new ManagerStore(store).top(n.id) != 0;
     List<Long> sources = membersOf(n.id);
     LinearLayout card = column();
-    card.setBackground(ripple(inDeck ? STACK_BG : n.reminder > 0 ? REMINDER_BG : SURFACE, 12));
+    card.setTag(n.id);
+    int cardColor = inDeck && !expanded ? STACK_BG : n.reminder > 0 ? REMINDER_BG : SURFACE;
+    GradientDrawable panel = shape(cardColor, 14);
+    panel.setStroke(dp(1), inDeck ? STACK_LINE : LINE);
+    card.setBackground(new RippleDrawable(android.content.res.ColorStateList.valueOf(0x2028634B), panel, null));
     card.setClipToOutline(true);
-    card.setOutlineProvider(rounded(12));
+    card.setOutlineProvider(rounded(14));
     card.setOnClickListener(
         v -> {
           buzz(0);
+          rememberNotePosition(card, n.id);
           openNote(n.id);
         });
     card.setOnLongClickListener(
@@ -3332,27 +3390,19 @@ public final class MainActivity extends Activity
       inner.addView(when);
       gap(inner, 8);
     }
-    if (!sources.isEmpty()) {
-      TextView deck =
-          text(
-              "Колода · "
-                  + (sources.size() + 1)
-                  + " "
-                  + TrashPolicy.plural(sources.size() + 1, "заметка", "заметки", "заметок"),
-              12,
-              STACK_FG);
-      deck.setTypeface(null, Typeface.BOLD);
-      inner.addView(deck);
-      gap(inner, 6);
-    }
+    if (!sources.isEmpty() && !expanded && search.trim().isEmpty())
+      inner.addView(deckToggle(n.id, sources.size() + 1, false));
     TextView title = text(n.title, 16, inDeck ? (dark ? INK : 0xFF3E2352) : INK);
+    title.setText(highlightNoteText(n.title));
     title.setTypeface(null, Typeface.BOLD);
     title.setMaxLines(grid ? 3 : 1);
     title.setEllipsize(TextUtils.TruncateAt.END);
     inner.addView(title);
-    if (!n.body.isEmpty()) {
+    String preview = SearchQuery.preview(n.body, notesHighlight);
+    if (!preview.isEmpty()) {
       gap(inner, 6);
-      TextView body = text(Retrieval.excerpt(n.body, "", 320), 13, inDeck ? STACK_FG : MUTED);
+      TextView body = text(preview, 14, inDeck ? STACK_FG : MUTED);
+      body.setText(highlightNoteText(preview));
       body.setLineSpacing(dp(2), 1);
       body.setMaxLines(grid ? 6 : 2);
       body.setEllipsize(TextUtils.TruncateAt.END);
@@ -3400,7 +3450,7 @@ public final class MainActivity extends Activity
       int imageCount = n.image.isEmpty() ? 0 : ImageList.count(n.image);
       inner.addView(
           text(
-              shortDate(n.created) + (imageCount > 0 ? " · " + imageCount + " фото" : ""),
+              noteCardDate(n) + (imageCount > 0 ? " · " + imageCount + " фото" : ""),
               12,
               MUTED));
     }
@@ -3408,7 +3458,7 @@ public final class MainActivity extends Activity
         n.title
             + (n.reminder > 0 ? ", напомнить " + date(n.reminder) : "")
             + ", "
-            + Retrieval.excerpt(n.body, "", 200)
+            + preview
             + ", создана "
             + date(n.created)
             + ". Долгое нажатие — меню");
@@ -3494,10 +3544,10 @@ public final class MainActivity extends Activity
    * Свёрнутая колода (этап 8): под верхней карточкой 1–3 слоя, повёрнутые на ±2–4° и сдвинутые на
    * ~5 dp ({@link DeckGeometry}); места снизу ровно столько, чтобы углы слоёв не обрезались.
    */
-  private View groupedCard(Note n, boolean grid, boolean expanded) {
-    View card = noteCard(n, grid);
+  private View groupedCard(Note n, boolean grid) {
+    View card = noteCard(n, grid, false);
     int layers = DeckGeometry.layers(membersOf(n.id).size());
-    if (layers == 0 || expanded) return card;
+    if (layers == 0 || !search.trim().isEmpty()) return card;
     // Высота карточки в кладке своя у каждой, поэтому слои растягиваются по высоте самой карточки
     // (MATCH_PARENT со сдвигом вниз), а запас снизу считается по средней высоте карточки.
     FrameLayout stack = new FrameLayout(this);
@@ -8683,6 +8733,16 @@ public final class MainActivity extends Activity
     return formatted(shortDateFormat, ms);
   }
 
+  private String noteCardDate(Note n) {
+    String created = shortDate(n.created), updated = shortDate(n.updated);
+    if (n.updated <= n.created || created.equals(updated)) return created;
+    java.time.LocalDate day = java.time.Instant.ofEpochMilli(n.updated).atZone(ZoneId.systemDefault()).toLocalDate();
+    java.time.LocalDate today = java.time.LocalDate.now();
+    if (day.equals(today)) return "Изменено сегодня";
+    if (day.equals(today.minusDays(1))) return "Изменено вчера";
+    return "Изменено " + updated;
+  }
+
   /** Проверяет AICore и при необходимости скачивает Gemini Nano. Работает вне UI-потока. */
   private void checkAiCore(TextView status, boolean allowDownload) {
     if (LocalLlm.busy()) {
@@ -9711,7 +9771,8 @@ public final class MainActivity extends Activity
       c.translate(getBounds().left, getBounds().top);
       c.scale(getBounds().width() / 24f, getBounds().height() / 24f);
       switch (name) {
-        case "down" -> {
+        case "up", "down" -> {
+          if (name.equals("up")) c.rotate(180, 12, 12);
           Path down = new Path();
           down.moveTo(6, 9);
           down.lineTo(12, 15);
