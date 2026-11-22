@@ -22,7 +22,7 @@ import java.util.regex.*;
 import org.json.*;
 
 public final class MainActivity extends Activity
-    implements ChatRunner.Listener, ImageRunner.Listener, VideoRunner.Listener {
+    implements ChatRunner.Listener, ImageRunner.Listener, VideoRunner.Listener, DayDigestRunner.Listener {
   /** Белый для текста и значков на цветной заливке: одинаковый в обеих темах. */
   private static final int WHITE = 0xFFFFFFFF;
   /**
@@ -334,6 +334,7 @@ public final class MainActivity extends Activity
     ChatRunner.listen(this);
     ImageRunner.listen(this);
     VideoRunner.listen(this);
+    DayDigestRunner.listen(this);
     BackgroundAnalysis.configure(this);
     render();
     // Файлы изображений, на которые больше никто не ссылается (удалённые заметки, замены).
@@ -433,6 +434,7 @@ public final class MainActivity extends Activity
     ChatRunner.listen(this);
     ImageRunner.listen(this);
     VideoRunner.listen(this);
+    DayDigestRunner.listen(this);
     imageFinished();
     videoFinished();
     restoreReminders();
@@ -574,6 +576,11 @@ public final class MainActivity extends Activity
       render();
     }
     if (!isFinishing() && !isDestroyed()) showPendingCreation();
+  }
+
+  @Override
+  public void digestChanged() {
+    if (!isFinishing() && !isDestroyed() && "today".equals(page)) render();
   }
 
   private void showPendingCreation() {
@@ -1407,6 +1414,14 @@ public final class MainActivity extends Activity
     content.addView(title);
     String dayName = day.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMMM", new Locale("ru")));
     content.addView(text(Character.toUpperCase(dayName.charAt(0)) + dayName.substring(1), 14, MUTED));
+    DayDigest.Input digestInput;
+    try {
+      digestInput = DayDigest.collect(
+          store.dayReminders(start, end), store.dayPlanSources(start, end), start, end, zone);
+    } catch (JSONException e) {
+      digestInput = new DayDigest.Input(start, end, zone);
+    }
+    todayDigestView(digestInput);
 
     TreeMap<Long, List<Note>> events = new TreeMap<>();
     for (Note note : store.dayReminders(start, end)) {
@@ -1506,6 +1521,100 @@ public final class MainActivity extends Activity
         render();
       }));
     }
+  }
+
+  private void todayDigestView(DayDigest.Input snapshot) {
+    boolean sameDay = DayDigestRunner.day == snapshot.start;
+    TextView launch = quietAction(
+        DayDigestRunner.running ? "Готовим сводку…" : "Сводка дня",
+        () -> requestDayDigest(snapshot));
+    launch.setEnabled(!DayDigestRunner.running);
+    launch.setAlpha(DayDigestRunner.running ? .5f : 1);
+    content.addView(launch);
+    gap(content, 4);
+    if (sameDay && DayDigestRunner.result != null) {
+      LinearLayout card = todayCard(PAPER);
+      TextView heading = text("Сводка дня", 20, INK);
+      heading.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+      card.addView(heading);
+      if (!DayDigestRunner.result.summary.isEmpty()) {
+        gap(card, 4);
+        card.addView(text(DayDigestRunner.result.summary, 15, INK));
+      }
+      for (DayDigest.Item item : DayDigestRunner.result.items) {
+        gap(card, 8);
+        card.addView(text(item.text, 15, INK));
+        DayDigest.Entry source = DayDigestRunner.input == null
+            ? null : DayDigestRunner.input.source(item.note);
+        if (source != null) {
+          TextView link = quietAction(source.title.isEmpty() ? "Открыть исходную заметку" : source.title, () -> {
+            Note current = store.note(item.note);
+            if (current == null || current.trashed != 0) toast("Исходная заметка удалена");
+            else openNote(item.note);
+          });
+          link.setTextColor(GREEN);
+          card.addView(link);
+        }
+      }
+      if (!DayDigestRunner.usage.isEmpty()) card.addView(text(DayDigestRunner.usage, 11, MUTED));
+      card.addView(quietAction("Обновить сводку", () -> requestDayDigest(snapshot)));
+    }
+    if (sameDay && !DayDigestRunner.error.isEmpty()) {
+      LinearLayout card = todayCard(PAPER);
+      card.addView(text(DayDigestRunner.error, 14, RED));
+      LinearLayout actions = row();
+      actions.addView(compactButton("Повторить", true, () -> requestDayDigest(snapshot)),
+          new LinearLayout.LayoutParams(0, -2, 1));
+      actions.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+      actions.addView(compactButton("Закрыть", false, () -> {
+        DayDigestRunner.clear();
+        render();
+      }), new LinearLayout.LayoutParams(0, -2, 1));
+      card.addView(actions);
+    }
+  }
+
+  /** Перед каждым платным запуском показывает состав данных; согласие сохраняется общее с чатом. */
+  private void requestDayDigest(DayDigest.Input snapshot) {
+    if (DayDigestRunner.running) {
+      toast("Сводка уже готовится");
+      return;
+    }
+    if (snapshot == null || snapshot.isEmpty()) {
+      toast("Для сводки пока нет данных");
+      return;
+    }
+    String key;
+    try {
+      key = Secrets.read(this);
+    } catch (Exception e) {
+      toast("Не удалось прочитать ключ. Сохраните его заново в настройках.");
+      return;
+    }
+    String model = prefs.getString("model", "");
+    if (key.isEmpty() || model.isEmpty()) {
+      new Ask(this)
+          .setTitle("Подключите Polza.AI")
+          .setMessage("Для сводки дня нужны API-ключ и выбранная модель Polza.AI.")
+          .setNegativeButton("Позже", null)
+          .setPositiveButton("Настройки", (d, w) -> navigate(3))
+          .show();
+      return;
+    }
+    boolean first = !prefs.getBoolean("consent", false);
+    new Ask(this)
+        .setTitle(first ? "Отправить данные дня в Polza.AI?" : "Составить сводку дня?")
+        .setMessage(
+            "В Polza.AI уйдут названия и даты сегодняшних событий, шаги планов и отметки их"
+                + " выполнения — не больше 12 заметок и 6000 знаков данных. Полные тексты названных"
+                + " заметок не отправляются. Это один платный запрос с вашего баланса; автоматического"
+                + " повтора не будет.")
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton(first ? "Согласен и отправить" : "Отправить", (d, w) -> {
+          if (first) prefs.edit().putBoolean("consent", true).apply();
+          if (DayDigestRunner.start(this, key, model, snapshot)) render();
+        })
+        .show();
   }
 
   private void todayHeading(String label) {

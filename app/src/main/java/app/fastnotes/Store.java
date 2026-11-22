@@ -1092,6 +1092,20 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  /** Данные планов на экране «Сегодня» и для ручной сводки; схема не меняется. */
+  public List<DayDigest.PlanSource> dayPlanSources(long start, long end) {
+    List<DayDigest.PlanSource> out = new ArrayList<>();
+    try (Cursor rows = getReadableDatabase().rawQuery(
+        "SELECT id,title,body,plan FROM notes WHERE trashed=0 AND plan<>'' ORDER BY updated DESC,id DESC", null)) {
+      while (rows.moveToNext()) {
+        List<PlanTree.Node> steps = PlanTree.parse(rows.getString(3)).scheduledSteps(start, end);
+        if (!steps.isEmpty())
+          out.add(new DayDigest.PlanSource(rows.getLong(0), rows.getString(1), rows.getString(2), steps));
+      }
+    }
+    return out;
+  }
+
   public List<Note> dayReminders(long start, long end) {
     List<Note> notes = new ArrayList<>();
     try (Cursor c = getReadableDatabase().rawQuery(
