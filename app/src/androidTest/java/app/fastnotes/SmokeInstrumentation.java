@@ -20,6 +20,7 @@ public final class SmokeInstrumentation extends Instrumentation {
     long id = 0, chat = 0;
     try (Store db = new Store(getTargetContext())) {
       ManagerStorageTest.run(getTargetContext());
+      checkToday(db);
       id = db.save(0, "", "Проверочная заметка\nТекст", 0);
       Note note = db.note(id);
       require(note.title.equals("Проверочная заметка"), "Auto title");
@@ -242,6 +243,29 @@ public final class SmokeInstrumentation extends Instrumentation {
         if (chat != 0) db.deleteChat(chat);
       }
     }
+  }
+
+  private static void checkToday(Store db) {
+    long at = System.currentTimeMillis() + 3600000;
+    String times = ReminderPolicy.encodeTimes(new long[]{at, at + 3600000});
+    long id = db.save(0, "Проверка экрана дня", "Текст", at, ReminderPolicy.REPEAT_LIST, 15, times);
+    try {
+      Note before = db.note(id);
+      require(db.dayReminders(at, at + 1).stream().anyMatch(n -> n.id == id), "Day reminder selected");
+      long later = at + 7200000;
+      String moved = ReminderPolicy.encodeTimes(new long[]{at + 3600000, later});
+      Note after = db.changeSchedule(before, at + 3600000, moved);
+      require(after != null && after.reminderTimes.equals(moved) && after.lead == 15, "Moved one date");
+      require(db.changeSchedule(before, at, times) == null, "Stale move rejected");
+      Note restored = db.changeSchedule(after, before.reminder, times);
+      require(restored != null && restored.reminder == at && restored.reminderTimes.equals(times), "Undo move");
+      PlanTree plan = new PlanTree();
+      PlanTree.Node step = plan.add(null, PlanTree.STEP, "Собрать сумку");
+      plan.add(step.id, PlanTree.TIME, "Срок").at = at;
+      db.savePlan(id, plan.toJson());
+      require(db.markScheduledStep(id, step) && db.markScheduledStep(id, step), "Step retry");
+      require(PlanTree.parse(db.plan(id)).find(step.id).done, "Retry keeps step checked");
+    } finally { db.delete(id); }
   }
 
   private static void require(boolean ok, String name) {

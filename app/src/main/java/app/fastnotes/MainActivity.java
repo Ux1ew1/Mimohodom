@@ -101,7 +101,7 @@ public final class MainActivity extends Activity
 
   /** Фон страницы: у новой заметки и ленты чатов — белый лист на весь экран, у остальных — бумажный. */
   private int pageColor() {
-    return "edit".equals(page) || "home".equals(page) || "chats".equals(page) ? SURFACE : PAPER;
+    return "edit".equals(page) || "home".equals(page) || "chats".equals(page) || "today".equals(page) ? SURFACE : PAPER;
   }
 
   /** Тема окна и системных панелей под выбранную палитру (значки панелей светлые на тёмном). */
@@ -146,6 +146,13 @@ public final class MainActivity extends Activity
   // Вкладки слева направо: 0 «Заметки», 1 «Записать», 2 «ИИ-чат». 3 — настройки вне нижней панели.
   private int tab = 1;
   private String page = "home";
+  private int todayOrigin;
+  private Note scheduleBefore, scheduleAfter;
+  private long movedTo;
+  private final Handler dayClock = new Handler(Looper.getMainLooper());
+  private final Runnable refreshDay = () -> {
+    if ("today".equals(page) && !isFinishing() && !isDestroyed()) render();
+  };
   private long editing = 0, reminder = 0, chat = 0;
   /** Повтор и свой интервал напоминания в открытом редакторе (-1 — общая настройка). */
   private int repeatMode = 0, leadChoice = -1;
@@ -302,6 +309,19 @@ public final class MainActivity extends Activity
     if (state != null) {
       tab = state.getInt("tab", 1);
       page = state.getString("page", "home");
+      todayOrigin = state.getInt("todayOrigin", 0);
+      long movedId = state.getLong("movedNote");
+      if (movedId != 0) {
+        Note current = store.note(movedId);
+        if (current != null && current.trashed == 0 && current.repeat == state.getInt("movedRepeat")
+            && current.reminder == state.getLong("newReminder")
+            && current.reminderTimes.equals(state.getString("newTimes"))) {
+          scheduleAfter = current;
+          scheduleBefore = new Note(movedId, current.title, "", 0, 0, state.getLong("oldReminder"));
+          scheduleBefore.reminderTimes = state.getString("oldTimes", "");
+          movedTo = state.getLong("movedTo");
+        }
+      }
       editing = state.getLong("editing");
       chat = state.getLong("chat");
       returnPage = state.getString("return", "notes");
@@ -417,7 +437,7 @@ public final class MainActivity extends Activity
     restoreReminders();
     if (reliabilityBox != null && "settings.reminders".equals(page))
       fillReliability(reliabilityBox);
-    if ("chat".equals(page) || "notes".equals(page)) {
+    if ("chat".equals(page) || "notes".equals(page) || "today".equals(page)) {
       stash();
       render();
     }
@@ -434,7 +454,7 @@ public final class MainActivity extends Activity
                   }
                   if (rendering) return;
                   if ("settings.sync".equals(page)
-                      || (PeerSync.changedLastRun() && "notes".equals(page))) {
+                      || (PeerSync.changedLastRun() && ("notes".equals(page) || "today".equals(page)))) {
                     stash();
                     render();
                   }
@@ -444,6 +464,7 @@ public final class MainActivity extends Activity
 
   @Override
   protected void onPause() {
+    dayClock.removeCallbacks(refreshDay);
     flushCredentials();
     stash();
     persistEditedNote();
@@ -487,6 +508,16 @@ public final class MainActivity extends Activity
     out.putLong("pickerTarget", pickerTarget);
     out.putInt("tab", tab);
     out.putString("page", page);
+    out.putInt("todayOrigin", todayOrigin);
+    if (scheduleAfter != null) {
+      out.putLong("movedNote", scheduleAfter.id);
+      out.putInt("movedRepeat", scheduleAfter.repeat);
+      out.putLong("newReminder", scheduleAfter.reminder);
+      out.putString("newTimes", scheduleAfter.reminderTimes);
+      out.putLong("oldReminder", scheduleBefore.reminder);
+      out.putString("oldTimes", scheduleBefore.reminderTimes);
+      out.putLong("movedTo", movedTo);
+    }
     out.putLong("editing", editing);
     out.putLong("chat", chat);
     out.putString("return", returnPage);
@@ -513,8 +544,10 @@ public final class MainActivity extends Activity
       stash();
       if (!persistEditedNote()) return;
       page = returnPage;
-      tab = page.equals("chat") ? 2 : page.equals("home") ? 1 : 0;
+      tab = page.equals("today") ? todayOrigin : page.equals("chat") ? 2 : page.equals("home") ? 1 : 0;
       render();
+    } else if ("today".equals(page)) {
+      navigate(todayOrigin);
     } else if (page.startsWith("settings.")) {
       flushCredentials();
       hideKeyboard();
@@ -862,6 +895,7 @@ public final class MainActivity extends Activity
   }
 
   private void render() {
+    dayClock.removeCallbacks(refreshDay);
     flushCredentials();
     rendering = true;
     analysisStatusView = null;
@@ -924,6 +958,7 @@ public final class MainActivity extends Activity
       case "home" -> editor(0);
       case "edit" -> editor(editing);
       case "notes" -> notes();
+      case "today" -> todayPage();
       case "manager" -> managerPage();
       case "trash" -> trashPage();
       case "chats" -> chats();
@@ -1046,7 +1081,7 @@ public final class MainActivity extends Activity
     items.setPadding(dp(14), dp(9), dp(14), dp(9));
     dock.addView(items, new FrameLayout.LayoutParams(-2, -2));
     // Настройки (вкладка 3) вне панели: подсветка гаснет и ничего не выделено (индекс -1).
-    final int to = tab < 3 ? tab : -1;
+    final int to = tab < 3 && !"today".equals(page) ? tab : -1;
     final int from = lastDockTab == -2 ? to : lastDockTab;
     boolean animate = from != to && android.animation.ValueAnimator.areAnimatorsEnabled();
     final int endIndex = to >= 0 ? to : (from >= 0 ? from : 1);
@@ -1173,8 +1208,15 @@ public final class MainActivity extends Activity
       bell.addView(
           barIcon(
               "bell",
-              pending > 0 ? "Предложения ИИ: " + pending : "Предложения ИИ",
-              () -> showSuggestions(bar)),
+              pending > 0 ? "Сегодня. Предложений помощника: " + pending : "Сегодня",
+              () -> {
+                stash();
+                hideKeyboard();
+                todayOrigin = tab;
+                editing = 0;
+                page = "today";
+                render();
+              }),
           new FrameLayout.LayoutParams(size, size));
       if (pending > 0) {
         TextView badge = text(pending > 9 ? "9+" : String.valueOf(pending), 10, WHITE);
@@ -1336,7 +1378,196 @@ public final class MainActivity extends Activity
     return b;
   }
 
-  /** Выпадающее меню колокольчика. Предложения применяются только по явному нажатию. */
+  /** Местный календарный день с учётом длины суток в часовом поясе телефона. */
+  private void todayPage() {
+    ZoneId zone = ZoneId.systemDefault();
+    java.time.LocalDate day = java.time.LocalDate.now(zone);
+    long start = day.atStartOfDay(zone).toInstant().toEpochMilli();
+    long end = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli();
+    dayClock.postDelayed(refreshDay, Math.max(1, end - System.currentTimeMillis()));
+    LinearLayout bar = row();
+    String source = todayOrigin == 1 ? "Записать" : todayOrigin == 2 ? "Чаты" : "Заметки";
+    bar.addView(iconButton(source, "back", this::goBack));
+    bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+    bar.addView(quietAction("Предложения ИИ", () -> showSuggestions(bar)));
+    content.addView(bar);
+    gap(content, 12);
+    TextView title = text("Сегодня", 32, INK);
+    title.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+    content.addView(title);
+    String dayName = day.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMMM", new Locale("ru")));
+    content.addView(text(Character.toUpperCase(dayName.charAt(0)) + dayName.substring(1), 14, MUTED));
+
+    TreeMap<Long, List<Note>> events = new TreeMap<>();
+    for (Note note : store.dayReminders(start, end)) {
+      long[] times = note.repeat == ReminderPolicy.REPEAT_LIST
+          ? ReminderPolicy.withTime(ReminderPolicy.parseTimes(note.reminderTimes), note.reminder)
+          : new long[]{note.reminder};
+      for (long at : times) if (at >= start && at < end)
+        events.computeIfAbsent(at, key -> new ArrayList<>()).add(note);
+    }
+    if (!events.isEmpty()) todayHeading("Напоминания");
+    for (Map.Entry<Long, List<Note>> entry : events.entrySet())
+      for (Note note : entry.getValue()) todayEvent(note, entry.getKey());
+
+    boolean hasSteps = false;
+    try (android.database.Cursor rows = store.getReadableDatabase().rawQuery(
+        "SELECT id,title,plan FROM notes WHERE trashed=0 AND plan<>'' ORDER BY updated DESC,id DESC", null)) {
+      while (rows.moveToNext()) {
+        PlanTree plan = PlanTree.parse(rows.getString(2));
+        List<PlanTree.Node> steps = plan.scheduledSteps(start, end);
+        if (steps.isEmpty()) continue;
+        if (!hasSteps) todayHeading("План на сегодня");
+        hasSteps = true;
+        long id = rows.getLong(0);
+        LinearLayout card = todayCard(PAPER);
+        card.addView(quietAction(rows.getString(1), () -> openNote(id)));
+        card.addView(text("План · " + plan.done() + " из " + plan.checkable(), 13, MUTED));
+        android.widget.ProgressBar progress = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(plan.checkable());
+        progress.setProgress(plan.done());
+        progress.setProgressTintList(android.content.res.ColorStateList.valueOf(GREEN));
+        card.addView(progress, new LinearLayout.LayoutParams(-1, dp(5)));
+        for (PlanTree.Node step : steps) {
+          CheckBox box = new CheckBox(this);
+          box.setText(step.text);
+          box.setTextColor(step.done ? MUTED : INK);
+          box.setChecked(step.done);
+          if (step.done) box.setPaintFlags(box.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
+          box.setOnClickListener(v -> {
+            if (!store.markScheduledStep(id, step)) toast("План изменился");
+            render();
+          });
+          card.addView(box);
+        }
+      }
+    }
+    ManagerStore manager = new ManagerStore(store);
+    boolean questions = false;
+    for (JSONObject question : manager.pending()) {
+      if (!"clarify".equals(question.optString("type"))) continue;
+      Note sourceNote = store.note(ManagerStore.firstSource(question));
+      if (sourceNote == null || sourceNote.trashed != 0) continue;
+      if (!questions) todayHeading("Помощник");
+      questions = true;
+      LinearLayout card = todayCard(STACK_BG);
+      card.addView(text(sourceNote.title, 13, STACK_FG));
+      card.addView(text(question.optString("reason"), 17, INK));
+      LinearLayout options = column();
+      card.addView(quietAction("Ответить", () ->
+          options.setVisibility(options.getVisibility() == View.GONE ? View.VISIBLE : View.GONE)));
+      clarifyOptions(options, question, manager, this::render);
+      options.setVisibility(View.GONE);
+      card.addView(options);
+    }
+    for (AgentLog.Entry entry : AgentLog.recent(store, Integer.MAX_VALUE,
+        Math.max(1, System.currentTimeMillis() - start + 1000))) {
+      if (entry.created < start || !AgentJournal.ANSWER.equals(entry.action)
+          || !AgentJournal.DONE.equals(entry.state)) continue;
+      Note sourceNote = store.note(entry.data.optLong("note"));
+      if (sourceNote == null || sourceNote.trashed != 0) continue;
+      if (!questions) todayHeading("Помощник");
+      questions = true;
+      LinearLayout card = todayCard(STACK_BG);
+      card.addView(text(sourceNote.title, 13, STACK_FG));
+      card.addView(text(entry.data.optString("question"), 17, INK));
+      card.addView(text("Ваш ответ · " + entry.data.optString("answer"), 14, MUTED));
+      card.addView(quietAction("Изменить ответ", () -> askPlanText("Ваш ответ", entry.data.optString("answer"),
+          "Сохранить", answer -> {
+            if (!manager.replaceAnswer(entry, answer)) toast("Вопрос уже изменился");
+            render();
+          })));
+    }
+    if (events.isEmpty() && !hasSteps && !questions) todayHeading("На сегодня всё");
+    if (scheduleAfter != null) {
+      Note current = store.note(scheduleAfter.id);
+      if (current == null || current.trashed != 0 || current.reminder != scheduleAfter.reminder
+          || current.repeat != scheduleAfter.repeat || !current.reminderTimes.equals(scheduleAfter.reminderTimes))
+        scheduleBefore = scheduleAfter = null;
+    }
+    if (scheduleAfter != null) {
+      LinearLayout moved = todayCard(PAPER);
+      moved.addView(text(scheduleAfter.title + " · " + date(movedTo), 14, MUTED));
+      moved.addView(quietAction("Отменить перенос", () -> {
+        Note restored = store.changeSchedule(scheduleAfter, scheduleBefore.reminder, scheduleBefore.reminderTimes);
+        if (restored != null) Reminders.scheduleEdited(this, scheduleAfter, restored);
+        else toast("Расписание уже изменилось");
+        scheduleAfter = scheduleBefore = null;
+        render();
+      }));
+    }
+  }
+
+  private void todayHeading(String label) {
+    gap(content, 16);
+    TextView head = text(label, 22, INK);
+    head.setTypeface(Typeface.create("serif", Typeface.NORMAL));
+    if (Build.VERSION.SDK_INT >= 28) head.setAccessibilityHeading(true);
+    content.addView(head);
+    gap(content, 6);
+  }
+
+  private LinearLayout todayCard(int color) {
+    LinearLayout card = column();
+    pad(card, 14);
+    card.setBackground(shape(color, 14));
+    content.addView(card);
+    gap(content, 6);
+    return card;
+  }
+
+  private void todayEvent(Note note, long at) {
+    LinearLayout card = todayCard(REMINDER_BG);
+    LinearLayout line = row();
+    LinearLayout words = column();
+    TextView time = text(new java.text.SimpleDateFormat("HH:mm", Locale.ROOT).format(new Date(at)), 14, GREEN);
+    time.setCompoundDrawablesWithIntrinsicBounds(new Glyph("clock", GREEN, 16), null, null, null);
+    time.setCompoundDrawablePadding(dp(6));
+    words.addView(time);
+    TextView name = text(note.title, 19, INK);
+    name.setTypeface(null, Typeface.BOLD);
+    words.addView(name);
+    if (!note.body.isEmpty()) {
+      TextView preview = text(Retrieval.excerpt(note.body, "", 130), 14, MUTED);
+      preview.setMaxLines(2);
+      preview.setEllipsize(TextUtils.TruncateAt.END);
+      words.addView(preview);
+    }
+    line.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+    if (!note.image.isEmpty())
+      line.addView(imageTile(ImageList.cover(note.image), 72, 10), new LinearLayout.LayoutParams(dp(64), dp(72)));
+    line.setOnClickListener(v -> openNote(note.id));
+    line.setFocusable(true);
+    card.addView(line);
+    boolean repeating = note.repeat != 0 && note.repeat != ReminderPolicy.REPEAT_LIST;
+    card.addView(quietAction(repeating ? "Перенести серию" : "Перенести", () ->
+        whenPicker(Math.max(System.currentTimeMillis(), at), 20, repeating ? "Перенести серию" : "Перенести напоминание", target -> {
+          if (target == at) return;
+          long reminder = target;
+          String times = note.reminderTimes;
+          if (note.repeat == ReminderPolicy.REPEAT_LIST) {
+            long[] changed = ReminderPolicy.moveInList(
+                ReminderPolicy.withTime(ReminderPolicy.parseTimes(times), note.reminder), at, target);
+            if (changed.length == 0) {
+              toast("Это время уже есть в заметке");
+              return;
+            }
+            times = ReminderPolicy.encodeTimes(changed);
+            reminder = ReminderPolicy.currentInList(changed, System.currentTimeMillis());
+          }
+          Note changed = store.changeSchedule(note, reminder, times);
+          if (changed == null) toast("Расписание уже изменилось");
+          else {
+            scheduleBefore = note;
+            scheduleAfter = changed;
+            movedTo = target;
+            Reminders.scheduleEdited(this, note, changed);
+          }
+          render();
+        })));
+  }
+
+  /** Предложения и журнал остаются доступны из шапки экрана «Сегодня». */
   private void showSuggestions(View anchor) {
     if (suggestionsPopup != null && suggestionsPopup.isShowing()) {
       suggestionsPopup.dismiss();
@@ -1611,7 +1842,7 @@ public final class MainActivity extends Activity
     if (id > 0) {
       LinearLayout toolbar = row();
       TextView back = iconButton(switch (returnPage) {
-        case "chat" -> "Чат"; case "manager" -> "Помощник"; case "notes" -> "Заметки"; default -> "Назад";
+        case "chat" -> "Чат"; case "manager" -> "Помощник"; case "notes" -> "Заметки"; case "today" -> "Сегодня"; default -> "Назад";
       }, "back", this::goBack);
       back.setBackground(ripple(SURFACE, 10));
       toolbar.addView(back);
@@ -5883,6 +6114,18 @@ public final class MainActivity extends Activity
   private void planNodeMenu(PlanTree plan, PlanTree.Node n, long noteId, Runnable refresh) {
     List<String> labels = new ArrayList<>();
     List<Runnable> actions = new ArrayList<>();
+    if (n.checkable()) {
+      labels.add("Назначить срок");
+      actions.add(() -> whenPicker(System.currentTimeMillis(), 18, "Срок пункта плана", at -> {
+        PlanTree.Node due = null;
+        for (PlanTree.Node child : n.children)
+          if (PlanTree.TIME.equals(child.kind) && "Срок".equals(child.text)) { due = child; break; }
+        if (due == null) due = plan.add(n.id, PlanTree.TIME, "Срок");
+        if (due == null) { toast("Достигнут предел размера или глубины плана"); return; }
+        due.at = at;
+        savePlan(noteId, plan, refresh);
+      }));
+    }
     if (PlanTree.TIME.equals(n.kind) && n.at > 0) {
       labels.add("Напомнить в это время");
       actions.add(() -> remindFromPlan(n));
@@ -9605,6 +9848,10 @@ public final class MainActivity extends Activity
    * свой календарь месяца (неделя с понедельника, прошедшие дни недоступны) и время «−/+».
    */
   private void whenPicker(long initial, java.util.function.LongConsumer picked) {
+    whenPicker(initial, 18, "Когда напомнить", picked);
+  }
+
+  private void whenPicker(long initial, int eveningHour, String title, java.util.function.LongConsumer picked) {
     Calendar cal = Calendar.getInstance();
     cal.setTimeInMillis(initial);
     int[] ymd = {cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)};
@@ -9630,13 +9877,13 @@ public final class MainActivity extends Activity
           List<long[]> quick = new ArrayList<>();
           List<String> quickNames = new ArrayList<>();
           Calendar c = Calendar.getInstance();
-          c.set(Calendar.HOUR_OF_DAY, 18);
+          c.set(Calendar.HOUR_OF_DAY, eveningHour);
           c.set(Calendar.MINUTE, 0);
           c.set(Calendar.SECOND, 0);
           c.set(Calendar.MILLISECOND, 0);
           if (c.getTimeInMillis() > now + 300_000) {
             quick.add(new long[] {c.getTimeInMillis()});
-            quickNames.add("Сегодня 18:00");
+            quickNames.add("Сегодня " + eveningHour + ":00");
           }
           c.add(Calendar.DAY_OF_MONTH, 1);
           c.set(Calendar.HOUR_OF_DAY, 9);
@@ -9790,7 +10037,7 @@ public final class MainActivity extends Activity
     popup[0] =
         new Ask(this)
             .asSheet()
-            .setTitle("Когда напомнить")
+            .setTitle(title)
             .setView(body)
             .setNegativeButton("Отмена", null)
             .setPositiveButton("Готово", null)

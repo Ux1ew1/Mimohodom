@@ -243,6 +243,11 @@ public final class ReminderPolicyTest {
     check(ReminderPolicy.periodic(ReminderPolicy.REPEAT_WEEKLY) && !ReminderPolicy.periodic(ReminderPolicy.REPEAT_LIST)
         && !ReminderPolicy.periodic(ReminderPolicy.REPEAT_NONE), "periodic modes");
 
+    long[] dates = {100, 200, 300};
+    check(java.util.Arrays.equals(ReminderPolicy.moveInList(dates, 200, 400), new long[]{100, 300, 400}),
+        "Move just one occurrence and preserve order");
+    check(ReminderPolicy.moveInList(dates, 200, 300).length == 0, "Reject duplicate destination");
+    check(ReminderPolicy.moveInList(dates, 250, 400).length == 0, "Reject missing source");
     System.out.println("ReminderPolicyTest: " + count + " checks passed");
   }
 }

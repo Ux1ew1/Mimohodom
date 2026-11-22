@@ -241,6 +241,30 @@ public final class PlanTree {
     return null;
   }
 
+  /** Дата шага задаётся вложенным пунктом «Время» или ближайшим родительским временем. */
+  public List<Node> scheduledSteps(long start, long end) {
+    List<Node> result = new ArrayList<>();
+    scheduledSteps(nodes, 0, start, end, result);
+    return result;
+  }
+
+  private static void scheduledSteps(List<Node> nodes, long inherited, long start, long end,
+      List<Node> result) {
+    for (Node n : nodes) {
+      long at = TIME.equals(n.kind) && n.at > 0 ? n.at : inherited;
+      if (n.checkable()) {
+        boolean dated = false, matches = false;
+        for (Node child : n.children) {
+          if (!TIME.equals(child.kind) || child.at <= 0) continue;
+          dated = true;
+          matches |= child.at >= start && child.at < end;
+        }
+        if (dated ? matches : at >= start && at < end) result.add(n);
+      }
+      scheduledSteps(n.children, at, start, end, result);
+    }
+  }
+
   public boolean toggle(String id) {
     Node n = find(id);
     if (n == null || !n.checkable()) return false;

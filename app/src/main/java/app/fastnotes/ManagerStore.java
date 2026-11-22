@@ -273,6 +273,18 @@ public final class ManagerStore {
   }
 
   /** Пользователь выбрал вариант ответа на уточнение: запоминаем его и закрываем предложение. */
+  boolean replaceAnswer(AgentLog.Entry entry, String answer) {
+    db.beginTransaction();
+    try {
+      AgentLog.undo(store, entry.id);
+      if (!answerClarify(entry.data.optLong("proposal"), answer)) return false;
+      db.setTransactionSuccessful();
+      return true;
+    } catch (IllegalStateException changed) {
+      return false;
+    } finally { db.endTransaction(); }
+  }
+
   public boolean answerClarify(long id, String answer) {
     db.beginTransaction();
     try (Cursor c =

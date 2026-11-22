@@ -145,6 +145,19 @@ public final class PlanTreeTest {
     check(finished.completeAll() == 0, "second time nothing to do");
     check(finished.badge().equals("План 6/6"), "badge after complete: " + finished.badge());
 
+    PlanTree dated = new PlanTree();
+    PlanTree.Node period = dated.add(null, PlanTree.TIME, "Сегодня");
+    period.at = 1000;
+    PlanTree.Node inherited = dated.add(period.id, PlanTree.ITEM, "Взять билеты");
+    PlanTree.Node later = dated.add(period.id, PlanTree.STEP, "Проверить бронь");
+    dated.add(later.id, PlanTree.TIME, "Срок").at = 2000;
+    PlanTree.Node explicit = dated.add(null, PlanTree.STEP, "Купить билеты");
+    dated.add(explicit.id, PlanTree.TIME, "Срок").at = 1999;
+    dated.add(null, PlanTree.STEP, "Без срока");
+    check(dated.scheduledSteps(1000, 2000).equals(List.of(inherited, explicit)), "Only steps due in day");
+    check(dated.scheduledSteps(2000, 3000).equals(List.of(later)), "Child deadline overrides parent day");
+    check(PlanTree.parse(dated.toJson()).scheduledSteps(1000, 2000).size() == 2, "Dates survive storage");
+
     System.out.println("PlanTree tests passed: " + count);
   }
 }

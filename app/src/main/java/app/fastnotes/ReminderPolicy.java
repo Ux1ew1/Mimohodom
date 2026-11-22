@@ -217,6 +217,13 @@ public final class ReminderPolicy {
     return java.util.Arrays.stream(times).filter(t -> t != at).toArray();
   }
 
+  /** Перенос одной даты без потери остальных. Пустой результат означает конфликт. */
+  public static long[] moveInList(long[] times, long from, long to) {
+    if (to <= 0 || java.util.Arrays.binarySearch(times, from) < 0
+        || (from != to && java.util.Arrays.binarySearch(times, to) >= 0)) return new long[0];
+    return withTime(withoutTime(times, from), to);
+  }
+
   /** Сколько дат списка ещё впереди. */
   public static int remaining(long[] times, long now) {
     int count = 0;

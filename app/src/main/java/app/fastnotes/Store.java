@@ -1092,6 +1092,50 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  public List<Note> dayReminders(long start, long end) {
+    List<Note> notes = new ArrayList<>();
+    try (Cursor c = getReadableDatabase().rawQuery(
+        "SELECT * FROM notes WHERE trashed=0 AND ((reminder>=? AND reminder<?) OR (repeat_mode=? AND reminder>0)) ORDER BY reminder,id",
+        new String[]{"" + start, "" + end, "" + ReminderPolicy.REPEAT_LIST})) {
+      while (c.moveToNext()) notes.add(read(c));
+    }
+    return notes;
+  }
+
+  /** Одна транзакция с повторной проверкой расписания после выбора времени. */
+  public Note changeSchedule(Note expected, long reminder, String times) {
+    SQLiteDatabase db = getWritableDatabase();
+    db.beginTransaction();
+    try {
+      Note n = note(expected.id);
+      if (n == null || n.trashed != 0 || n.reminder != expected.reminder
+          || n.repeat != expected.repeat || !n.reminderTimes.equals(expected.reminderTimes)) return null;
+      ContentValues schedule = new ContentValues();
+      schedule.put("reminder", reminder);
+      schedule.put("reminder_times", times);
+      db.update("notes", schedule, "id=?", new String[]{Long.toString(n.id)});
+      Note changed = note(n.id);
+      db.setTransactionSuccessful();
+      return changed;
+    } finally { db.endTransaction(); }
+  }
+
+  public boolean markScheduledStep(long id, PlanTree.Node shown) {
+    SQLiteDatabase db = getWritableDatabase();
+    db.beginTransaction();
+    try {
+      Note n = note(id);
+      if (n == null || n.trashed != 0) return false;
+      PlanTree plan = PlanTree.parse(plan(id));
+      PlanTree.Node current = plan.find(shown.id);
+      if (current == null || !current.text.equals(shown.text) || !current.checkable()) return false;
+      current.done = !shown.done;
+      savePlan(id, plan.toJson());
+      db.setTransactionSuccessful();
+      return true;
+    } finally { db.endTransaction(); }
+  }
+
   /**
    * Записывает план. Время правки заметки не трогаем; в обмен заметку отправит триггер
    * {@code notes_sync_plan}.
