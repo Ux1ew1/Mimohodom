@@ -15,6 +15,14 @@ android {
         // Сборка для проверки агентом: как debug (тот же applicationId и ключ, ставится поверх), плюс мост консольных команд из src/agent.
         // В обычные debug и release он не попадает.
         create("agent") { initWith(getByName("debug")); matchingFallbacks += listOf("debug") }
+        // Независимая копия для установки рядом с основной: свой пакет, данные и календарь.
+        create("separate") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".separate"
+            versionNameSuffix = "-separate"
+            manifestPlaceholders["appLabel"] = "Мимоходом Отдельно"
+            matchingFallbacks += listOf("debug")
+        }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
