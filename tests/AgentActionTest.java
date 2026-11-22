@@ -55,7 +55,7 @@ public final class AgentActionTest {
   }
 
   static void kinds() {
-    check(AgentAction.Kind.values().length == 9, "nine kinds in the vocabulary (extend added)");
+    check(AgentAction.Kind.values().length == 10, "ten kinds in the vocabulary (folder added)");
     for (AgentAction.Kind k : AgentAction.Kind.values())
       check(AgentAction.Kind.of(k.wire) == k, "wire name round trip " + k);
     check(AgentAction.Kind.of("delete") == null, "no hard delete in the vocabulary");

@@ -14,6 +14,7 @@ $sources = @(
   "$src/ReviewAnalysis.java",
   "$src/Analysis.java",
   "$src/JsonRepair.java",
+  "$src/FolderPolicy.java",
   "$src/AgentAction.java",
   "$src/AgentPlan.java",
   "$src/PlanTree.java",

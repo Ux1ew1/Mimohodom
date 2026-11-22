@@ -9,6 +9,7 @@ $sources = @(
   "$projectRoot/app/src/main/java/app/fastnotes/JsonRepair.java",
   "$projectRoot/app/src/main/java/app/fastnotes/AgentJournal.java",
   "$projectRoot/app/src/main/java/app/fastnotes/DeckPolicy.java",
+  "$projectRoot/app/src/main/java/app/fastnotes/FolderPolicy.java",
   "$projectRoot/app/src/main/java/app/fastnotes/Note.java",
   "$projectRoot/app/src/main/java/app/fastnotes/PlanTree.java",
   "$projectRoot/app/src/main/java/app/fastnotes/ReminderPolicy.java",

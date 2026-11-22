@@ -10,7 +10,7 @@ $files = @(
   "$src/YoutubeLink.java", "$src/VideoAnalysis.java", "$src/VideoMerge.java",
   "$src/TopicSelection.java", "$src/ManagerAnalysis.java", "$src/TaskKind.java", "$src/Metadata.java",
   "$src/Retrieval.java", "$src/Note.java",
-  "$src/AgentAction.java", "$src/AgentPlan.java", "$src/JsonRepair.java", "$src/PlanTree.java", "$src/ReminderPolicy.java",
+  "$src/AgentAction.java", "$src/AgentPlan.java", "$src/JsonRepair.java", "$src/FolderPolicy.java", "$src/PlanTree.java", "$src/ReminderPolicy.java",
   "$projectRoot/tests/VideoTest.java", "$projectRoot/tests/VideoMergeTest.java"
 )
 & "$javaRoot/bin/javac.exe" -encoding UTF-8 -cp $json -d $out @files

@@ -70,6 +70,8 @@ jobs:
           ./scripts/test-chat-feed.ps1
           ./scripts/test-trash.ps1
           ./scripts/test-agent-actions.ps1
+          ./scripts/test-day-digest.ps1
+          ./scripts/test-commands.ps1
           ./scripts/test-images.ps1
           ./scripts/test-image-input.ps1
           ./scripts/test-image-list.ps1
@@ -86,6 +88,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Folders SQL tests failed' }
           node tests/agent-log-sql.cjs
           if ($LASTEXITCODE -ne 0) { throw 'Agent log SQL tests failed' }
+          node tests/commands-sql.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Command SQL tests failed' }
           node tests/chat-feed-sql.cjs
           if ($LASTEXITCODE -ne 0) { throw 'Chat feed SQL tests failed' }
       - name: Build APK, test APK and lint

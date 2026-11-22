@@ -22,7 +22,8 @@ public final class AgentJournal {
       CREATE = "create",
       GROUP = "group",
       EXTEND = "extend",
-      ANSWER = "answer";
+      ANSWER = "answer",
+      COMMAND_BATCH = "command_batch";
   public static final String DONE = "done", UNDONE = "undone";
 
   private AgentJournal() {}
@@ -177,6 +178,12 @@ public final class AgentJournal {
       }
       case ANSWER -> "Ответ «" + data.optString("answer") + "» на вопрос «"
           + data.optString("question") + "»";
+      case COMMAND_BATCH -> {
+        int changes = (data.optJSONArray("created_notes") == null ? 0 : data.optJSONArray("created_notes").length())
+            + (data.optJSONArray("folders") == null ? 0 : data.optJSONArray("folders").length())
+            + (data.optJSONArray("reminders") == null ? 0 : data.optJSONArray("reminders").length());
+        yield "Команда: " + data.optString("command") + (changes > 0 ? " · изменений: " + changes : "");
+      }
       default -> "Действие помощника";
     };
   }
@@ -191,6 +198,9 @@ public final class AgentJournal {
               + " туда по галочке); прежние колоды соберутся как были.";
       case EXTEND -> "Вернётся прежняя сводка колоды, добавленные заметки — обратно в список.";
       case ANSWER -> "Ответ забудется, вопрос снова появится в колокольчике.";
+      case COMMAND_BATCH ->
+          "Новые заметки уйдут в корзину, папки и напоминания вернутся к состоянию до пакета."
+              + " Если что-то уже изменено вручную, отмена не выполняется частично.";
       default -> "";
     };
   }

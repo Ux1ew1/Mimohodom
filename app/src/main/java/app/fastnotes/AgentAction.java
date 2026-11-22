@@ -19,6 +19,8 @@ public final class AgentAction {
     EXTEND("extend"),
     TRASH("trash"),
     REMIND("remind"),
+    /** Переместить явно выбранные заметки в новую или существующую папку (команды в чате). */
+    FOLDER("folder"),
     ASK("ask"),
     PLAN("plan"),
     CHECK_IN("check_in");
@@ -66,6 +68,8 @@ public final class AgentAction {
   public final List<Long> trash = new ArrayList<>();
 
   public String title = "", body = "", reason = "", question = "", folder = "", askKind = "";
+  /** Проверенные поисковые подсказки для create; не меняют авторский текст как инструкции. */
+  public JSONObject metadata = new JSONObject();
   public final List<String> options = new ArrayList<>();
   /** Моменты напоминания (миллисекунды), по возрастанию, без повторов. */
   public final List<Long> times = new ArrayList<>();
@@ -134,6 +138,8 @@ public final class AgentAction {
           return null;
         a.folder = raw.optString("folder", "").trim();
         if (a.folder.length() > MAX_FOLDER) return null;
+        a.metadata = raw.optJSONObject("metadata");
+        if (a.metadata == null) a.metadata = new JSONObject();
         a.legacy = a.notes.isEmpty() ? "" : "task";
       }
       case GROUP -> {
@@ -170,6 +176,12 @@ public final class AgentAction {
           return null;
         if (a.repeat != ReminderPolicy.REPEAT_NONE && a.times.size() != 1) return null;
         a.separate = raw.optBoolean("separate", false);
+      }
+      case FOLDER -> {
+        if (!a.readNotes(raw, "notes", scope, 1)) return null;
+        a.folder = raw.optString("folder", "").trim();
+        if (a.folder.isEmpty() || a.folder.length() > MAX_FOLDER || !FolderPolicy.valid(a.folder))
+          return null;
       }
       case ASK -> {
         if (!a.readNote(raw, scope, true) || !a.readQuestion(raw) || !a.readOptions(raw, 0))
@@ -253,6 +265,37 @@ public final class AgentAction {
     }
     if (!notes.isEmpty()) return Collections.unmodifiableList(notes);
     return note == 0 ? List.of() : List.of(note);
+  }
+
+  /** Сериализация разрешённых команд в messages.draft; другие виды не выдаются за команду. */
+  public JSONObject commandJson() throws JSONException {
+    if (kind != Kind.CREATE && kind != Kind.REMIND && kind != Kind.FOLDER)
+      throw new JSONException("Не команда: " + kind.wire);
+    JSONObject out = new JSONObject().put("action", kind.wire).put("reason", reason);
+    if (kind == Kind.CREATE) {
+      JSONArray ids = new JSONArray();
+      for (long id : notes) ids.put(id);
+      out.put("sources", ids)
+          .put("title", title)
+          .put("body", body)
+          .put("folder", folder)
+          .put("metadata", metadata);
+    } else if (kind == Kind.REMIND) {
+      JSONArray dates = new JSONArray();
+      for (long at : times)
+        dates.put(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm XXX", Locale.ROOT)
+            .format(java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault())));
+      // Миллисекунды сохраняются отдельно, чтобы сериализация не зависела от смены часового пояса.
+      JSONArray exact = new JSONArray();
+      for (long at : times) exact.put(at);
+      out.put("note", note).put("times", exact).put("lead", lead).put("repeat", repeat)
+          .put("local_times", dates);
+    } else {
+      JSONArray ids = new JSONArray();
+      for (long id : notes) ids.put(id);
+      out.put("notes", ids).put("folder", folder);
+    }
+    return out;
   }
 
   /** Действие в виде прежнего предложения колокольчика без отметок версий; иначе {@code null}. */

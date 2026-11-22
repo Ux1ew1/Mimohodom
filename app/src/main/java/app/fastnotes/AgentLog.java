@@ -92,6 +92,8 @@ final class AgentLog {
   static final class Outcome {
     String message = "";
     final List<Long> trashed = new ArrayList<>(), restored = new ArrayList<>();
+    /** Расписания до/после отмены пакета: будильники переставляются только после commit. */
+    final List<Note> reminderBefore = new ArrayList<>(), reminderAfter = new ArrayList<>();
   }
 
   /**
@@ -121,6 +123,10 @@ final class AgentLog {
             case AgentJournal.GROUP -> undoGroup(store, db, data, out);
             case AgentJournal.EXTEND -> undoExtend(store, db, data);
             case AgentJournal.ANSWER -> undoAnswer(db, data);
+            case AgentJournal.COMMAND_BATCH -> {
+              CommandExecutor.undoInTransaction(store, db, data, out);
+              yield out.message;
+            }
             default -> throw new IllegalStateException("Это действие нельзя отменить");
           };
       db.execSQL(

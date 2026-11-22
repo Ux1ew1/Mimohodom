@@ -138,6 +138,9 @@ public final class ChatRunner {
                 store.getWritableDatabase().endTransaction();
               }
               answer.usage = "Изображения проанализированы. Заметка сохранена.";
+            } else if (!local && !checkin && chatImages.isEmpty() && CommandAnalysis.wants(query)) {
+              // Команда получает отдельный строгий контракт. Даже валидный ответ — только черновик.
+              answer = commandReply(store, key, model, query);
             } else {
               // Диалог, начатый помощником: он продолжает расспрашивать по ситуации.
               String guidance = checkin ? CheckIn.followUp(local) : "";
@@ -216,7 +219,9 @@ public final class ChatRunner {
                       update.getLong("revision"),
                       update.getJSONObject("metadata"));
                 }
-                if (answer.draft != null && Polza.wantsNote(query)) {
+                if (answer.draft != null
+                    && !CommandDraft.isDraft(answer.draft)
+                    && Polza.wantsNote(query)) {
                   long id =
                       store.save(
                           0, answer.draft.getString("title"), answer.draft.getString("body"), 0);
@@ -320,6 +325,52 @@ public final class ChatRunner {
             changed();
           }
         });
+  }
+
+  /** Облачная команда: один запрос, строгий разбор и только сериализация предпросмотра. */
+  private static Polza.Answer commandReply(Store store, String key, String model, String query)
+      throws Exception {
+    long now = System.currentTimeMillis();
+    java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+    List<Note> selected = Retrieval.select(store.candidates(query), query, now);
+    List<CommandAnalysis.FolderInfo> folders = new ArrayList<>();
+    for (FolderStore.Folder folder : new FolderStore(store).list())
+      folders.add(new CommandAnalysis.FolderInfo(folder.id, folder.name));
+    AgentAction.Scope scope = new AgentAction.Scope(now, zone);
+    for (Note note : selected) scope.note(note.id, true);
+    JSONObject response =
+        store.complete(key, CommandAnalysis.payload(model, query, selected, folders, now, zone));
+    CommandAnalysis.Reply reply;
+    try {
+      reply = CommandAnalysis.parse(CommandAnalysis.responseText(response), scope);
+    } catch (JSONException e) {
+      throw new java.io.IOException(
+          "Модель вернула неверный формат команды. Повторите запрос вручную или выберите другую модель.",
+          e);
+    }
+    Polza.Answer answer = new Polza.Answer();
+    answer.sources = new JSONArray();
+    String say = reply.say, question = reply.question;
+    answer.text =
+        question.isEmpty()
+            ? say
+            : say.isEmpty() ? question : say + "\n\n" + question;
+    CommandDraft draft =
+        CommandDraft.create(query, reply.actions, selected, folders, now, zone, reply.rejected);
+    if (!draft.actions.isEmpty()) {
+      answer.draft = draft.toJson();
+      if (answer.text.isEmpty()) answer.text = "Проверьте предложенные изменения.";
+    } else if (answer.text.isEmpty()) {
+      answer.text = "Не удалось определить безопасное действие. Уточните команду.";
+    }
+    StringBuilder used = new StringBuilder("Команда · предпросмотр без изменений");
+    JSONObject tokens = response.optJSONObject("usage");
+    if (tokens != null && tokens.has("total_tokens"))
+      used.append(" · ").append(tokens.optInt("total_tokens")).append(" токенов");
+    if (tokens != null && tokens.has("cost_rub"))
+      used.append(" · ").append(tokens.optString("cost_rub")).append(" ₽");
+    answer.usage = used.toString();
+    return answer;
   }
 
   /**

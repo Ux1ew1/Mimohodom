@@ -1034,6 +1034,11 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  /** Для CommandExecutor: вызывается только внутри уже открытой общей транзакции. */
+  public boolean applyMetadataInTransaction(long id, long revision, JSONObject enrichment) {
+    return applyMetadataLocked(id, revision, enrichment);
+  }
+
   private boolean applyMetadataLocked(long id, long revision, JSONObject enrichment) {
     Note note = note(id);
     if (note == null || note.updated != revision) return false;

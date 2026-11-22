@@ -4261,7 +4261,10 @@ public final class MainActivity extends Activity
         Note n = store.note(back);
         if (n != null && n.reminder > now) Reminders.schedule(this, n);
       }
-      if (!outcome.trashed.isEmpty() || !outcome.restored.isEmpty()) CalendarSync.runAsync(this);
+      for (int i = 0; i < outcome.reminderAfter.size(); i++)
+        Reminders.scheduleEdited(this, outcome.reminderBefore.get(i), outcome.reminderAfter.get(i));
+      if (!outcome.trashed.isEmpty() || !outcome.restored.isEmpty() || !outcome.reminderAfter.isEmpty())
+        CalendarSync.runAsync(this);
     } catch (IllegalStateException e) {
       done = e.getMessage();
     } catch (Exception e) {
@@ -5502,7 +5505,9 @@ public final class MainActivity extends Activity
           }
         }
         String draftJson = m.optString("draft", "");
-        if (!user
+        if (!user && !draftJson.isEmpty() && CommandDraft.isDraft(new JSONObject(draftJson))) {
+          commandDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
+        } else if (!user
             && !draftJson.isEmpty()
             && (new JSONObject(draftJson).has("plan") || new JSONObject(draftJson).has("edit"))) {
           noteDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
@@ -5818,6 +5823,86 @@ public final class MainActivity extends Activity
     actions.addView(
         compactButton(
             "Не создавать",
+            false,
+            () -> {
+              store.dismissDraft(message);
+              stash();
+              render();
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    bubble.addView(actions);
+  }
+
+  /** Карточка команды полностью восстанавливается из messages.draft после поворота и render(). */
+  private void commandDraftView(LinearLayout bubble, long message, JSONObject json) {
+    CommandDraft draft;
+    try {
+      draft = CommandDraft.fromJson(json);
+    } catch (JSONException e) {
+      chatNote(bubble, "Черновик команды повреждён. Отправьте команду ещё раз.");
+      return;
+    }
+    gap(bubble, 8);
+    TextView heading = text("Предпросмотр команды", 14, GREEN);
+    heading.setTypeface(null, Typeface.BOLD);
+    bubble.addView(heading);
+    gap(bubble, 4);
+    for (String line : draft.preview()) {
+      TextView item = text("• " + line, 13, INK);
+      item.setLineSpacing(dp(2), 1);
+      item.setPadding(0, dp(3), 0, dp(3));
+      bubble.addView(item);
+    }
+    if (!draft.notes.isEmpty()) {
+      gap(bubble, 5);
+      chatNote(bubble, "Затронутые заметки:");
+      for (CommandDraft.NoteState note : draft.notes.values()) {
+        TextView name = text(note.title, 13, GREEN);
+        name.setTypeface(null, Typeface.BOLD);
+        name.setPadding(dp(8), dp(5), dp(8), dp(5));
+        name.setMinHeight(dp(40));
+        name.setGravity(Gravity.CENTER_VERTICAL);
+        name.setBackground(ripple(LIME, 8));
+        name.setContentDescription("Открыть заметку: " + note.title);
+        name.setOnClickListener(v -> openNote(note.id));
+        bubble.addView(name);
+      }
+    }
+    if (draft.rejected > 0)
+      chatNote(
+          bubble,
+          "Отклонено небезопасных или неподдерживаемых действий: "
+              + draft.rejected
+              + ". Применятся только перечисленные выше.");
+    gap(bubble, 8);
+    LinearLayout actions = row();
+    actions.addView(
+        compactButton(
+            "Применить",
+            true,
+            () -> {
+              buzz(1);
+              try {
+                CommandExecutor.Outcome outcome = CommandExecutor.apply(store, message);
+                // Системные будильники и календарь меняются только после успешного commit.
+                for (CommandExecutor.Change change : outcome.reminders)
+                  Reminders.scheduleEdited(getApplicationContext(), change.before, change.after);
+                CalendarSync.runAsync(getApplicationContext());
+                stash();
+                render();
+                undoBar("Команда применена");
+              } catch (IllegalStateException e) {
+                // Конфликт не закрывает черновик: пользователь видит, что именно не применилось.
+                toast(e.getMessage() == null ? "Команда не применена" : e.getMessage());
+              } catch (Exception e) {
+                toast("Не удалось применить команду. Никакие изменения не сохранены.");
+              }
+            }),
+        new LinearLayout.LayoutParams(0, -2, 1));
+    actions.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
+    actions.addView(
+        compactButton(
+            "Отмена",
             false,
             () -> {
               store.dismissDraft(message);
