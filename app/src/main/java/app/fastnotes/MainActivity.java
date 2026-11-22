@@ -140,7 +140,6 @@ public final class MainActivity extends Activity
   private int navInset;
   private boolean keyboardUp, searchOpen, focusEditor, focusSearch;
   private Runnable closeSearch;
-  private EditText searchField;
   private PopupWindow suggestionsPopup;
   private EditText titleField, bodyField, chatInput;
   // Вкладки слева направо: 0 «Заметки», 1 «Записать», 2 «ИИ-чат». 3 — настройки вне нижней панели.
@@ -326,6 +325,7 @@ public final class MainActivity extends Activity
       chat = state.getLong("chat");
       returnPage = state.getString("return", "notes");
       search = state.getString("search", "");
+      notesSearchOpen = state.getBoolean("notesSearchOpen");
       folder = state.getLong("folder");
       pickerPage = state.getString("pickerPage", "");
       pickerTarget = state.getLong("pickerTarget");
@@ -404,6 +404,7 @@ public final class MainActivity extends Activity
         tab = 0;
         page = "notes";
         search = "";
+        notesSearchOpen = false;
       }
       case "app.fastnotes.action.SEARCH" -> {
         tab = 0;
@@ -522,6 +523,7 @@ public final class MainActivity extends Activity
     out.putLong("chat", chat);
     out.putString("return", returnPage);
     out.putString("search", search);
+    out.putBoolean("notesSearchOpen", notesSearchOpen);
     out.putLong("folder", folder);
     super.onSaveInstanceState(out);
   }
@@ -1182,21 +1184,17 @@ public final class MainActivity extends Activity
   }
 
   /**
-   * Верхняя строка: назад слева, поиск по центру, колокольчик с предложениями ИИ и настройки справа.
-   * Поле поиска раскрывается поверх остальных кнопок, быстро в начале и медленнее к концу.
+   * Верхняя строка: назад слева, колокольчик и настройки справа.
    */
-  private View topBar(boolean back, boolean searchable, boolean actions) {
+  private View topBar(boolean back, boolean actions) {
     searchOpen = false;
     closeSearch = null;
-    searchField = null;
     FrameLayout bar = new FrameLayout(this);
     int size = dp(44);
-    List<View> fading = new ArrayList<>();
     if (back) {
       View button = barIcon("back", "Назад", this::goBack);
       bar.addView(
           button, new FrameLayout.LayoutParams(size, size, Gravity.START | Gravity.CENTER_VERTICAL));
-      fading.add(button);
     }
     if (actions) {
       View settingsButton = barIcon("settings", "Настройки", () -> animateNavigate(3));
@@ -1237,12 +1235,17 @@ public final class MainActivity extends Activity
           new FrameLayout.LayoutParams(size, size, Gravity.END | Gravity.CENTER_VERTICAL);
       bellParams.rightMargin = dp(48);
       bar.addView(bell, bellParams);
-      fading.add(bell);
-      fading.add(settingsButton);
     }
-    if (!searchable) return bar;
+    return bar;
+  }
 
-    // Фокус по умолчанию держит сама строка, чтобы поле не раскрывалось само.
+  private EditText notesSearchOverlay(TextView count) {
+    FrameLayout bar = new FrameLayout(this);
+    View folders = folderChips();
+    FrameLayout.LayoutParams folderParams = new FrameLayout.LayoutParams(-1, -2);
+    folderParams.topMargin = dp(54);
+    bar.addView(folders, folderParams);
+    // Папки задают постоянную высоту строки. Поверх неё растёт только панель поиска.
     bar.setFocusableInTouchMode(true);
     bar.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
     EditText field = new EditText(this);
@@ -1254,19 +1257,18 @@ public final class MainActivity extends Activity
     field.setSingleLine(true);
     field.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
     field.setPadding(dp(8), 0, dp(8), 0);
-    String barText = "chats".equals(page) ? chatSearch : search;
-    field.setContentDescription("chats".equals(page) ? "Поиск по чатам" : "Поиск по заметкам");
+    field.setContentDescription("Поиск по заметкам");
     field.setOnEditorActionListener(
         (v, action, event) -> {
           hideKeyboard();
           return true;
         });
-    field.setText(barText);
+    field.setText(search);
+    field.setSelection(field.length());
     LinearLayout box = row();
     box.setPadding(dp(14), 0, dp(6), 0);
     GradientDrawable boxBackground = shape(SURFACE, 14);
     boxBackground.setStroke(dp(1), LINE);
-    box.setBackground(boxBackground);
     ImageView glass = new ImageView(this);
     glass.setImageDrawable(new Glyph("search", MUTED, 20));
     box.addView(glass, new LinearLayout.LayoutParams(dp(20), dp(20)));
@@ -1277,11 +1279,17 @@ public final class MainActivity extends Activity
     clear.setBackground(shape(LIME, 10));
     clear.setContentDescription("Закрыть поиск");
     box.addView(clear, new LinearLayout.LayoutParams(dp(32), dp(32)));
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, size, Gravity.CENTER_VERTICAL);
-    int left = back ? dp(52) : 0, right = actions ? dp(96) : 0;
-    bar.addView(box, params);
-    SearchMotion motion = new SearchMotion(params, box, clear, field, fading, left, right);
-    searchField = field;
+    LinearLayout panel = column();
+    panel.setBackground(boxBackground);
+    panel.setClipToOutline(true);
+    panel.addView(box, new LinearLayout.LayoutParams(-1, dp(46)));
+    count.setGravity(Gravity.CENTER_VERTICAL);
+    count.setPadding(dp(16), 0, dp(12), 0);
+    panel.addView(count, new LinearLayout.LayoutParams(-1, -1));
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, dp(46), Gravity.TOP);
+    bar.addView(panel, params);
+    content.addView(bar);
+    SearchMotion motion = new SearchMotion(params, panel, clear, folders, count);
     closeSearch =
         () -> {
           field.setText("");
@@ -1290,7 +1298,7 @@ public final class MainActivity extends Activity
           motion.set(false, true);
         };
     clear.setOnClickListener(v -> closeSearch.run());
-    box.setOnClickListener(
+    panel.setOnClickListener(
         v -> {
           buzz(0);
           motion.set(true, true);
@@ -1300,19 +1308,24 @@ public final class MainActivity extends Activity
     field.setOnFocusChangeListener(
         (v, focused) -> {
           if (focused) motion.set(true, true);
-          else if (field.getText().length() == 0) motion.set(false, true);
         });
-    motion.set(!barText.isEmpty(), false);
-    return bar;
+    field.setHint("Поиск по заметкам");
+    bar.requestFocus();
+    boolean focus = focusSearch;
+    motion.set(focus || notesSearchOpen || !search.isEmpty(), false);
+    if (focus) field.post(() -> {
+      if (!field.isAttachedToWindow() || !"notes".equals(page) || !focusSearch) return;
+      focusSearch = false;
+      field.requestFocus();
+      getSystemService(InputMethodManager.class).showSoftInput(field, 0);
+    });
+    return field;
   }
 
   /** Раскрытие поля поиска: 480 мс с быстрым стартом, закрытие короче и спокойнее. */
   private final class SearchMotion {
     final FrameLayout.LayoutParams params;
-    final View box, clear;
-    final EditText field;
-    final List<View> fading;
-    final int left, right;
+    final View box, clear, folders, count;
     android.animation.ValueAnimator running;
     float fraction;
 
@@ -1320,41 +1333,40 @@ public final class MainActivity extends Activity
         FrameLayout.LayoutParams params,
         View box,
         View clear,
-        EditText field,
-        List<View> fading,
-        int left,
-        int right) {
+        View folders, View count) {
       this.params = params;
       this.box = box;
       this.clear = clear;
-      this.field = field;
-      this.fading = fading;
-      this.left = left;
-      this.right = right;
+      this.folders = folders;
+      this.count = count;
+      folders.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+        if (b - t != ob - ot && fraction != 0) apply(fraction);
+      });
     }
 
     void apply(float f) {
       fraction = f;
-      params.leftMargin = Math.round(left * (1 - f));
-      params.rightMargin = Math.round(right * (1 - f));
+      params.leftMargin = params.rightMargin = Math.round(dp(8) * (1 - f));
+      params.height = dp(46) + Math.round((dp(8) + folders.getHeight()) * f);
       box.setLayoutParams(params);
+      box.setElevation(dp(2) * f);
       clear.setAlpha(f);
-      clear.setClickable(f > .5f);
+      count.setAlpha(f);
+      folders.setAlpha(1 - f);
+      folders.setVisibility(f == 1 ? View.INVISIBLE : View.VISIBLE);
     }
 
     void set(boolean open, boolean animated) {
       if (animated && open == searchOpen) return;
-      searchOpen = open;
-      field.setHint(
-          open ? ("chats".equals(page) ? "Поиск по чатам" : "Поиск по заметкам") : "Поиск");
+      searchOpen = notesSearchOpen = open;
+      clear.setVisibility(open ? View.VISIBLE : View.INVISIBLE);
+      count.setVisibility(open ? View.VISIBLE : View.INVISIBLE);
+      folders.setImportantForAccessibility(open ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+          : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
       if (running != null) running.cancel();
       float target = open ? 1 : 0;
       if (!animated || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
         apply(target);
-        for (View v : fading) {
-          v.animate().cancel();
-          v.setAlpha(1 - target);
-        }
         return;
       }
       running = android.animation.ValueAnimator.ofFloat(fraction, target);
@@ -1365,8 +1377,6 @@ public final class MainActivity extends Activity
               : new android.view.animation.PathInterpolator(0.65f, 0f, 0.35f, 1f));
       running.addUpdateListener(a -> apply((float) a.getAnimatedValue()));
       running.start();
-      for (View v : fading)
-        v.animate().alpha(1 - target).setStartDelay(open ? 0 : 160).setDuration(160).start();
     }
   }
 
@@ -1878,7 +1888,7 @@ public final class MainActivity extends Activity
       toolbar.requestFocus();
     } else {
       // Новая заметка — лист на весь экран: сверху только сегодняшняя дата и значки.
-      FrameLayout bar = (FrameLayout) topBar(false, false, true);
+      FrameLayout bar = (FrameLayout) topBar(false, true);
       String today =
           new java.text.SimpleDateFormat("EEEE, d MMMM", new Locale("ru")).format(new Date());
       if (!today.isEmpty()) today = Character.toUpperCase(today.charAt(0)) + today.substring(1);
@@ -2910,7 +2920,7 @@ public final class MainActivity extends Activity
    */
   private void notes() {
     boolean grid = prefs.getBoolean("grid", true);
-    FrameLayout bar = (FrameLayout) topBar(false, false, true);
+    FrameLayout bar = (FrameLayout) topBar(false, true);
     TextView heading = text("Заметки", 30, INK);
     heading.setTypeface(Typeface.create("serif", Typeface.NORMAL));
     if (Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
@@ -2928,38 +2938,10 @@ public final class MainActivity extends Activity
         new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.CENTER_VERTICAL);
     layoutParams.rightMargin = dp(96);
     bar.addView(layout, layoutParams);
-    View findButton =
-        barIcon(
-            "search",
-            "Поиск по заметкам",
-            () -> {
-              notesSearchOpen = true;
-              render();
-            });
-    FrameLayout.LayoutParams findParams =
-        new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.CENTER_VERTICAL);
-    findParams.rightMargin = dp(140);
-    bar.addView(findButton, findParams);
     content.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
     gap(content, 2);
-    if (focusSearch) {
-      // Быстрое действие «Поиск»: открыть строку поиска и клавиатуру.
-      focusSearch = false;
-      notesSearchOpen = true;
-    }
-    EditText find = null;
-    if (notesSearchOpen || !search.isEmpty())
-      find =
-          searchRow(
-              "Поиск по заметкам",
-              search,
-              notesSearchOpen && search.isEmpty(),
-              () -> {
-                search = "";
-                notesSearchOpen = false;
-              });
     TextView count = text("", 13, MUTED);
-    content.addView(folderChips());
+    EditText field = notesSearchOverlay(count);
     gap(content, 14);
     LinearLayout listing = column();
     // Список прокручивается под плавающей панелью, поэтому внизу оставлен запас.
@@ -3063,17 +3045,15 @@ public final class MainActivity extends Activity
         viewport.scrollTo(0, bounds.top - offset);
       });
     }
-    if (find != null) {
-      EditText field = find;
-      watch(
-          field,
-          () -> {
-            search = field.getText().toString();
-            // Список перестраивается после короткой паузы в наборе, а не на каждый символ.
-            field.removeCallbacks(refresh);
-            field.postDelayed(refresh, SEARCH_DELAY_MS);
-          });
-    }
+    watch(field, () -> {
+      search = field.getText().toString();
+      field.removeCallbacks(refresh);
+      field.postDelayed(refresh, SEARCH_DELAY_MS);
+    });
+    field.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+      public void onViewAttachedToWindow(View v) {}
+      public void onViewDetachedFromWindow(View v) { field.removeCallbacks(refresh); }
+    });
   }
 
   /** Ряд столбцов кладки: {@code columns} вертикальных столбцов с зазором 10 dp. */
@@ -4609,7 +4589,7 @@ public final class MainActivity extends Activity
 
   /** Страница «Чаты» (0.10.22): заголовок, «Спросить у заметок…», фильтры, лента по дням. */
   private void chats() {
-    FrameLayout bar = (FrameLayout) topBar(false, false, true);
+    FrameLayout bar = (FrameLayout) topBar(false, true);
     TextView heading = text("Чаты", 30, INK);
     heading.setTypeface(Typeface.create("serif", Typeface.NORMAL));
     if (Build.VERSION.SDK_INT >= 28) heading.setAccessibilityHeading(true);
@@ -4781,7 +4761,6 @@ public final class MainActivity extends Activity
     box.addView(clear, new LinearLayout.LayoutParams(dp(32), dp(32)));
     content.addView(box, new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 10);
-    searchField = field;
     searchOpen = true;
     closeSearch = close;
     if (focus)
@@ -7703,7 +7682,7 @@ public final class MainActivity extends Activity
   }
 
   private void subHeader(String title) {
-    content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
+    content.addView(topBar(true, false), new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 10);
     heading(title, "");
   }
@@ -7783,7 +7762,7 @@ public final class MainActivity extends Activity
   // ---- Хаб ----
 
   private void settings() {
-    content.addView(topBar(true, false, false), new LinearLayout.LayoutParams(-1, dp(44)));
+    content.addView(topBar(true, false), new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 10);
     heading("Настройки", "");
     gap(content, 6);
