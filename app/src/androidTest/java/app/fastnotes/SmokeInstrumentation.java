@@ -8,18 +8,34 @@ import org.json.JSONArray;
 
 /** Run on a disposable emulator: creates and removes its own records only. */
 public final class SmokeInstrumentation extends Instrumentation {
+  private boolean importOnly;
+
   @Override
   public void onCreate(Bundle args) {
     super.onCreate(args);
+    importOnly = "true".equals(args.getString("importOnly"));
     start();
   }
 
   @Override
   public void onStart() {
     Bundle result = new Bundle();
+    if (importOnly) {
+      try {
+        ImportStorageTest.run(getTargetContext());
+        result.putString("stream", "PASS: import storage, deduplication and transaction rollback\n");
+        finish(Activity.RESULT_OK, result);
+      } catch (Throwable e) {
+        android.util.Log.e("SmokeInstrumentation", "Import storage failed", e);
+        result.putString("stream", "FAIL: " + e + "\n");
+        finish(Activity.RESULT_CANCELED, result);
+      }
+      return;
+    }
     long id = 0, chat = 0;
     try (Store db = new Store(getTargetContext())) {
       ManagerStorageTest.run(getTargetContext());
+      ImportStorageTest.run(getTargetContext());
       checkToday(db);
       id = db.save(0, "", "Проверочная заметка\nТекст", 0);
       Note note = db.note(id);
@@ -232,6 +248,7 @@ public final class SmokeInstrumentation extends Instrumentation {
           "PASS: storage, editing, deletion, chat cascade, cache, reminder scheduling, launch\n");
       finish(Activity.RESULT_OK, result);
     } catch (Throwable e) {
+      android.util.Log.e("SmokeInstrumentation", "Smoke failed", e);
       result.putString("stream", "FAIL: " + e + "\n");
       finish(Activity.RESULT_CANCELED, result);
     } finally {

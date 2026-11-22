@@ -4,8 +4,10 @@ android {
     compileSdk = 35
     ndkVersion = "28.2.13676358"
     if (rootProject.file(".tools/ndk/android-ndk-r28c/source.properties").exists()) { ndkPath = rootProject.file(".tools/ndk/android-ndk-r28c").absolutePath }
-    defaultConfig { applicationId = "app.fastnotes"; minSdk = 26; targetSdk = 35; versionCode = 73; versionName = "0.10.30"; testInstrumentationRunner = "app.fastnotes.SmokeInstrumentation"
+    defaultConfig { applicationId = "app.fastnotes"; minSdk = 26; targetSdk = 35; versionCode = 74; versionName = "0.10.31"; testInstrumentationRunner = "app.fastnotes.SmokeInstrumentation"
         manifestPlaceholders["appLabel"] = "Мимоходом"
+        // -PseparateInstrumentation запускает тот же smoke в изолированной копии, не трогая данные основной.
+        testBuildType = if (rootProject.hasProperty("separateInstrumentation")) "separate" else "debug"
         ndk { abiFilters += listOf("arm64-v8a","x86_64") }
         externalNativeBuild { cmake { cppFlags += "-O3"; arguments += "-DANDROID_STL=c++_shared" } }
     }

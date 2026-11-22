@@ -592,6 +592,103 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
   }
 
+  /**
+   * Добавляет резервную копию одной транзакцией. Существующие заметки не изменяются; неизменённые
+   * совпадения пропускаются. В колоду попадают только новые записи, чтобы импорт не перестраивал
+   * колоды, которые пользователь уже изменил. Изображения, чаты и предложения ИИ не импортируются.
+   */
+  public NotesImport.Result importNotes(NotesImport.Backup backup) {
+    SQLiteDatabase db = getWritableDatabase();
+    NotesImport.Result result = new NotesImport.Result();
+    db.beginTransaction();
+    try {
+      FolderStore folderStore = new FolderStore(this);
+      Map<String, Long> destinationFolders = new HashMap<>();
+      Map<Long, String> existingFolderNames = new HashMap<>();
+      existingFolderNames.put(FolderPolicy.ALL, "");
+      for (FolderStore.Folder folder : folderStore.list()) {
+        destinationFolders.put(FolderPolicy.key(folder.name), folder.id);
+        existingFolderNames.put(folder.id, folder.name);
+      }
+      Map<Long, Long> folderMap = new HashMap<>();
+      folderMap.put(FolderPolicy.ALL, FolderPolicy.ALL);
+      Map<Long, String> sourceFolderNames = new HashMap<>();
+      sourceFolderNames.put(FolderPolicy.ALL, "");
+      for (NotesImport.Folder folder : backup.folders) {
+        String key = FolderPolicy.key(folder.name);
+        sourceFolderNames.put(folder.sourceId, folder.name);
+        Long destination = destinationFolders.get(key);
+        if (destination == null) {
+          destination = folderStore.create(folder.name, folder.auto);
+          if (destination <= 0) throw new IllegalStateException("Не удалось создать папку");
+          destinationFolders.put(key, destination);
+          result.foldersAdded++;
+        }
+        folderMap.put(folder.sourceId, destination);
+      }
+
+      Set<String> known = new HashSet<>();
+      for (Note note : notes()) {
+        NotesImport.Entry entry = NotesImport.existing(note, plan(note.id));
+        known.add(
+            NotesImport.fingerprint(
+                entry, existingFolderNames.getOrDefault(note.folder, "")));
+      }
+      Map<Long, Long> newNotes = new HashMap<>();
+      for (NotesImport.Entry entry : backup.notes) {
+        String folderName = sourceFolderNames.getOrDefault(entry.folder, "");
+        if (!known.add(NotesImport.fingerprint(entry, folderName))) {
+          result.duplicates++;
+          continue;
+        }
+        ContentValues values = new ContentValues();
+        values.put("title", entry.title);
+        values.put("body", entry.body);
+        values.put("created", entry.created);
+        values.put("updated", entry.updated);
+        values.put("reminder", entry.reminder);
+        values.put("title_auto", 0);
+        values.put("repeat_mode", entry.reminder > 0 ? entry.repeat : 0);
+        values.put("lead_minutes", entry.reminder > 0 ? entry.lead : -1);
+        values.put("reminder_times", entry.reminderTimes);
+        values.put("folder", folderMap.getOrDefault(entry.folder, FolderPolicy.ALL));
+        values.put("plan", entry.plan);
+        values.put("metadata", entry.metadata.toString());
+        values.put("search_text", Metadata.searchText(entry.metadata));
+        long id = db.insertOrThrow("notes", null, values);
+        newNotes.put(entry.sourceId, id);
+        result.noteIds.add(id);
+        result.added++;
+      }
+
+      for (NotesImport.Group group : backup.groups) {
+        Long top = newNotes.get(group.top);
+        if (top == null) continue;
+        List<Long> members = new ArrayList<>();
+        for (long source : group.members) {
+          Long note = newNotes.get(source);
+          if (note != null) members.add(note);
+        }
+        if (members.isEmpty()) continue;
+        ContentValues values = new ContentValues();
+        values.put("top", top);
+        values.put("expanded", group.expanded ? 1 : 0);
+        db.insertOrThrow("note_groups", null, values);
+        for (long member : members) {
+          ContentValues link = new ContentValues();
+          link.put("note", member);
+          link.put("top", top);
+          db.insertOrThrow("note_members", null, link);
+        }
+        result.groupsAdded++;
+      }
+      db.setTransactionSuccessful();
+    } finally {
+      db.endTransaction();
+    }
+    return result;
+  }
+
   /** Сохраняет текст и время напоминания; повтор и свой интервал уже существующей заметки не трогает. */
   public long save(long id, String title, String body, long reminder) {
     Note existing = id == 0 ? null : note(id);

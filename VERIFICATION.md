@@ -1,5 +1,17 @@
 # Проверка сборки — 5 ноября 2026
 
+## Android 0.10.31 — импорт JSON-резервных копий, 23 ноября 2026
+
+Добавлены `NotesImport`, транзакционный `Store.importNotes`, системный выбор JSON и предпросмотр в «Настройки → Данные». Поддерживаются форматы 1–4, до 32 МБ, 10 000 заметок и 1000 папок. Переносятся содержимое, даты, напоминания, папки, планы, колоды и очищенные AI-метаданные; фотографии, чаты и предложения ИИ не переносятся. Существующие записи не меняются, повторный импорт неизменённых записей пропускается.
+
+Локально прошли `scripts/test-import.ps1` (29 проверок), `scripts/test-plan.ps1` (56), `scripts/test-folders.ps1` (9 + 14 + 39 SQLite) и `scripts/test-reminders.ps1` (111). `assembleDebug`, `assembleSeparate`, `assembleDebugAndroidTest`, `lintDebug`, `lintSeparate` завершились `BUILD SUCCESSFUL`; прежние предупреждения зависимостей ML Kit о Kotlin metadata остаются.
+
+На телефоне установлена изолированная `app.fastnotes.separate` 0.10.31-separate (versionCode 74), холодный запуск `MainActivity` успешен. `am instrument -e importOnly true` завершился `PASS: import storage, deduplication and transaction rollback`: настоящий Android SQLite подтвердил конфликт исходных ID без перезаписи, перенос дат/плана/папки/колоды/AI alias, повтор без дублей и полный откат при ошибке второй вставки. Общий smoke отдельно останавливается на прежнем `ManagerStorageTest.java:112` (`NoSuchElementException`) до теста импорта; это не выдаётся за общий PASS.
+
+Проверены `dist/mimohodom-0.10.31-debug.apk` (`app.fastnotes`, 0.10.31, 74) и `dist/mimohodom-0.10.31-separate-debug.apk` (`app.fastnotes.separate`, 0.10.31-separate, 74): minSdk 26, targetSdk 35, ARM64/x86_64, подписи действительны, сертификат SHA-256 `f66583eaccc9635f56f96bb0c3ec3fd68af8118155499ce0768d37abdd7ed45c`. У separate все четыре shortcut ведут в отдельный пакет, календарь — «Мимоходом Отдельно». SHA-256 APK: основной `9f41e7cc8c67719405150e832e7d57d0b314cbbf9a181fca43847138f5c6be4d`, separate `5dbd8364f88b5fbd32d0cbf342c8ea1b4baec8074feddaecf12888f9d43cda58`.
+
+**НЕ проверено:** ручной сценарий системного выбора файла и предпросмотра, реальные системные будильники и календарь после UI-импорта, светлая/тёмная тема, крупный шрифт и TalkBack.
+
 ## Android 0.10.30 — отдельная сборка, 22 ноября 2026
 
 `assembleSeparate` и `lintSeparate` завершились `BUILD SUCCESSFUL`; сохраняются прежние предупреждения зависимостей ML Kit о Kotlin metadata. Проверен `dist/mimohodom-0.10.30-separate-debug.apk`: пакет `app.fastnotes.separate`, versionCode 73, versionName 0.10.30-separate, название «Мимоходом Отдельно», minSdk 26, targetSdk 35. Все четыре быстрых действия указывают на отдельный пакет; ресурс календаря — «Мимоходом Отдельно». Подпись проверена, сертификат совпадает с прежними выпусками. SHA-256 APK: `631afbaeac01d23e7f935f3fb15b0821f2e4ff92a6735f69c402bfe511eb3124`.

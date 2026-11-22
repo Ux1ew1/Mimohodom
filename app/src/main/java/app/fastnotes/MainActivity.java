@@ -48,6 +48,7 @@ public final class MainActivity extends Activity
       REMINDER_BG = 0xFFEDF0E2,
       RECAP_BG = 0xFFEEF0EA;
   private boolean dark;
+  private boolean importingNotes;
 
   /** Режим темы из настроек: auto (как в системе, по умолчанию), light, dark. */
   private boolean wantsDark() {
@@ -8876,6 +8877,12 @@ public final class MainActivity extends Activity
                         .setType("application/json")
                         .putExtra(Intent.EXTRA_TITLE, "mimohodom-notes.json"),
                     77)));
+    gap(content, 8);
+    content.addView(button("Импортировать заметки", false, this::pickNotesImport));
+    secondary(
+        content,
+        "JSON-копия добавит заметки, папки, напоминания, планы и колоды. Существующие записи"
+            + " не удаляются, совпадения пропускаются. Фотографии и чаты в файл не входят.");
     gap(content, 12);
     TextView imagesUsage = secondary(content, "");
     Runnable showUsage =
@@ -9073,6 +9080,10 @@ public final class MainActivity extends Activity
     }
     if (request == 77 && result == RESULT_OK && data != null && data.getData() != null) {
       exportNotes(data.getData());
+      return;
+    }
+    if (request == 78 && result == RESULT_OK && data != null && data.getData() != null) {
+      readNotesImport(data.getData());
     }
   }
 
@@ -9152,6 +9163,112 @@ public final class MainActivity extends Activity
                   render();
                 }
               });
+        });
+  }
+
+  private void pickNotesImport() {
+    if (importingNotes) {
+      toast("Дождитесь завершения импорта");
+      return;
+    }
+    startActivityForResult(
+        new Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("application/json"),
+        78);
+  }
+
+  private void readNotesImport(Uri uri) {
+    importingNotes = true;
+    toast("Читаю резервную копию…");
+    io.execute(
+        () -> {
+          try {
+            NotesImport.Backup backup = NotesImport.parse(readNotesImportText(uri));
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  String message =
+                      "Найдено заметок: "
+                          + backup.notes.size()
+                          + "\nПапок: "
+                          + backup.folders.size()
+                          + " · колод: "
+                          + backup.groups.size()
+                          + "\nС напоминаниями: "
+                          + backup.reminders()
+                          + " · с планами: "
+                          + backup.plans()
+                          + "\n\nСуществующие заметки не удаляются. Неизменённые совпадения"
+                          + " пропускаются. Фотографии, чаты и предложения ИИ не переносятся.";
+                  new Ask(this)
+                      .setTitle("Импортировать резервную копию?")
+                      .setMessage(message)
+                      .setNegativeButton("Отмена", (d, w) -> importingNotes = false)
+                      .setOnCancelListener(d -> importingNotes = false)
+                      .setPositiveButton("Импортировать", (d, w) -> applyNotesImport(backup))
+                      .show();
+                });
+          } catch (Exception | OutOfMemoryError e) {
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  importingNotes = false;
+                  String detail = e instanceof OutOfMemoryError ? "Файл слишком велик" : e.getMessage();
+                  toast(detail == null || detail.isEmpty() ? "Не удалось импортировать заметки" : detail);
+                });
+          }
+        });
+  }
+
+  private String readNotesImportText(Uri uri) throws java.io.IOException {
+    try (java.io.InputStream input = getContentResolver().openInputStream(uri)) {
+      if (input == null) throw new java.io.IOException("Не удалось открыть файл");
+      java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+      byte[] buffer = new byte[16 * 1024];
+      int total = 0, read;
+      while ((read = input.read(buffer)) >= 0) {
+        total += read;
+        if (total > NotesImport.MAX_FILE_BYTES)
+          throw new java.io.IOException("Файл больше 32 МБ");
+        out.write(buffer, 0, read);
+      }
+      return new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+  }
+
+  private void applyNotesImport(NotesImport.Backup backup) {
+    io.execute(
+        () -> {
+          try {
+            android.content.Context app = getApplicationContext();
+            NotesImport.Result result;
+            List<Note> imported = new ArrayList<>();
+            try (Store store = new Store(app)) {
+              result = store.importNotes(backup);
+              for (long id : result.noteIds) {
+                Note note = store.note(id);
+                if (note != null) imported.add(note);
+              }
+            }
+            // Транзакция уже завершена: системные побочные эффекты не попадут в откат базы.
+            for (Note note : imported) Reminders.schedule(app, note);
+            if (!imported.isEmpty()) CalendarSync.runAsync(app);
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  importingNotes = false;
+                  toast(result.message());
+                  if (isSettings()) render();
+                });
+          } catch (Exception | OutOfMemoryError e) {
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed()) return;
+                  importingNotes = false;
+                  toast("Импорт отменён, существующие заметки не изменены");
+                });
+          }
         });
   }
 
