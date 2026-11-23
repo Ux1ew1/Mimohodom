@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 17);
+    super(context, name, null, 18);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -85,6 +85,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addReminderTimes(db);
     addChatOrigin(db);
     addTaskKinds(db);
+    addSemanticIndex(db);
   }
 
   @Override
@@ -110,6 +111,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
       moveCheckInMarks(db);
     }
     if (oldV < 17) addTaskKinds(db);
+    if (oldV < 18) addSemanticIndex(db);
   }
 
   /**
@@ -119,6 +121,13 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   private void addTaskKinds(SQLiteDatabase db) {
     if (!hasColumn(db, "manager_review", "kind"))
       db.execSQL("ALTER TABLE manager_review ADD COLUMN kind TEXT NOT NULL DEFAULT ''");
+  }
+
+  /** Векторы только на этом устройстве; fingerprint позволяет не считать неизменённые заметки. */
+  private void addSemanticIndex(SQLiteDatabase db) {
+    db.execSQL(
+        "CREATE TABLE IF NOT EXISTS note_embeddings(note_id INTEGER PRIMARY KEY REFERENCES"
+            + " notes(id) ON DELETE CASCADE,fingerprint TEXT NOT NULL,vector BLOB NOT NULL)");
   }
 
   /**
@@ -558,7 +567,15 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   public List<Note> candidates(String query) {
     List<Note> result = searchNotes(query);
     Set<Long> ids = new HashSet<>();
-    for (Note n : result) ids.add(n.id);
+    // Этот путь используется фоновым запросом чата: индекс не считается на потоке интерфейса.
+    SemanticIndex.Ranked semantic = SemanticIndex.rank(this, query, notes());
+    for (Note n : result) {
+      ids.add(n.id);
+      n.semanticScore = semantic.scores.getOrDefault(n.id, 0.0);
+    }
+    int added = 0;
+    for (Note n : semantic.matches)
+      if (ids.add(n.id) && added++ < 24) result.add(n);
     String normalized = Retrieval.normalize(query);
     boolean upcoming =
         normalized.contains("ближайш")
@@ -573,6 +590,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
                   new String[] {"" + System.currentTimeMillis()})) {
         while (c.moveToNext()) {
           Note n = read(c);
+          n.semanticScore = semantic.scores.getOrDefault(n.id, 0.0);
           if (ids.add(n.id)) result.add(n);
         }
       }

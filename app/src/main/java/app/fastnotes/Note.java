@@ -23,6 +23,8 @@ public final class Note {
   public String reminderTimes = "";
   /** Когда заметку положили в корзину; 0 — не в корзине. */
   public long trashed;
+  /** Локальная смысловая близость к текущему запросу; в БД и синхронизацию не попадает. */
+  public double semanticScore;
 
   public Note(long id, String title, String body, long created, long updated, long reminder) {
     this.id = id;

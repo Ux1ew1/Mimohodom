@@ -47,9 +47,9 @@ public final class Retrieval {
             || q.contains("завтра")
             || q.contains("сегодня");
     boolean holiday = q.contains("праздник");
-    Map<Long, Integer> scores = new HashMap<>();
+    Map<Long, Double> scores = new HashMap<>();
     for (Note n : notes) {
-      int score = 0;
+      double score = 0;
       String title = normalize(n.title),
           body = normalize(n.body),
           metadata = normalize(n.searchText);
@@ -58,6 +58,8 @@ public final class Retrieval {
         if (body.contains(w)) score += 2;
         if (metadata.contains(w)) score += 3;
       }
+      // Локальный вектор дополняет словесный рейтинг, но слабую случайную близость отсекаем.
+      if (n.semanticScore >= 0.16) score += 8 * n.semanticScore;
       if (upcoming && n.reminder > 0 && n.reminder >= now && (!holiday || score > 0)) score += 4;
       scores.put(n.id, score);
     }
@@ -70,7 +72,7 @@ public final class Retrieval {
             if (ar != br) return ar ? -1 : 1;
             if (ar && a.reminder != b.reminder) return Long.compare(a.reminder, b.reminder);
           }
-          int cmp = Integer.compare(scores.get(b.id), scores.get(a.id));
+          int cmp = Double.compare(scores.get(b.id), scores.get(a.id));
           return cmp != 0 ? cmp : Long.compare(b.updated, a.updated);
         });
     boolean any = result.stream().anyMatch(n -> scores.get(n.id) > 0);
