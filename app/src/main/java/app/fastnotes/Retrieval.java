@@ -39,6 +39,10 @@ public final class Retrieval {
   }
 
   public static List<Note> select(List<Note> notes, String question, long now) {
+    return select(notes, question, now, MAX_NOTES);
+  }
+
+  public static List<Note> select(List<Note> notes, String question, long now, int limit) {
     List<String> words = terms(question);
     String q = normalize(question);
     boolean upcoming =
@@ -77,7 +81,7 @@ public final class Retrieval {
         });
     boolean any = result.stream().anyMatch(n -> scores.get(n.id) > 0);
     if (any) result.removeIf(n -> scores.get(n.id) == 0);
-    return new ArrayList<>(result.subList(0, Math.min(MAX_NOTES, result.size())));
+    return new ArrayList<>(result.subList(0, Math.min(Math.max(1, Math.min(40, limit)), result.size())));
   }
 
   public static String excerpt(String body, String query, int limit) {

@@ -122,7 +122,7 @@ check(db.prepare(trashSql).all().map(n=>n.id).sort().join()==='61,62','Member of
   check(!db.prepare(queryOf(storeSource, 'SELECT id FROM chats WHERE note=?')).get(70), 'Progress chat is never the note chat');
   const today = queryOf(storeSource, "SELECT count(*) FROM chats WHERE origin='agent'");
   check(db.prepare(today).get(1500)['count(*)'] === 1 && db.prepare(today).get(0)['count(*)'] === 2, 'Agent chats counted since day start');
-  check(/oldV < 17\)\s*addTaskKinds\(db\)/.test(storeSource) && /addTaskKinds\(db\);\s*\}/.test(storeSource), 'Upgrade 16 -> 17 and fresh install add kinds');
+  check(/oldV < 17\)\s*addTaskKinds\(db\)/.test(storeSource) && /addTaskKinds\(db\);\s*addSemanticIndex\(db\);\s*\}/.test(storeSource), 'Upgrade 16 -> 17 and fresh install add kinds');
 }
 db.close();
 console.log(`PASS: ${checks} manager SQLite checks (production migration SQL)`);

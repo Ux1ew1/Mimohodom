@@ -62,6 +62,10 @@ public final class CommandExecutor {
           if (expected == null || (expected.repeat != ReminderPolicy.REPEAT_NONE
               && expected.repeat != ReminderPolicy.REPEAT_LIST))
             throw new IllegalStateException("Повторяющиеся серии эта команда не меняет");
+        } else if (action.kind == AgentAction.Kind.CLEAR_REMINDERS) {
+          for (long id : action.notes)
+            if (!PlanTree.parse(store.plan(id)).completed())
+              throw new IllegalStateException("План заметки больше не считается выполненным");
         }
 
       Outcome out = new Outcome();
@@ -128,6 +132,24 @@ public final class CommandExecutor {
               .put("before_repeat", before.repeat).put("before_lead", before.lead)
               .put("after_reminder", after.reminder).put("after_times", after.reminderTimes)
               .put("after_repeat", after.repeat).put("after_lead", after.lead));
+        } else if (action.kind == AgentAction.Kind.CLEAR_REMINDERS) {
+          for (long id : action.notes) {
+            Note before = store.note(id);
+            ContentValues value = new ContentValues();
+            value.put("reminder", 0);
+            value.put("reminder_times", "");
+            value.put("repeat_mode", ReminderPolicy.REPEAT_NONE);
+            if (db.update("notes", value, "id=? AND updated=? AND trashed=0",
+                new String[] {Long.toString(id), Long.toString(before.updated)}) != 1)
+              throw new IllegalStateException("Расписание изменилось во время применения");
+            Note after = store.note(id);
+            out.reminders.add(new Change(before, after));
+            reminders.put(new JSONObject().put("note", id)
+                .put("before_reminder", before.reminder).put("before_times", before.reminderTimes)
+                .put("before_repeat", before.repeat).put("before_lead", before.lead)
+                .put("after_reminder", after.reminder).put("after_times", after.reminderTimes)
+                .put("after_repeat", after.repeat).put("after_lead", after.lead));
+          }
         }
       }
       if (createdNotes.length() == 0 && moved.length() == 0 && reminders.length() == 0)

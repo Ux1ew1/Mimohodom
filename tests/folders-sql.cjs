@@ -133,7 +133,7 @@ check(/oldV < 15\)\s*addReminderTimes\(db\)/.test(method(store, "void onUpgrade(
 // Версия 16: кто начал чат (chats.origin) — триггер и перенос пометок в tests/sync-sql.cjs.
 check(method(store, "void onCreate(SQLiteDatabase db)").includes("addChatOrigin(db)"), "Fresh install also gets chat origin");
 check(/oldV < 16\)\s*\{\s*addChatOrigin\(db\);\s*moveCheckInMarks\(db\);/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 15 -> 16 adds chat origin and moves marks");
-// Версия 17: класс заметки в manager_review (tests/manager-sql.cjs).
-check(/super\(context, name, null, 17\)/.test(store), "Database version is 17");
+// Версия 18: локальные векторы в note_embeddings (tests/semantic-sql.cjs).
+check(/super\(context, name, null, 18\)/.test(store), "Database version is 18");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

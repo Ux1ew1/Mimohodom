@@ -5875,6 +5875,8 @@ public final class MainActivity extends Activity
           "Отклонено небезопасных или неподдерживаемых действий: "
               + draft.rejected
               + ". Применятся только перечисленные выше.");
+    chatNote(bubble, "Пакет применится целиком. После этого его можно отменить одной кнопкой"
+        + " в течение суток — здесь или в журнале колокольчика.");
     gap(bubble, 8);
     LinearLayout actions = row();
     actions.addView(

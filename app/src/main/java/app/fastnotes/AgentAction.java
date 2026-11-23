@@ -21,6 +21,8 @@ public final class AgentAction {
     REMIND("remind"),
     /** Переместить явно выбранные заметки в новую или существующую папку (команды в чате). */
     FOLDER("folder"),
+    /** Снять все напоминания только у заметок с полностью выполненным планом. */
+    CLEAR_REMINDERS("clear_reminders"),
     ASK("ask"),
     PLAN("plan"),
     CHECK_IN("check_in");
@@ -37,14 +39,14 @@ public final class AgentAction {
     }
   }
 
-  public static final int MAX_SOURCES = 8,
+  public static final int MAX_SOURCES = 8, MAX_COMMAND_SOURCES = 24,
       MAX_TITLE = 160,
       MAX_BODY = 24000,
       MAX_REASON = 1000,
       MAX_QUESTION = 300,
       MAX_OPTIONS = 4,
       MAX_OPTION = 40,
-      MAX_TIMES = 20,
+      MAX_TIMES = 40,
       MAX_FOLDER = 60,
       MAX_ASK_KIND = 24;
 
@@ -101,6 +103,8 @@ public final class AgentAction {
   public static final class Scope {
     public final Set<Long> known = new HashSet<>(), complete = new HashSet<>();
     public final Set<Long> stacks = new HashSet<>();
+    /** Планы, в которых все проверяемые пункты отмечены выполненными. */
+    public final Set<Long> completed = new HashSet<>();
     public final long now;
     public final ZoneId zone;
 
@@ -112,6 +116,11 @@ public final class AgentAction {
     public Scope note(long id, boolean whole) {
       known.add(id);
       if (whole) complete.add(id);
+      return this;
+    }
+
+    public Scope completed(long id) {
+      completed.add(id);
       return this;
     }
 
@@ -182,6 +191,10 @@ public final class AgentAction {
         a.folder = raw.optString("folder", "").trim();
         if (a.folder.isEmpty() || a.folder.length() > MAX_FOLDER || !FolderPolicy.valid(a.folder))
           return null;
+      }
+      case CLEAR_REMINDERS -> {
+        if (!a.readNotes(raw, "notes", scope, 1)) return null;
+        for (long id : a.notes) if (!scope.completed.contains(id)) return null;
       }
       case ASK -> {
         if (!a.readNote(raw, scope, true) || !a.readQuestion(raw) || !a.readOptions(raw, 0))
@@ -269,8 +282,8 @@ public final class AgentAction {
 
   /** Сериализация разрешённых команд в messages.draft; другие виды не выдаются за команду. */
   public JSONObject commandJson() throws JSONException {
-    if (kind != Kind.CREATE && kind != Kind.REMIND && kind != Kind.FOLDER)
-      throw new JSONException("Не команда: " + kind.wire);
+    if (kind != Kind.CREATE && kind != Kind.REMIND && kind != Kind.FOLDER
+        && kind != Kind.CLEAR_REMINDERS) throw new JSONException("Не команда: " + kind.wire);
     JSONObject out = new JSONObject().put("action", kind.wire).put("reason", reason);
     if (kind == Kind.CREATE) {
       JSONArray ids = new JSONArray();
@@ -293,7 +306,8 @@ public final class AgentAction {
     } else {
       JSONArray ids = new JSONArray();
       for (long id : notes) ids.put(id);
-      out.put("notes", ids).put("folder", folder);
+      out.put("notes", ids);
+      if (kind == Kind.FOLDER) out.put("folder", folder);
     }
     return out;
   }
@@ -334,7 +348,8 @@ public final class AgentAction {
   private boolean readNotes(JSONObject raw, String field, Scope scope, int min) {
     JSONArray ids = raw.optJSONArray(field);
     if (ids == null) return min == 0 && !raw.has(field);
-    if (ids.length() > MAX_SOURCES) return false;
+    int limit = kind == Kind.FOLDER || kind == Kind.CLEAR_REMINDERS ? MAX_COMMAND_SOURCES : MAX_SOURCES;
+    if (ids.length() > limit) return false;
     TreeSet<Long> sorted = new TreeSet<>();
     for (int i = 0; i < ids.length(); i++) {
       long id = ids.optLong(i, -1);

@@ -8,25 +8,31 @@ import org.json.JSONArray;
 
 /** Run on a disposable emulator: creates and removes its own records only. */
 public final class SmokeInstrumentation extends Instrumentation {
-  private boolean importOnly;
+  private boolean importOnly, commandOnly;
 
   @Override
   public void onCreate(Bundle args) {
     super.onCreate(args);
     importOnly = "true".equals(args.getString("importOnly"));
+    commandOnly = "true".equals(args.getString("commandOnly"));
     start();
   }
 
   @Override
   public void onStart() {
     Bundle result = new Bundle();
-    if (importOnly) {
+    if (importOnly || commandOnly) {
       try {
-        ImportStorageTest.run(getTargetContext());
-        result.putString("stream", "PASS: import storage, deduplication and transaction rollback\n");
+        if (commandOnly) {
+          int checks = CommandStorageTest.run(getTargetContext());
+          result.putString("stream", "PASS: " + checks + " command Android SQLite checks\n");
+        } else {
+          ImportStorageTest.run(getTargetContext());
+          result.putString("stream", "PASS: import storage, deduplication and transaction rollback\n");
+        }
         finish(Activity.RESULT_OK, result);
       } catch (Throwable e) {
-        android.util.Log.e("SmokeInstrumentation", "Import storage failed", e);
+        android.util.Log.e("SmokeInstrumentation", "Isolated storage failed", e);
         result.putString("stream", "FAIL: " + e + "\n");
         finish(Activity.RESULT_CANCELED, result);
       }

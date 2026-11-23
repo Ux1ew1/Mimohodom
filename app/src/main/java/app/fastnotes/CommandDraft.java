@@ -20,6 +20,7 @@ public final class CommandDraft {
     public final long id, updated, folder, reminder;
     public final String title, times;
     public final int repeat, lead;
+    public boolean completed;
 
     NoteState(Note n) {
       id = n.id;
@@ -41,12 +42,13 @@ public final class CommandDraft {
       times = o.optString("times");
       repeat = o.optInt("repeat");
       lead = o.optInt("lead", -1);
+      completed = o.optBoolean("completed", false);
     }
 
     JSONObject json() throws JSONException {
       return new JSONObject().put("id", id).put("updated", updated).put("folder", folder)
           .put("reminder", reminder).put("title", title).put("times", times)
-          .put("repeat", repeat).put("lead", lead);
+          .put("repeat", repeat).put("lead", lead).put("completed", completed);
     }
 
     public Note note() {
@@ -126,10 +128,19 @@ public final class CommandDraft {
         if (!changed.add(action.note)) valid = false;
       } else if (action.kind == AgentAction.Kind.FOLDER) {
         for (long id : action.notes) if (!changed.add(id)) valid = false;
+      } else if (action.kind == AgentAction.Kind.CLEAR_REMINDERS) {
+        for (long id : action.notes) {
+          NoteState source = byId.containsKey(id) ? new NoteState(byId.get(id)) : null;
+          if (source == null || source.schedule().isEmpty() || !changed.add(id)) valid = false;
+        }
       }
       for (long id : action.sources())
         if (!byId.containsKey(id)) valid = false;
-        else out.notes.put(id, new NoteState(byId.get(id)));
+        else {
+          NoteState state = new NoteState(byId.get(id));
+          state.completed = action.kind == AgentAction.Kind.CLEAR_REMINDERS;
+          out.notes.put(id, state);
+        }
       if (!valid) {
         out.rejected++;
         out.notes.keySet().removeIf(id -> !used(proposed, id));
@@ -191,6 +202,16 @@ public final class CommandDraft {
         out.add("Переместить " + action.notes.size() + " " + notesWord(action.notes.size())
             + " в " + (target != null && target.existing() ? "существующую" : "новую")
             + " папку «" + action.folder + "»");
+      } else if (action.kind == AgentAction.Kind.CLEAR_REMINDERS) {
+        for (long id : action.notes) {
+          NoteState source = notes.get(id);
+          if (source == null) continue;
+          for (long at : source.schedule())
+            out.add("Удалить у выполненной заметки «" + source.title + "» "
+                + (source.repeat != ReminderPolicy.REPEAT_NONE
+                    && source.repeat != ReminderPolicy.REPEAT_LIST ? "повторяющееся " : "")
+                + "напоминание " + SHOWN.format(Instant.ofEpochMilli(at).atZone(zone)));
+        }
       }
     }
     return out;
@@ -236,6 +257,7 @@ public final class CommandDraft {
       if (note.id <= 0 || note.updated < 0 || out.notes.put(note.id, note) != null)
         throw new JSONException("Повреждён снимок заметки");
       scope.note(note.id, true);
+      if (note.completed) scope.completed(note.id);
     }
     JSONArray folders = root.optJSONArray("folders");
     for (int i = 0; folders != null && i < folders.length(); i++)
@@ -246,7 +268,8 @@ public final class CommandDraft {
     for (int i = 0; i < actions.length(); i++) {
       AgentAction action = AgentAction.parse(actions.optJSONObject(i), scope);
       if (action == null || (action.kind != AgentAction.Kind.CREATE
-          && action.kind != AgentAction.Kind.REMIND && action.kind != AgentAction.Kind.FOLDER))
+          && action.kind != AgentAction.Kind.REMIND && action.kind != AgentAction.Kind.FOLDER
+          && action.kind != AgentAction.Kind.CLEAR_REMINDERS))
         throw new JSONException("Недопустимое действие в черновике");
       if (action.kind == AgentAction.Kind.REMIND && action.repeat != ReminderPolicy.REPEAT_NONE)
         throw new JSONException("Повторы не поддерживаются");

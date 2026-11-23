@@ -73,6 +73,7 @@ jobs:
           ./scripts/test-day-digest.ps1
           ./scripts/test-import.ps1
           ./scripts/test-commands.ps1
+          ./scripts/test-semantic.ps1
           ./scripts/test-images.ps1
           ./scripts/test-image-input.ps1
           ./scripts/test-image-list.ps1

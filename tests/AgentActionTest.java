@@ -55,7 +55,7 @@ public final class AgentActionTest {
   }
 
   static void kinds() {
-    check(AgentAction.Kind.values().length == 10, "ten kinds in the vocabulary (folder added)");
+    check(AgentAction.Kind.values().length == 11, "eleven kinds in the vocabulary (clear reminders added)");
     for (AgentAction.Kind k : AgentAction.Kind.values())
       check(AgentAction.Kind.of(k.wire) == k, "wire name round trip " + k);
     check(AgentAction.Kind.of("delete") == null, "no hard delete in the vocabulary");
@@ -239,14 +239,24 @@ public final class AgentActionTest {
                 + "\"separate\":true}")
             .separate,
         "separate flag kept");
-    JSONArray many = new JSONArray();
-    for (int i = 1; i <= 21; i++) many.put("2027-01-" + String.format("%02d", i));
+    JSONArray forty = new JSONArray(), many = new JSONArray();
+    for (int i = 0; i < 41; i++) {
+      String day = LocalDate.of(2027, 1, 1).plusDays(i).toString();
+      if (i < 40) forty.put(day);
+      many.put(day);
+    }
+    check(
+        AgentAction.parse(
+                new JSONObject().put("action", "remind").put("note", 1).put("times", forty),
+                scope())
+            != null,
+        "forty times accepted");
     check(
         AgentAction.parse(
                 new JSONObject().put("action", "remind").put("note", 1).put("times", many),
                 scope())
             == null,
-        "at most twenty times");
+        "at most forty times");
     check(
         AgentAction.moment(NOW + 1000, ZONE) == NOW + 1000, "milliseconds accepted as they are");
   }

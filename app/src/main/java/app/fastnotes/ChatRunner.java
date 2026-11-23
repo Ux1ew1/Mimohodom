@@ -138,6 +138,9 @@ public final class ChatRunner {
                 store.getWritableDatabase().endTransaction();
               }
               answer.usage = "Изображения проанализированы. Заметка сохранена.";
+            } else if (!checkin && chatImages.isEmpty() && CommandAnalysis.wantsDuplicates(query)) {
+              // Дубли ищем на устройстве: ни модель, ни облако, ни удаление записей.
+              answer = commandReply(store, key, model, query);
             } else if (!local && !checkin && chatImages.isEmpty() && CommandAnalysis.wants(query)) {
               // Команда получает отдельный строгий контракт. Даже валидный ответ — только черновик.
               answer = commandReply(store, key, model, query);
@@ -327,19 +330,36 @@ public final class ChatRunner {
         });
   }
 
-  /** Облачная команда: один запрос, строгий разбор и только сериализация предпросмотра. */
+  /** Изменяющая команда: один запрос, строгий разбор и только сериализация предпросмотра. */
   private static Polza.Answer commandReply(Store store, String key, String model, String query)
       throws Exception {
     long now = System.currentTimeMillis();
     java.time.ZoneId zone = java.time.ZoneId.systemDefault();
-    List<Note> selected = Retrieval.select(store.candidates(query), query, now);
+    if (CommandAnalysis.wantsDuplicates(query)) return duplicatesReply(store, query, now);
+    List<Note> ranked = Retrieval.select(store.candidates(query), query, now, 24);
+    List<Note> selected = new ArrayList<>();
+    java.util.Set<Long> picked = new java.util.HashSet<>();
+    if (CommandAnalysis.clearsCompleted(query)) {
+      // Выполненные дела не должны потеряться из-за текстового рейтинга или старого срока.
+      for (Note note : store.notes())
+        if (selected.size() < 24 && (note.reminder > 0 || !note.reminderTimes.isEmpty())
+            && PlanTree.parse(store.plan(note.id)).completed() && picked.add(note.id)) selected.add(note);
+    }
+    for (Note note : ranked) if (selected.size() < 24 && picked.add(note.id)) selected.add(note);
     List<CommandAnalysis.FolderInfo> folders = new ArrayList<>();
     for (FolderStore.Folder folder : new FolderStore(store).list())
       folders.add(new CommandAnalysis.FolderInfo(folder.id, folder.name));
     AgentAction.Scope scope = new AgentAction.Scope(now, zone);
-    for (Note note : selected) scope.note(note.id, true);
-    JSONObject response =
-        store.complete(key, CommandAnalysis.payload(model, query, selected, folders, now, zone));
+    java.util.Set<Long> completed = new java.util.HashSet<>();
+    for (Note note : selected) {
+      scope.note(note.id, true);
+      if (PlanTree.parse(store.plan(note.id)).completed()) {
+        completed.add(note.id);
+        scope.completed(note.id);
+      }
+    }
+    JSONObject response = store.complete(key,
+        CommandAnalysis.payload(model, query, selected, folders, now, zone, completed));
     CommandAnalysis.Reply reply;
     try {
       reply = CommandAnalysis.parse(CommandAnalysis.responseText(response), scope);
@@ -370,6 +390,34 @@ public final class ChatRunner {
     if (tokens != null && tokens.has("cost_rub"))
       used.append(" · ").append(tokens.optString("cost_rub")).append(" ₽");
     answer.usage = used.toString();
+    return answer;
+  }
+
+  private static Polza.Answer duplicatesReply(Store store, String query, long now) throws JSONException {
+    int days = CommandAnalysis.duplicateDays(query);
+    DuplicateFinder.Report report = DuplicateFinder.find(store.notes(), now, days);
+    Polza.Answer answer = new Polza.Answer();
+    answer.sources = new JSONArray();
+    StringBuilder text = new StringBuilder();
+    if (report.groups.isEmpty()) {
+      text.append("За последние ").append(days).append(" дней дублей не найдено.");
+    } else {
+      text.append("За последние ").append(days).append(" дней найдено групп дублей: ")
+          .append(report.groups.size()).append(". Ничего не удалено.");
+      java.util.Set<Long> sources = new java.util.HashSet<>();
+      int number = 0;
+      for (List<Note> group : report.groups) {
+        text.append("\n\nГруппа ").append(++number).append(':');
+        for (Note note : group) {
+          text.append("\n• ").append(note.title).append(" [[note:").append(note.id).append("]] ");
+          if (sources.add(note.id))
+            answer.sources.put(new JSONObject().put("id", note.id).put("title", note.title));
+        }
+      }
+    }
+    if (report.truncated) text.append("\n\nПроверены 300 самых новых заметок периода.");
+    answer.text = text.toString();
+    answer.usage = "Локальный поиск дублей · без изменений";
     return answer;
   }
 
