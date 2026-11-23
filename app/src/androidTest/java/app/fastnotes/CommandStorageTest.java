@@ -15,6 +15,7 @@ final class CommandStorageTest {
 
   static int run(Context context) throws Exception {
     checks = 0;
+    responseShapes();
     String name = "command-test-" + System.nanoTime() + ".db";
     try (Store store = new Store(context, name)) {
       semantic(store);
@@ -23,6 +24,32 @@ final class CommandStorageTest {
       context.deleteDatabase(name);
     }
     return checks;
+  }
+
+  private static void responseShapes() throws Exception {
+    AgentAction.Scope scope = new AgentAction.Scope(System.currentTimeMillis(), ZoneId.systemDefault())
+        .note(1, true).note(2, true);
+    CommandAnalysis.Reply objects = CommandAnalysis.parse(
+        "{\"say\":\"x\",\"actions\":[{\"action\":\"folder\",\"notes\":[{\"id\":2},{\"id\":1}],"
+            + "\"folder\":{\"id\":0,\"name\":\"Приложение\"}}]}", scope);
+    require(objects.actions.size() == 1 && objects.actions.get(0).folder.equals("Приложение")
+        && objects.actions.get(0).notes.equals(List.of(1L, 2L)), "Android parses object folder and note IDs");
+    CommandAnalysis.Reply single = CommandAnalysis.parse(
+        "{\"say\":\"x\",\"actions\":{\"action\":\"folder\",\"notes\":[1],"
+            + "\"folder_name\":\"Приложение\"}}", scope);
+    require(single.actions.size() == 1 && single.actions.get(0).folder.equals("Приложение"),
+        "Android parses single action and folder_name");
+    CommandAnalysis.Reply direct = CommandAnalysis.parse(
+        "{\"action\":\"folder\",\"note_ids\":[2],\"folder\":\"Приложение\"}", scope);
+    require(direct.actions.size() == 1 && direct.actions.get(0).notes.equals(List.of(2L)),
+        "Android parses direct action and note_ids");
+    boolean diagnostic = false;
+    try {
+      CommandAnalysis.parse("{\"say\":\"x\",\"actions\":\"folder\"}", scope);
+    } catch (org.json.JSONException expected) {
+      diagnostic = expected.getMessage().contains("actions");
+    }
+    require(diagnostic, "Android reports malformed actions type");
   }
 
   private static void semantic(Store store) {

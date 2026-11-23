@@ -79,6 +79,10 @@ public final class CommandAnalysisTest {
     check(user.contains("2026-11-23 10:00 +03:00"), "existing reminder uses supplied timezone");
     check(user.contains("\"id\":5") && user.contains("\"name\":\"Дом\""), "existing folders included");
     check(user.contains("\"plan_completed\":true") && system.contains("clear_reminders"), "completed state and clear dictionary included");
+    check(system.contains("СОЗДАНИЕ НОВОЙ ПАПКИ РАЗРЕШЕНО")
+        && system.contains("поле folder — это ИМЯ папки"), "new folder permission is explicit");
+    check(system.contains("\"action\":\"folder\"") && system.contains("ID_ИЗ_notes"),
+        "folder response example included");
     check(CommandAnalysis.payload("m", "x", List.of(), List.of(), NOW, ZoneId.of("UTC"))
         .getJSONArray("messages").getJSONObject(1).getString("content").contains("2026-11-22 09:00 Z"), "UTC is explicit");
   }
@@ -93,6 +97,18 @@ public final class CommandAnalysisTest {
     AgentAction folder = one("{\"action\":\"folder\",\"notes\":[3,1],\"folder\":\" Дом \"}");
     check(folder.kind == AgentAction.Kind.FOLDER && folder.notes.equals(List.of(1L, 3L)), "folder IDs sorted");
     check(folder.folder.equals("Дом"), "folder name cleaned");
+    AgentAction objectFolder = one("{\"action\":\"folder\",\"notes\":[{\"id\":3},{\"id\":1}],\"folder\":{\"id\":0,\"name\":\"Приложение\"}}");
+    check(objectFolder.folder.equals("Приложение") && objectFolder.notes.equals(List.of(1L, 3L)),
+        "Qwen folder and note objects normalized without bypassing scope");
+    CommandAnalysis.Reply singleObject = parse("{\"say\":\"x\",\"actions\":{\"action\":\"folder\",\"notes\":[1],\"folder_name\":\"Приложение\"}}");
+    check(singleObject.actions.size() == 1 && singleObject.actions.get(0).folder.equals("Приложение"),
+        "single action object and folder_name alias accepted");
+    CommandAnalysis.Reply direct = parse("{\"action\":\"folder\",\"note_ids\":[2],\"folder\":\"Приложение\"}");
+    check(direct.actions.size() == 1 && direct.actions.get(0).notes.equals(List.of(2L)),
+        "direct action and note_ids alias accepted");
+    boolean wrongActions = false;
+    try { parse("{\"say\":\"x\",\"actions\":\"folder\"}"); } catch (JSONException e) { wrongActions = true; }
+    check(wrongActions, "non-array actions produce diagnostic instead of silent success");
     String clearJson = "{\"say\":\"x\",\"actions\":[{\"action\":\"clear_reminders\",\"notes\":[1,2]}]}";
     check(parse(clearJson).actions.isEmpty(), "unfinished plan cannot clear reminders");
     AgentAction.Scope completedScope = scope().completed(1).completed(2);

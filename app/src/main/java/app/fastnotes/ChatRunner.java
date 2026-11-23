@@ -364,8 +364,10 @@ public final class ChatRunner {
     try {
       reply = CommandAnalysis.parse(CommandAnalysis.responseText(response), scope);
     } catch (JSONException e) {
+      String detail = e.getMessage() == null ? "неизвестная ошибка JSON" : e.getMessage();
       throw new java.io.IOException(
-          "Модель вернула неверный формат команды. Повторите запрос вручную или выберите другую модель.",
+          "Модель вернула неверный формат команды. Ничего не изменено."
+              + " Повторите запрос вручную или выберите другую модель.\n\nПричина: " + detail,
           e);
     }
     Polza.Answer answer = new Polza.Answer();
@@ -380,8 +382,13 @@ public final class ChatRunner {
     if (!draft.actions.isEmpty()) {
       answer.draft = draft.toJson();
       if (answer.text.isEmpty()) answer.text = "Проверьте предложенные изменения.";
-    } else if (answer.text.isEmpty()) {
-      answer.text = "Не удалось определить безопасное действие. Уточните команду.";
+    } else if (question.isEmpty()) {
+      // Не показываем «Создаю»/«Перемещаю», если проверка не нашла действия для предпросмотра.
+      answer.text = reply.rejected > 0
+          ? "Модель предложила только недопустимые действия (" + reply.rejected
+              + "). Ничего не изменено. Повторите команду или выберите другую модель."
+          : "Модель не подготовила действия для предпросмотра. Ничего не изменено."
+              + " Повторите команду или уточните её.";
     }
     StringBuilder used = new StringBuilder("Команда · предпросмотр без изменений");
     JSONObject tokens = response.optJSONObject("usage");
