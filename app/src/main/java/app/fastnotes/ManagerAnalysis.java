@@ -159,28 +159,45 @@ public final class ManagerAnalysis {
     return withContext(payload, seen, answers, Collections.emptyList());
   }
 
-  /**
-   * То же и существующие колоды по теме пачки: номер верхней заметки, название и начало сводки.
-   * Новые записи по их теме модель предлагает добавить туда (extend), а не собирать вторую колоду.
-   */
+  /** То же и существующие колоды по теме пачки; состав колод неизвестен. */
   public static JSONObject withContext(
       JSONObject payload,
       List<? extends Collection<Long>> seen,
       Map<Long, String> answers,
       List<Note> stacks)
       throws Exception {
+    return withContext(payload, seen, answers, stacks, Collections.emptyMap());
+  }
+
+  /**
+   * То же и существующие колоды по теме пачки: номер верхней заметки, название, начало сводки
+   * и названия записей внутри ({@code members}). Новые записи по их теме модель предлагает
+   * добавить туда (extend), а не собирать вторую колоду.
+   */
+  public static JSONObject withContext(
+      JSONObject payload,
+      List<? extends Collection<Long>> seen,
+      Map<Long, String> answers,
+      List<Note> stacks,
+      Map<Long, List<String>> members)
+      throws Exception {
     JSONObject system = payload.getJSONArray("messages").getJSONObject(0);
     StringBuilder extra = new StringBuilder();
     if (!stacks.isEmpty()) {
       JSONArray known = new JSONArray();
-      for (Note top : stacks)
-        known.put(
+      for (Note top : stacks) {
+        JSONObject stack =
             new JSONObject()
                 .put("stack", top.id)
                 .put("title", top.title)
-                .put("summary", Retrieval.excerpt(top.body, "", 300)));
+                .put("summary", Retrieval.excerpt(top.body, "", 300));
+        List<String> inside = members.get(top.id);
+        if (inside != null && !inside.isEmpty()) stack.put("contains", new JSONArray(inside));
+        known.put(stack);
+      }
       extra
-          .append("\nСуществующие колоды (stacks; их записи уже внутри и во вход не входят): ")
+          .append("\nСуществующие колоды (stacks; contains — записи, которые уже внутри и во")
+          .append(" вход не входят): ")
           .append(known)
           .append('.');
     }

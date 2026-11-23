@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 18);
+    super(context, name, null, 21);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -86,6 +86,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addChatOrigin(db);
     addTaskKinds(db);
     addSemanticIndex(db);
+    addSuggestionTimes(db);
+    addAttention(db);
   }
 
   @Override
@@ -112,6 +114,40 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     }
     if (oldV < 17) addTaskKinds(db);
     if (oldV < 18) addSemanticIndex(db);
+    if (oldV < 19) addSuggestionTimes(db);
+    if (oldV < 20) addAttention(db);
+    if (oldV < 21) {
+      /* Страховка после случая на телефоне: база версии 20 без suggestion_times (миграция 19
+         когда-то не отработала), каждый save() падал на неизвестном столбце. Обе функции
+         идемпотентны, поэтому просто гарантируем наличие колонок. */
+      addSuggestionTimes(db);
+      addAttention(db);
+    }
+  }
+
+  /**
+   * Баллы внимания помощника (docs/ATTENTION-POINTS.md, эксперимент): {@code attention} — запас
+   * 0..8 или -1 («не назначены»: функция выключена или заметка создана до неё), {@code
+   * attention_at}/{@code attention_down} — время последнего плюса и последнего минуса (гейты «не
+   * чаще раза в 20 часов»). Как {@code suggestion_times}: в обмен не идёт, триггеров нет, изменение
+   * баллов не помечает заметку для компьютера. Безопасно вызывается повторно.
+   */
+  private void addAttention(SQLiteDatabase db) {
+    if (!hasColumn(db, "attention"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN attention INTEGER NOT NULL DEFAULT -1");
+    if (!hasColumn(db, "attention_at"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN attention_at INTEGER NOT NULL DEFAULT 0");
+    if (!hasColumn(db, "attention_down"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN attention_down INTEGER NOT NULL DEFAULT 0");
+  }
+
+  /**
+   * Все даты предложения ИИ, если их несколько (JSON-массив моментов). Как и само предложение,
+   * поле локальное: в обмен не уходит и триггера не имеет. Безопасно вызывается повторно.
+   */
+  private void addSuggestionTimes(SQLiteDatabase db) {
+    if (!hasColumn(db, "suggestion_times"))
+      db.execSQL("ALTER TABLE notes ADD COLUMN suggestion_times TEXT NOT NULL DEFAULT ''");
   }
 
   /**
@@ -509,10 +545,14 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     n.folder = c.getLong(16);
     int leadColumn = c.getColumnIndex("suggestion_lead");
     if (leadColumn >= 0) n.suggestionLead = c.getInt(leadColumn);
+    int suggestionTimesColumn = c.getColumnIndex("suggestion_times");
+    if (suggestionTimesColumn >= 0) n.suggestionTimes = c.getString(suggestionTimesColumn);
     int trashColumn = c.getColumnIndex("trashed");
     if (trashColumn >= 0) n.trashed = c.getLong(trashColumn);
     int timesColumn = c.getColumnIndex("reminder_times");
     if (timesColumn >= 0) n.reminderTimes = c.getString(timesColumn);
+    int attentionColumn = c.getColumnIndex("attention");
+    if (attentionColumn >= 0) n.attention = c.getInt(attentionColumn);
     return n;
   }
 
@@ -765,6 +805,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("suggestion", 0);
     v.put("suggestion_reason", "");
     v.put("suggestion_lead", -1);
+    v.put("suggestion_times", "");
     v.put("ai_failed", 0);
     v.put("title", Note.autoTitle(title, body));
     v.put("body", body.trim());
@@ -784,6 +825,12 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("search_text", Metadata.searchText(metadata));
     if (id == 0) {
       v.put("created", now);
+      // Эксперимент «баллы внимания»: стартовый запас назначается только новым заметкам и
+      // только при включённой настройке; старые и пришедшие по обмену остаются на -1.
+      if (attentionEnabled()) {
+        v.put("attention", AttentionPolicy.initial(reminder != 0));
+        v.put("attention_at", now);
+      }
       // Новая заметка всегда попадает в «Все заметки»: папку явно выбирает только редактор.
       return getWritableDatabase().insertOrThrow("notes", null, v);
     }
@@ -1028,6 +1075,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
         getReadableDatabase()
             .rawQuery(
                 "SELECT * FROM notes WHERE ai_checked<>updated AND trashed=0"
+                    // Эксперимент: заметка без баллов внимания помощника не проверяется.
+                    + (attentionEnabled() ? " AND attention<>0" : "")
                     + " AND id NOT IN (SELECT top FROM note_groups)"
                     + " AND id NOT IN (SELECT note FROM note_members)"
                     + " ORDER BY created DESC LIMIT 5",
@@ -1079,6 +1128,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
       v.put("suggestion", result.reminder);
       v.put("suggestion_reason", result.reason);
       v.put("suggestion_lead", result.lead);
+      v.put("suggestion_times", ReminderPolicy.encodeTimes(result.times));
     }
     JSONObject metadata =
         Metadata.base(
@@ -1173,7 +1223,114 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     v.put("suggestion", 0);
     v.put("suggestion_reason", "");
     v.put("suggestion_lead", -1);
+    v.put("suggestion_times", "");
     getWritableDatabase().update("notes", v, "id=?", new String[] {"" + id});
+  }
+
+  /** Эксперимент «баллы внимания помощника» (docs/ATTENTION-POINTS.md) включён в настройках. */
+  public boolean attentionEnabled() {
+    return appContext.getSharedPreferences("settings", 0).getBoolean("attentionPoints", false);
+  }
+
+  /**
+   * Изменяет баллы внимания заметки на {@code delta} с гейтом «не чаще раза в {@link
+   * AttentionPolicy#GAP} на знак»: минусы и плюсы ограничиваются раздельно (последний минус —
+   * {@code attention_down}, последний плюс — {@code attention_at}), чтобы открытие заметки не
+   * глушило «Отклонить» и наоборот. Ничего не делает при выключенном эксперименте и у заметок без
+   * назначенных баллов. Возвращает true, если баллы изменились.
+   */
+  public boolean attentionAdjust(long id, int delta) {
+    if (delta == 0 || !attentionEnabled()) return false;
+    SQLiteDatabase db = getWritableDatabase();
+    long now = System.currentTimeMillis();
+    try (Cursor c =
+        db.rawQuery(
+            "SELECT attention,attention_at,attention_down FROM notes WHERE id=?",
+            new String[] {"" + id})) {
+      if (!c.moveToFirst()) return false;
+      int attention = c.getInt(0);
+      long lastSameSign = delta < 0 ? c.getLong(2) : c.getLong(1);
+      if (!AttentionPolicy.due(attention, lastSameSign, now)) return false;
+      int next = AttentionPolicy.apply(attention, delta);
+      ContentValues v = new ContentValues();
+      v.put("attention", next);
+      v.put(delta < 0 ? "attention_down" : "attention_at", now);
+      return db.update("notes", v, "id=?", new String[] {"" + id}) == 1;
+    }
+  }
+
+  /**
+   * Награда без гейта за сильный сигнал интереса: принятое предложение ИИ (+2), ответ на вопрос
+   * помощника (+1). Гейты не двигает: открытие после ответа по-прежнему может дать свой балл.
+   */
+  public boolean attentionReward(long id, int delta) {
+    if (delta <= 0 || !attentionEnabled()) return false;
+    SQLiteDatabase db = getWritableDatabase();
+    try (Cursor c =
+        db.rawQuery("SELECT attention FROM notes WHERE id=?", new String[] {"" + id})) {
+      if (!c.moveToFirst()) return false;
+      int attention = c.getInt(0);
+      if (attention < 0) return false;
+      int next = AttentionPolicy.apply(attention, delta);
+      if (next == attention) return false;
+      ContentValues v = new ContentValues();
+      v.put("attention", next);
+      return db.update("notes", v, "id=?", new String[] {"" + id}) == 1;
+    }
+  }
+
+  /**
+   * Разовый бонус первой классификации проверки (событие, большая задача, план). Вызывается из
+   * {@link ManagerStore#finishReview}, только когда класс появился впервые; без гейта.
+   */
+  public void attentionClassBonus(long id, String kind) {
+    if (!attentionEnabled()) return;
+    SQLiteDatabase db = getWritableDatabase();
+    try (Cursor c =
+        db.rawQuery("SELECT attention FROM notes WHERE id=?", new String[] {"" + id})) {
+      if (!c.moveToFirst()) return;
+      int attention = c.getInt(0);
+      if (attention < 0) return;
+      int next = AttentionPolicy.classBonus(attention, kind, !plan(id).isEmpty());
+      if (next == attention) return;
+      ContentValues v = new ContentValues();
+      v.put("attention", next);
+      db.update("notes", v, "id=?", new String[] {"" + id});
+    }
+  }
+
+  /**
+   * Регулярные списания, вызывается при запуске приложения: неделя без касаний — минус балл (не
+   * чаще раза в неделю); вопрос помощника без ответа три дня — минус балл (один раз на вопрос,
+   * отметка в настройках). Только при включённом эксперименте.
+   */
+  public void attentionSweep(long now) {
+    if (!attentionEnabled()) return;
+    SQLiteDatabase db = getWritableDatabase();
+    long weekAgo = now - AttentionPolicy.WEEK;
+    db.execSQL(
+        "UPDATE notes SET attention=attention-1,attention_down=? WHERE attention>0 AND trashed=0"
+            + " AND attention_down<? AND attention_at<? AND updated<? AND created<?",
+        new Object[] {now, weekAgo, weekAgo, weekAgo, weekAgo});
+    SharedPreferences prefs = appContext.getSharedPreferences("settings", 0);
+    List<Object[]> stale = new ArrayList<>();
+    try (Cursor c =
+        db.rawQuery(
+            "SELECT id,data FROM manager_proposals WHERE state='pending' AND identity LIKE"
+                + " 'clarify|%' AND created<?",
+            new String[] {"" + (now - AttentionPolicy.QUESTION_WAIT)})) {
+      while (c.moveToNext()) stale.add(new Object[] {c.getLong(0), c.getString(1)});
+    }
+    for (Object[] row : stale) {
+      String key = "attentionQ." + row[0];
+      if (prefs.getBoolean(key, false)) continue;
+      try {
+        long note = ManagerStore.firstSource(new JSONObject((String) row[1]));
+        if (note > 0 && attentionAdjust(note, -1)) prefs.edit().putBoolean(key, true).apply();
+      } catch (Exception ignored) {
+        // повреждённый вопрос пропускаем
+      }
+    }
   }
 
   public void retryFailed() {
@@ -1656,6 +1813,15 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     } finally {
       db.endTransaction();
     }
+  }
+
+  /** Выбор в предпросмотре переживает render/поворот, но не воскрешает уже закрытый черновик. */
+  public void updateDraft(long message, JSONObject draft) {
+    ContentValues v = new ContentValues();
+    v.put("draft", draft.toString());
+    if (getWritableDatabase().update("messages", v,
+        "id=? AND role='assistant' AND draft<>''", new String[] {"" + message}) != 1)
+      throw new IllegalStateException("Черновик уже применён или закрыт");
   }
 
   public void dismissDraft(long message) {

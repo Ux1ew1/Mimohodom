@@ -34,8 +34,40 @@ public final class CommandExecutorTest {
     snapshot();
     schedules();
     integrity();
+    selection();
     journal();
     System.out.println("PASS: " + count + " command executor invariant checks");
+  }
+
+  static void selection() throws Exception {
+    Note second = new Note(2, "Другая тема", "Текст", 10, 123457, 0);
+    second.folder = 7;
+    AgentAction.Scope scope = new AgentAction.Scope(NOW, ZONE).note(1, true).note(2, true);
+    AgentAction folder = AgentAction.parse(new JSONObject()
+        .put("action", "folder").put("notes", new JSONArray().put(1).put(2)).put("folder", "Дом"), scope);
+    CommandDraft draft = CommandDraft.create("перенеси", List.of(folder), List.of(note(), second),
+        List.of(), NOW, ZONE, 0);
+    check(draft.selected.equals(new TreeSet<>(List.of(1L, 2L))), "all proposed notes selected by default");
+    draft.setSelected(2, false);
+    check(draft.selectedActions().size() == 1
+        && draft.selectedActions().get(0).notes.equals(List.of(1L)), "unchecked note removed from action copy");
+    check(draft.required(1) && !draft.required(2), "unchecked note no longer blocks revisions");
+    check(draft.preview().get(0).contains("Переместить 1 заметку"), "preview follows selected count");
+    JSONObject persisted = draft.toJson();
+    CommandDraft copy = CommandDraft.fromJson(persisted);
+    check(copy.isSelected(1) && !copy.isSelected(2), "selection survives draft persistence");
+    JSONObject legacy = new JSONObject(persisted.toString());
+    legacy.remove("selected");
+    check(CommandDraft.fromJson(legacy).selected.equals(new TreeSet<>(List.of(1L, 2L))),
+        "legacy draft selects all notes");
+    copy.setSelected(1, false);
+    check(!copy.hasSelectedChanges() && copy.selectedActions().isEmpty()
+        && !copy.futureError(NOW).isEmpty(), "empty selection cannot enter transaction");
+    JSONObject broken = new JSONObject(persisted.toString());
+    broken.put("selected", new JSONArray().put(99));
+    boolean rejected = false;
+    try { CommandDraft.fromJson(broken); } catch (JSONException expected) { rejected = true; }
+    check(rejected, "unknown selected ID rejected");
   }
 
   static void snapshot() throws Exception {

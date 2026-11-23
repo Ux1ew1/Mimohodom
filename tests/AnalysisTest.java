@@ -126,6 +126,104 @@ public final class AnalysisTest {
             .getString("content")
             .contains("lead_minutes"),
         "Prompt asks for lead");
+    // Одна заметка — несколько дат: модель отдаёт всю серию в reminder_times
+    check(
+        Analysis.payload(notes, "test", now, ZoneId.of("UTC"))
+            .getJSONArray("messages")
+            .getJSONObject(0)
+            .getString("content")
+            .contains("reminder_times"),
+        "Prompt asks for every date");
+    note.body = "На 25.11, 28.11, 29.11 на буфет пирог";
+    String multiRow =
+        new JSONObject()
+            .put(
+                "notes",
+                new JSONArray()
+                    .put(
+                        new JSONObject()
+                            .put("id", 1)
+                            .put("title", "")
+                            .put("reminder_at", "2026-11-25T09:00:00+03:00")
+                            .put(
+                                "reminder_times",
+                                new JSONArray()
+                                    .put("2026-11-29T15:00:00+03:00")
+                                    .put("2026-11-25T09:00:00+03:00")
+                                    .put("2026-11-25T09:00:00+03:00")
+                                    .put("не дата")
+                                    .put("2026-11-04T09:00:00+03:00")
+                                    .put("2026-11-28T14:00:00+03:00"))
+                            .put("lead_minutes", 1440)
+                            .put("reason", "Буфет 25, 28 и 29 ноября")))
+            .toString();
+    Analysis.Result multi = Analysis.parse(multiRow, notes, now).get(1L);
+    check(multi.times.length == 3, "Every listed date accepted, duplicates and past dropped");
+    check(
+        multi.reminder == Instant.parse("2026-11-25T06:00:00Z").toEpochMilli(),
+        "Earliest date leads the series");
+    check(
+        multi.times[2] == Instant.parse("2026-11-29T12:00:00Z").toEpochMilli(),
+        "Series sorted ascending");
+    check(multi.lead == 1440, "Series lead checked against the earliest date");
+    String timesOnly =
+        new JSONObject()
+            .put(
+                "notes",
+                new JSONArray()
+                    .put(
+                        new JSONObject()
+                            .put("id", 1)
+                            .put("title", "")
+                            .put("reminder_at", JSONObject.NULL)
+                            .put(
+                                "reminder_times",
+                                new JSONArray()
+                                    .put("2026-11-29T15:00:00+03:00")
+                                    .put("2026-11-25T09:00:00+03:00")
+                                    .put("2026-11-28T14:00:00+03:00"))
+                            .put("reason", "Буфет 25, 28 и 29 ноября")))
+            .toString();
+    Analysis.Result listed = Analysis.parse(timesOnly, notes, now).get(1L);
+    check(
+        listed.reminder == Instant.parse("2026-11-25T06:00:00Z").toEpochMilli()
+            && listed.times.length == 3,
+        "Dates list works without reminder_at");
+    String singleListed =
+        new JSONObject()
+            .put(
+                "notes",
+                new JSONArray()
+                    .put(
+                        new JSONObject()
+                            .put("id", 1)
+                            .put("title", "")
+                            .put("reminder_at", JSONObject.NULL)
+                            .put(
+                                "reminder_times",
+                                new JSONArray().put("2026-11-06T18:00:00+03:00"))
+                            .put("reason", "Одна дата")))
+            .toString();
+    Analysis.Result single = Analysis.parse(singleListed, notes, now).get(1L);
+    check(
+        single.reminder == Instant.parse("2026-11-06T15:00:00Z").toEpochMilli()
+            && single.times.length == 0,
+        "One listed date stays a plain reminder");
+    check(
+        Analysis.parse(
+                    singleListed.replace("2026-11-06T18:00:00+03:00", "2026-11-04T18:00:00+03:00"),
+                    notes,
+                    now)
+                .get(1L)
+                .reminder
+            == 0,
+        "Series of only past dates suggests nothing");
+    note.autoTitle = false;
+    note.reminder = now + 1000;
+    check(
+        Analysis.parse(multiRow, notes, now).get(1L).reminder == 0,
+        "Existing reminder protects the whole series");
+    note.reminder = 0;
     System.out.println("PASS: " + count + " background analysis checks");
   }
 }

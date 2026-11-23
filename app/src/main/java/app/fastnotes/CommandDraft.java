@@ -96,6 +96,8 @@ public final class CommandDraft {
   public ZoneId zone = ZoneId.systemDefault();
   public final List<AgentAction> actions = new ArrayList<>();
   public final Map<Long, NoteState> notes = new LinkedHashMap<>();
+  /** Выбор пользователя; источники create здесь не участвуют, потому что сами не изменяются. */
+  public final Set<Long> selected = new LinkedHashSet<>();
   public final List<FolderState> folders = new ArrayList<>();
   public int rejected;
 
@@ -152,12 +154,75 @@ public final class CommandDraft {
       if (!folder.isEmpty()) out.addFolder(folder, existing);
     }
     out.notes.keySet().removeIf(id -> !used(out.actions, id));
+    out.selected.addAll(out.selectable());
     return out;
   }
 
   private static boolean used(List<AgentAction> actions, long id) {
     for (AgentAction action : actions) if (action.sources().contains(id)) return true;
     return false;
+  }
+
+  /** Только существующие записи, которые действие действительно меняет, а не источники create. */
+  public Set<Long> selectable() {
+    Set<Long> out = new TreeSet<>();
+    for (AgentAction action : actions) {
+      if (action.kind == AgentAction.Kind.REMIND) out.add(action.note);
+      else if (action.kind == AgentAction.Kind.FOLDER
+          || action.kind == AgentAction.Kind.CLEAR_REMINDERS) out.addAll(action.notes);
+    }
+    return out;
+  }
+
+  public boolean isSelected(long id) {
+    return selected.contains(id);
+  }
+
+  public void setSelected(long id, boolean value) {
+    if (!selectable().contains(id)) return;
+    if (value) selected.add(id);
+    else selected.remove(id);
+  }
+
+  /** Невыбранная запись не проверяется и не блокирует остальной пакет; источники create обязательны. */
+  public boolean required(long id) {
+    return !selectable().contains(id) || selected.contains(id);
+  }
+
+  public boolean hasSelectedChanges() {
+    for (AgentAction action : actions) {
+      if (action.kind == AgentAction.Kind.CREATE) return true;
+      if (action.kind == AgentAction.Kind.REMIND && selected.contains(action.note)) return true;
+      if (action.kind == AgentAction.Kind.FOLDER
+          || action.kind == AgentAction.Kind.CLEAR_REMINDERS)
+        for (long id : action.notes) if (selected.contains(id)) return true;
+    }
+    return false;
+  }
+
+  /** Копии действий только с отмеченными ID; исходный предпросмотр при этом не изменяется. */
+  public List<AgentAction> selectedActions() throws JSONException {
+    AgentAction.Scope scope = new AgentAction.Scope(created, zone);
+    for (NoteState note : notes.values()) {
+      scope.note(note.id, true);
+      if (note.completed) scope.completed(note.id);
+    }
+    List<AgentAction> out = new ArrayList<>();
+    for (AgentAction action : actions) {
+      if (action.kind == AgentAction.Kind.CREATE) out.add(action);
+      else if (action.kind == AgentAction.Kind.REMIND) {
+        if (selected.contains(action.note)) out.add(action);
+      } else if (action.kind == AgentAction.Kind.FOLDER
+          || action.kind == AgentAction.Kind.CLEAR_REMINDERS) {
+        JSONArray ids = new JSONArray();
+        for (long id : action.notes) if (selected.contains(id)) ids.put(id);
+        if (ids.length() == 0) continue;
+        AgentAction copy = AgentAction.parse(action.commandJson().put("notes", ids), scope);
+        if (copy == null) throw new JSONException("Недопустимый выбор заметок");
+        out.add(copy);
+      }
+    }
+    return out;
   }
 
   private void addFolder(String name, List<CommandAnalysis.FolderInfo> existing) {
@@ -193,17 +258,22 @@ public final class CommandDraft {
               + " папку «" + target.name + "»";
         out.add(line);
       } else if (action.kind == AgentAction.Kind.REMIND) {
+        if (!selected.contains(action.note)) continue;
         NoteState source = notes.get(action.note);
         for (long at : action.times)
           out.add("Добавить заметке «" + (source == null ? "#" + action.note : source.title)
               + "» напоминание " + SHOWN.format(Instant.ofEpochMilli(at).atZone(zone)));
       } else if (action.kind == AgentAction.Kind.FOLDER) {
+        int count = 0;
+        for (long id : action.notes) if (selected.contains(id)) count++;
+        if (count == 0) continue;
         FolderState target = folder(action.folder);
-        out.add("Переместить " + action.notes.size() + " " + notesWord(action.notes.size())
+        out.add("Переместить " + count + " " + notesWord(count)
             + " в " + (target != null && target.existing() ? "существующую" : "новую")
             + " папку «" + action.folder + "»");
       } else if (action.kind == AgentAction.Kind.CLEAR_REMINDERS) {
         for (long id : action.notes) {
+          if (!selected.contains(id)) continue;
           NoteState source = notes.get(id);
           if (source == null) continue;
           for (long at : source.schedule())
@@ -220,8 +290,9 @@ public final class CommandDraft {
   /** Проверка, которая повторяется и непосредственно перед записью. */
   public String futureError(long now) {
     if (actions.isEmpty()) return "В черновике нет допустимых действий";
+    if (!hasSelectedChanges()) return "Нет выбранных изменений";
     for (AgentAction action : actions)
-      if (action.kind == AgentAction.Kind.REMIND)
+      if (action.kind == AgentAction.Kind.REMIND && selected.contains(action.note))
         for (long at : action.times)
           if (at <= now) return "Предложенное напоминание уже стало прошедшим";
     return "";
@@ -234,9 +305,12 @@ public final class CommandDraft {
     for (NoteState note : this.notes.values()) notes.put(note.json());
     JSONArray folders = new JSONArray();
     for (FolderState folder : this.folders) folders.put(folder.json());
+    JSONArray chosen = new JSONArray();
+    for (long id : selectable()) if (selected.contains(id)) chosen.put(id);
     return new JSONObject().put("kind", KIND).put("version", 1).put("command", command)
         .put("created", created).put("zone", zone.getId()).put("actions", actions)
-        .put("notes", notes).put("folders", folders).put("rejected", rejected);
+        .put("notes", notes).put("folders", folders).put("selected", chosen)
+        .put("rejected", rejected);
   }
 
   public static CommandDraft fromJson(JSONObject root) throws JSONException {
@@ -275,6 +349,18 @@ public final class CommandDraft {
         throw new JSONException("Повторы не поддерживаются");
       action.metadata = Metadata.ai(action.metadata);
       out.actions.add(action);
+    }
+    if (root.has("selected")) {
+      JSONArray chosen = root.getJSONArray("selected");
+      Set<Long> allowed = out.selectable();
+      for (int i = 0; i < chosen.length(); i++) {
+        long id = chosen.optLong(i, -1);
+        if (!allowed.contains(id) || !out.selected.add(id))
+          throw new JSONException("Повреждён выбор заметок");
+      }
+    } else {
+      // Черновики 0.11.1 и раньше открываются с прежним поведением: выбраны все записи.
+      out.selected.addAll(out.selectable());
     }
     return out;
   }

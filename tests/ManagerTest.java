@@ -76,6 +76,18 @@ public final class ManagerTest {
         withStacks.getJSONArray("messages").getJSONObject(0).getString("content")
             .contains("\"stack\":10"),
         "Existing decks handed to the model");
+    // Состав колоды: модель видит, какие записи уже сгруппированы.
+    JSONObject withMembers = ManagerAnalysis.payload(notes, "m");
+    ManagerAnalysis.withContext(
+        withMembers,
+        Collections.emptyList(),
+        Collections.emptyMap(),
+        Arrays.asList(top),
+        Map.of(10L, Arrays.asList("Мука и молоко", "Яйца")));
+    check(
+        withMembers.getJSONArray("messages").getJSONObject(0).getString("content")
+            .contains("\"contains\":[\"Мука и молоко\",\"Яйца\"]"),
+        "Deck members handed to the model");
     String extendText =
         "{\"actions\":[{\"action\":\"extend\",\"stack\":10,\"sources\":[2],"
             + "\"reason\":\"Тоже про блины\"}]}";

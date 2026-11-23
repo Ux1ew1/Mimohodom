@@ -46,9 +46,11 @@ public final class ManagerStore {
         db.rawQuery(
             "SELECT n.id,r.revision,r.failed FROM notes n LEFT JOIN manager_review r ON r.note=n.id"
                 + " WHERE n.trashed=0"
+                // Эксперимент «баллы внимания»: заметка на нуле помощника не интересует.
+                + " AND (?='0' OR n.attention<>0)"
                 + " ORDER BY CASE WHEN r.note IS NULL OR n.updated>r.attempted THEN 0 ELSE 1"
                 + " END,COALESCE(r.attempted,0),n.id",
-            null)) {
+            new String[] {store.attentionEnabled() ? "1" : "0"})) {
       while (c.moveToNext()) {
         Note n = store.note(c.getLong(0));
         if (n != null
@@ -298,17 +300,16 @@ public final class ManagerStore {
       v.put("state", "accepted");
       boolean done = db.update("manager_proposals", v, "id=?", new String[] {"" + id}) == 1;
       JSONArray sources = data.optJSONArray("sources");
-      if (done)
+      if (done) {
+        long note =
+            sources == null || sources.length() == 0 ? 0 : sources.getJSONObject(0).getLong("id");
         AgentLog.record(
             db,
             AgentJournal.ANSWER,
-            AgentJournal.answerData(
-                sources == null || sources.length() == 0
-                    ? 0
-                    : sources.getJSONObject(0).getLong("id"),
-                data.optString("reason"),
-                answer.trim(),
-                id));
+            AgentJournal.answerData(note, data.optString("reason"), answer.trim(), id));
+        // Баллы внимания: ответ на вопрос помощника — явный интерес к заметке.
+        if (note > 0) store.attentionReward(note, 1);
+      }
       db.setTransactionSuccessful();
       return done;
     } catch (JSONException e) {
@@ -478,8 +479,12 @@ public final class ManagerStore {
             "UPDATE manager_review SET revision=?,failed=0 WHERE note=?",
             new Object[] {ManagerAnalysis.fingerprint(n), n.id});
         String kind = TaskKind.clean(kinds.get(n.id));
-        if (!kind.isEmpty())
+        if (!kind.isEmpty()) {
+          String before = kind(n.id);
           db.execSQL("UPDATE manager_review SET kind=? WHERE note=?", new Object[] {kind, n.id});
+          // Баллы внимания: разовый бонус первой классификации (событие, большая задача).
+          if (before.isEmpty()) store.attentionClassBonus(n.id, kind);
+        }
       }
       db.setTransactionSuccessful();
       return outcome;
@@ -742,6 +747,27 @@ public final class ManagerStore {
           return by != 0 ? by : Long.compare(x.id, y.id);
         });
     return tops.size() > 5 ? new ArrayList<>(tops.subList(0, 5)) : tops;
+  }
+
+  /** Названия записей внутри колод (до восьми на колоду): модели видно, что уже сгруппировано. */
+  public Map<Long, List<String>> stackMembers(Collection<Long> tops) {
+    Map<Long, List<String>> out = new HashMap<>();
+    if (tops.isEmpty()) return out;
+    Map<Long, List<Long>> members = membersMap();
+    for (long top : tops) {
+      List<Long> ids = members.get(top);
+      if (ids == null || ids.isEmpty()) continue;
+      List<String> titles = new ArrayList<>();
+      for (long id : ids) {
+        Note n = store.note(id);
+        if (n != null && n.trashed == 0) titles.add(n.title);
+        if (titles.size() == 8) break;
+      }
+      if (ids.size() > titles.size() && !titles.isEmpty())
+        titles.set(titles.size() - 1, titles.get(titles.size() - 1) + " (и ещё " + (ids.size() - 7) + ")");
+      out.put(top, titles);
+    }
+    return out;
   }
 
   /** «Разобрать колоду»: исходные возвращаются в список, сводка остаётся обычной заметкой. */

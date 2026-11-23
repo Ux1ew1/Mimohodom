@@ -19,7 +19,9 @@ final class CommandStorageTest {
     String name = "command-test-" + System.nanoTime() + ".db";
     try (Store store = new Store(context, name)) {
       semantic(store);
+      selectionAndUndo(store);
       clearAndUndo(store);
+      suggestionSeries(store);
     } finally {
       context.deleteDatabase(name);
     }
@@ -79,6 +81,40 @@ final class CommandStorageTest {
       require(c.moveToFirst(), "vector row exists");
       return c.getString(0);
     }
+  }
+
+  private static void selectionAndUndo(Store store) throws Exception {
+    long first = store.save(0, "Приложение: идея", "Нужно сделать выбор", 0);
+    long second = store.save(0, "Другая тема", "Не относится к приложению", 0);
+    Note one = store.note(first), two = store.note(second);
+    AgentAction.Scope scope = new AgentAction.Scope(System.currentTimeMillis(), ZoneId.systemDefault())
+        .note(first, true).note(second, true);
+    AgentAction action = AgentAction.parse(new JSONObject().put("action", "folder")
+        .put("notes", new JSONArray().put(first).put(second)).put("folder", "Приложение"), scope);
+    require(action != null, "folder selection action parses");
+    CommandDraft draft = CommandDraft.create("перенеси связанные заметки", List.of(action),
+        List.of(one, two), List.of(), System.currentTimeMillis(), ZoneId.systemDefault(), 0);
+    long chat = store.newChat("Выбор заметок");
+    store.message(chat, "assistant", "Предпросмотр", new JSONArray(), draft.toJson());
+    long message = store.messages(chat).getJSONObject(0).getLong("id");
+    draft.setSelected(second, false);
+    store.updateDraft(message, draft.toJson());
+    store.save(second, "Другая тема", "Уже изменено пользователем", 0);
+    CommandExecutor.Outcome applied = CommandExecutor.apply(store, message);
+    Note moved = store.note(first), untouched = store.note(second);
+    require(applied.journal > 0 && moved.folder > 0 && untouched.folder == 0,
+        "only checked note moves to new folder");
+    require(untouched.body.equals("Уже изменено пользователем"),
+        "unchecked note edit neither blocks nor rolls back");
+    try (Cursor c = store.getReadableDatabase().rawQuery(
+        "SELECT data FROM agent_log WHERE id=?", new String[] {Long.toString(applied.journal)})) {
+      require(c.moveToFirst() && new JSONObject(c.getString(0)).getJSONArray("folders").length() == 1,
+          "journal contains only the checked move");
+    }
+    AgentLog.undo(store, applied.journal);
+    require(store.note(first).folder == 0 && store.note(second).folder == 0
+        && store.note(second).body.equals("Уже изменено пользователем"),
+        "undo restores checked move and preserves unchecked edit");
   }
 
   private static void clearAndUndo(Store store) throws Exception {
@@ -155,6 +191,32 @@ final class CommandStorageTest {
     long chat = store.newChat("Проверка команды");
     store.message(chat, "assistant", "Предпросмотр", new JSONArray(), draft.toJson());
     return store.messages(chat).getJSONObject(0).getLong("id");
+  }
+
+  /** Предложение ИИ с несколькими датами: вся серия хранится, очищается отказом и правкой. */
+  private static void suggestionSeries(Store store) {
+    long now = System.currentTimeMillis();
+    long first = now + 86_400_000L, second = now + 2 * 86_400_000L, third = now + 3 * 86_400_000L;
+    long id = store.save(0, "Буфет", "На 25.11, 28.11, 29.11 пирог со шпинатом", 0);
+    Analysis.Result result = new Analysis.Result();
+    result.reminder = first;
+    result.times = new long[] {first, second, third};
+    result.reason = "Три даты буфета";
+    result.lead = 1440;
+    require(store.applyAnalysis(store.note(id), result), "multi-date suggestion stored");
+    Note shown = store.note(id);
+    require(shown.suggestion == first && shown.suggestionLead == 1440
+        && java.util.Arrays.equals(ReminderPolicy.parseTimes(shown.suggestionTimes),
+            new long[] {first, second, third}),
+        "series dates readable from the note");
+    store.dismissSuggestion(id);
+    require(store.note(id).suggestion == 0 && store.note(id).suggestionTimes.isEmpty(),
+        "dismiss clears the whole series");
+    require(store.applyAnalysis(store.note(id), result), "suggestion restored after dismiss");
+    store.save(id, "Буфет", "На 25.11, 28.11, 29.11 пирог со шпинатом", 0);
+    Note edited = store.note(id);
+    require(edited.suggestion == 0 && edited.suggestionTimes.isEmpty(),
+        "user edit clears the whole series");
   }
 
   private static void require(boolean value, String message) {

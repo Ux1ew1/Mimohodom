@@ -68,9 +68,16 @@ final class ManagerJob {
             ? ReviewAnalysis.payload(
                 batch, model, System.currentTimeMillis(), ZoneId.systemDefault())
             : ManagerAnalysis.payload(batch, model);
+    // Модель видит состав колод: что уже сгруппировано, туда можно добавлять по теме (extend).
+    List<Long> stackIds = new ArrayList<>();
+    for (Note top : stacks) stackIds.add(top.id);
     payload =
         ManagerAnalysis.withContext(
-            payload, manager.knownGroups(batch), manager.answers(batch), stacks);
+            payload,
+            manager.knownGroups(batch),
+            manager.answers(batch),
+            stacks,
+            manager.stackMembers(stackIds));
     // Потолок ответа — по настройке «Максимальная длина ответа», но не меньше 1600.
     ManagerAnalysis.limit(
         payload,

@@ -134,6 +134,14 @@ check(/oldV < 15\)\s*addReminderTimes\(db\)/.test(method(store, "void onUpgrade(
 check(method(store, "void onCreate(SQLiteDatabase db)").includes("addChatOrigin(db)"), "Fresh install also gets chat origin");
 check(/oldV < 16\)\s*\{\s*addChatOrigin\(db\);\s*moveCheckInMarks\(db\);/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 15 -> 16 adds chat origin and moves marks");
 // Версия 18: локальные векторы в note_embeddings (tests/semantic-sql.cjs).
-check(/super\(context, name, null, 18\)/.test(store), "Database version is 18");
+// Версия 20: баллы внимания помощника (docs/ATTENTION-POINTS.md) — локальные, без триггеров.
+const attention = statements(method(store, "void addAttention(SQLiteDatabase db)"));
+check(attention.length === 3 && attention.every(s => s.startsWith("ALTER TABLE notes ADD COLUMN attention")), "Read actual attention migration SQL");
+for (const sql of attention) db.exec(sql);
+check(db.prepare("SELECT attention FROM notes WHERE id=1").get().attention === -1, "Old notes have no attention points");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addAttention(db)"), "Fresh install also gets attention columns");
+check(/oldV < 20\)\s*addAttention\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 19 -> 20 adds attention columns");
+check(/oldV < 21\)\s*\{[^}]*addSuggestionTimes\(db\)[^}]*addAttention\(db\)/s.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade -> 21 re-ensures suggestion_times and attention");
+check(/super\(context, name, null, 21\)/.test(store), "Database version is 21");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

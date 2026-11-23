@@ -68,8 +68,16 @@ public final class CheckInJob extends JobService {
     ManagerStore manager = new ManagerStore(store);
     Map<Long, String> kinds = manager.kinds();
     Map<Long, Long> tops = manager.topMap();
+    // Эксперимент «баллы внимания»: о заметках на нуле «Как продвигается?» не спрашивает.
+    Set<Long> muted = new HashSet<>();
+    if (store.attentionEnabled())
+      try (android.database.Cursor rows =
+          store.getReadableDatabase().rawQuery("SELECT id FROM notes WHERE attention=0", null)) {
+        while (rows.moveToNext()) muted.add(rows.getLong(0));
+      }
     List<ProgressCheck.Candidate> all = new ArrayList<>();
     for (Note n : store.notes()) {
+      if (muted.contains(n.id)) continue;
       Long top = tops.get(n.id);
       if (top != null && top != n.id) continue;
       ProgressCheck.Candidate k = new ProgressCheck.Candidate();

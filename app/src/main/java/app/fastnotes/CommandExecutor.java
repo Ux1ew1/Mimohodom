@@ -46,17 +46,25 @@ public final class CommandExecutor {
       long now = System.currentTimeMillis();
       String future = draft.futureError(now);
       if (!future.isEmpty()) throw new IllegalStateException(future);
+      List<AgentAction> actions = draft.selectedActions();
 
-      // Ни одной записи до проверки всех исходников и целевых папок.
+      // Ни одной записи до проверки выбранных исходников и нужных целевых папок.
       for (CommandDraft.NoteState expected : draft.notes.values()) {
+        if (!draft.required(expected.id)) continue;
         Note current = store.note(expected.id);
         if (current == null || current.trashed != 0)
           throw new IllegalStateException("Исходная заметка удалена или попала в корзину");
         if (current.updated != expected.updated)
           throw new IllegalStateException("Заметка «" + expected.title + "» изменилась после предпросмотра");
       }
-      for (CommandDraft.FolderState expected : draft.folders) resolveFolder(db, expected, false);
-      for (AgentAction action : draft.actions)
+      for (CommandDraft.FolderState expected : draft.folders) {
+        boolean needed = false;
+        for (AgentAction action : actions)
+          if (!action.folder.isEmpty()
+              && FolderPolicy.key(action.folder).equals(FolderPolicy.key(expected.name))) needed = true;
+        if (needed) resolveFolder(db, expected, false);
+      }
+      for (AgentAction action : actions)
         if (action.kind == AgentAction.Kind.REMIND) {
           CommandDraft.NoteState expected = draft.notes.get(action.note);
           if (expected == null || (expected.repeat != ReminderPolicy.REPEAT_NONE
@@ -72,7 +80,7 @@ public final class CommandExecutor {
       JSONArray createdNotes = new JSONArray(), moved = new JSONArray(), reminders = new JSONArray();
       Set<Long> createdFolders = new LinkedHashSet<>();
       Map<String, Long> targets = new HashMap<>();
-      for (AgentAction action : draft.actions) {
+      for (AgentAction action : actions) {
         if (action.kind == AgentAction.Kind.CREATE) {
           long id = store.save(0, action.title, action.body, 0);
           Note made = store.note(id);

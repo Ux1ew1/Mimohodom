@@ -11,6 +11,7 @@ import android.os.*;
 import android.text.*;
 import android.text.method.*;
 import android.text.style.ClickableSpan;
+import android.text.style.*;
 import android.view.*;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -349,6 +350,8 @@ public final class MainActivity extends Activity
               CalendarSync.runAsync(getApplicationContext());
             // Журнал агента хранится 30 дней.
             AgentLog.prune(purgeStore, System.currentTimeMillis());
+            // Эксперимент «баллы внимания»: недельные списания и вопросы без ответа.
+            purgeStore.attentionSweep(System.currentTimeMillis());
           } catch (Exception ignored) {
             // Не удалось сейчас — попробуем при следующем запуске.
           }
@@ -1371,20 +1374,34 @@ public final class MainActivity extends Activity
       count.setVisibility(open ? View.VISIBLE : View.INVISIBLE);
       folders.setImportantForAccessibility(open ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
           : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
-      if (running != null) running.cancel();
+      // Сначала обнуляем ссылку, потом гасим: иначе onAnimationEnd старой анимации
+      // примет её за действующую и перезапишет состояние новой.
+      android.animation.ValueAnimator old = running;
+      running = null;
+      if (old != null) old.cancel();
       float target = open ? 1 : 0;
       if (!animated || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
         apply(target);
         return;
       }
-      running = android.animation.ValueAnimator.ofFloat(fraction, target);
-      running.setDuration(open ? 480 : 320);
-      running.setInterpolator(
+      android.animation.ValueAnimator anim = android.animation.ValueAnimator.ofFloat(fraction, target);
+      anim.setDuration(open ? 480 : 320);
+      anim.setInterpolator(
           open
               ? new android.view.animation.PathInterpolator(0.16f, 1f, 0.3f, 1f)
               : new android.view.animation.PathInterpolator(0.65f, 0f, 0.35f, 1f));
-      running.addUpdateListener(a -> apply((float) a.getAnimatedValue()));
-      running.start();
+      anim.addUpdateListener(a -> apply((float) a.getAnimatedValue()));
+      // Как бы анимация ни завершилась, конечное состояние применяем точно:
+      // без этого прерванная системой анимация оставляла строку между положениями.
+      anim.addListener(
+          new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator a) {
+              if (running == anim) apply(target);
+            }
+          });
+      running = anim;
+      anim.start();
     }
   }
 
@@ -2221,37 +2238,80 @@ public final class MainActivity extends Activity
     }
     if (id > 0) questionSection(id);
     if (id > 0) planSection(id);
+    if (id > 0 && note != null && prefs.getBoolean("attentionPoints", false)) {
+      // Баллы внимания: открытие заметки — слабый интерес (+1, не чаще раза в 20 часов).
+      store.attentionAdjust(id, 1);
+      Note fresh = store.note(id);
+      if (fresh != null && fresh.attention >= 0) {
+        gap(content, 4);
+        secondary(
+            content,
+            fresh.attention == 0
+                ? "Помощник больше не работает с этой заметкой. Откройте или измените её, чтобы"
+                    + " вернуть его внимание."
+                : "Внимание помощника: " + fresh.attention + " из " + AttentionPolicy.MAX);
+      }
+    }
     if (note != null && note.suggestion > 0) {
+      long[] offered = ReminderPolicy.parseTimes(note.suggestionTimes);
       gap(content, 12);
       LinearLayout proposal = column();
       pad(proposal, 14);
       proposal.setBackground(shape(LIME, 12));
+      String proposed = "Предложение ИИ: ";
+      if (offered.length > 1) {
+        StringBuilder days = new StringBuilder();
+        java.time.ZoneId zone = ZoneId.systemDefault();
+        long nowMs = System.currentTimeMillis();
+        for (long at : offered) {
+          if (days.length() > 0) days.append('\n');
+          days.append(ReminderBatch.label(at, zone));
+          if (at <= nowMs) days.append(" · прошло");
+        }
+        proposed = proposed + ReminderPolicy.dateCount(offered.length) + ":\n" + days;
+      } else {
+        proposed = proposed + date(note.suggestion);
+      }
       secondary(
           proposal,
-          "Предложение ИИ: "
-              + date(note.suggestion)
+          proposed
               + suggestedLeadNote(note.suggestionLead)
               + "\n"
               + note.suggestionReason);
       gap(proposal, 8);
       proposal.addView(
           button(
-              "Использовать дату",
+              offered.length > 1 ? "Использовать даты" : "Использовать дату",
               false,
               () -> {
-                if (note.suggestion <= System.currentTimeMillis()) {
+                long now = System.currentTimeMillis();
+                long[] chosen = offered.length > 1 ? offered : new long[] {note.suggestion};
+                int ahead = 0;
+                for (long at : chosen) if (at > now) ahead++;
+                if (ahead == 0) {
                   toast("Предложенное время уже прошло");
                   return;
                 }
-                reminder = note.suggestion;
+                if (ahead < chosen.length) {
+                  // Пока предложение ждало, часть дат могла пройти: берём только будущие.
+                  long[] future = new long[ahead];
+                  int i = 0;
+                  for (long at : chosen) if (at > now) future[i++] = at;
+                  chosen = future;
+                }
                 if (note.suggestionLead >= 0) leadChoice = note.suggestionLead;
-                refreshReminder();
-                stash();
+                // Несколько дат становятся серией «по списку», одна — обычным напоминанием.
+                setEditorTimes(chosen);
+                // Баллы внимания: принятое предложение ИИ — сильный интерес (+2 без гейта).
+                store.attentionReward(id, 2);
                 if (Build.VERSION.SDK_INT >= 33
                     && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED)
                   requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 42);
-                toast("Напоминание сохранится при выходе из заметки.");
+                toast(
+                    chosen.length > 1
+                        ? "Серия сохранится при выходе из заметки."
+                        : "Напоминание сохранится при выходе из заметки.");
               }));
       gap(proposal, 6);
       proposal.addView(
@@ -2260,6 +2320,8 @@ public final class MainActivity extends Activity
               false,
               () -> {
                 store.dismissSuggestion(id);
+                // Баллы внимания: отклонённое предложение — минус балл.
+                store.attentionAdjust(id, -1);
                 proposal.setVisibility(View.GONE);
               }));
       content.addView(proposal);
@@ -2267,6 +2329,7 @@ public final class MainActivity extends Activity
     editorActive = true;
     watch(titleField, this::stash);
     watch(bodyField, this::stash);
+    formatHandle();
     if (focusEditor && id == 0) {
       // Быстрое действие «Записать»: сразу открыть клавиатуру в тексте заметки.
       focusEditor = false;
@@ -2600,6 +2663,8 @@ public final class MainActivity extends Activity
             reminderEdited ? repeatMode : old.repeat,
             reminderEdited ? leadChoice : old.lead,
             reminderEdited ? timesNow : old.reminderTimes);
+        // Баллы внимания: правка заметки — интерес (+1, не чаще раза в 20 часов).
+        if (titleEdited || bodyEdited) store.attentionAdjust(editing, 1);
         if (imageEdited) {
           store.image(editing, noteImage);
           releaseImage(old.image, noteImage);
@@ -2619,6 +2684,7 @@ public final class MainActivity extends Activity
       editorBase = shown;
       return true;
     } catch (Exception e) {
+      android.util.Log.e("MainActivity", "persistEditedNote failed", e);
       stash();
       toast("Не удалось сохранить изменения. Черновик сохранён на устройстве.");
       return false;
@@ -2997,6 +3063,7 @@ public final class MainActivity extends Activity
       buzz(1);
       if (denied) toast("Сохранено. Разрешите уведомления в настройках Android.");
     } catch (Exception e) {
+      android.util.Log.e("MainActivity", "saveNote failed", e);
       toast("Не удалось сохранить заметку. Черновик сохранён.");
     }
   }
@@ -5045,6 +5112,22 @@ public final class MainActivity extends Activity
       TextView reply = text(helperReply, 14, deep);
       reply.setLineSpacing(dp(2), 1);
       body.addView(reply);
+      // Действия по задаче («Выполнено», «В корзину», перенос напоминания) — те же, что в чате,
+      // чтобы дело можно было завершить прямо с ленты.
+      try {
+        JSONArray history = store.messages(helperReplyChat);
+        if (history.length() > 0) {
+          JSONObject last = history.getJSONObject(history.length() - 1);
+          String draftJson = last.optString("draft", "");
+          if ("assistant".equals(last.optString("role")) && !draftJson.isEmpty()) {
+            JSONObject draft = new JSONObject(draftJson);
+            String kind = draft.optString("kind");
+            if (kind.equals("progress_trash") || kind.equals("progress_later"))
+              progressDraftView(body, last.getLong("id"), draft);
+          }
+        }
+      } catch (Exception ignored) {
+      }
       gap(body, 10);
       LinearLayout actions = row();
       actions.addView(helperPill("Открыть чат", false, () -> openChatFromHelper(helperReplyChat)));
@@ -5472,7 +5555,11 @@ public final class MainActivity extends Activity
         body.setTextIsSelectable(true);
         String said = asked == null ? part.text : asked.text;
         String shown = part.recap ? said.replaceFirst("^Итог\\.?\\s*", "") : said;
-        body.setText(linkedAnswer(shown, m.getJSONArray("sources")));
+        // Ответы помощника выводим с разметкой, свои сообщения — как есть.
+        body.setText(
+            user
+                ? linkedAnswer(shown, m.getJSONArray("sources"))
+                : styledAnswer(shown, m.getJSONArray("sources")));
         body.setMovementMethod(LinkMovementMethod.getInstance());
         if (!pictures.images.isEmpty()) {
           bubble.addView(messageImages(pictures.images));
@@ -5834,7 +5921,7 @@ public final class MainActivity extends Activity
     bubble.addView(actions);
   }
 
-  /** Карточка команды полностью восстанавливается из messages.draft после поворота и render(). */
+  /** Карточка команды и выбор заметок восстанавливаются из messages.draft после render(). */
   private void commandDraftView(LinearLayout bubble, long message, JSONObject json) {
     CommandDraft draft;
     try {
@@ -5843,21 +5930,31 @@ public final class MainActivity extends Activity
       chatNote(bubble, "Черновик команды повреждён. Отправьте команду ещё раз.");
       return;
     }
+    Set<Long> selectable = draft.selectable();
     gap(bubble, 8);
     TextView heading = text("Предпросмотр команды", 14, GREEN);
     heading.setTypeface(null, Typeface.BOLD);
     bubble.addView(heading);
     gap(bubble, 4);
-    for (String line : draft.preview()) {
-      TextView item = text("• " + line, 13, INK);
-      item.setLineSpacing(dp(2), 1);
-      item.setPadding(0, dp(3), 0, dp(3));
-      bubble.addView(item);
+    LinearLayout previewList = column();
+    bubble.addView(previewList);
+    TextView selectionSummary = null;
+    LinearLayout choices = null;
+    if (!selectable.isEmpty()) {
+      gap(bubble, 6);
+      chatNote(bubble, "Снимите галочки с заметок, которые нужно оставить без изменений.");
+      selectionSummary = text("", 13, GREEN);
+      selectionSummary.setTypeface(null, Typeface.BOLD);
+      selectionSummary.setPadding(0, dp(4), 0, dp(4));
+      bubble.addView(selectionSummary);
+      choices = column();
+      bubble.addView(choices);
     }
-    if (!draft.notes.isEmpty()) {
+    if (selectable.size() < draft.notes.size()) {
       gap(bubble, 5);
-      chatNote(bubble, "Затронутые заметки:");
+      chatNote(bubble, "Источники новой заметки:");
       for (CommandDraft.NoteState note : draft.notes.values()) {
+        if (selectable.contains(note.id)) continue;
         TextView name = text(note.title, 13, GREEN);
         name.setTypeface(null, Typeface.BOLD);
         name.setPadding(dp(8), dp(5), dp(8), dp(5));
@@ -5870,50 +5967,91 @@ public final class MainActivity extends Activity
       }
     }
     if (draft.rejected > 0)
-      chatNote(
-          bubble,
-          "Отклонено небезопасных или неподдерживаемых действий: "
-              + draft.rejected
-              + ". Применятся только перечисленные выше.");
-    chatNote(bubble, "Пакет применится целиком. После этого его можно отменить одной кнопкой"
-        + " в течение суток — здесь или в журнале колокольчика.");
+      chatNote(bubble, "Отклонено небезопасных или неподдерживаемых действий: "
+          + draft.rejected + ". Применятся только перечисленные выше.");
+    chatNote(bubble, "Применятся только перечисленные выше изменения. После этого их можно"
+        + " отменить одной кнопкой в течение суток — здесь или в журнале колокольчика.");
     gap(bubble, 8);
     LinearLayout actions = row();
-    actions.addView(
-        compactButton(
-            "Применить",
-            true,
-            () -> {
-              buzz(1);
-              try {
-                CommandExecutor.Outcome outcome = CommandExecutor.apply(store, message);
-                // Системные будильники и календарь меняются только после успешного commit.
-                for (CommandExecutor.Change change : outcome.reminders)
-                  Reminders.scheduleEdited(getApplicationContext(), change.before, change.after);
-                CalendarSync.runAsync(getApplicationContext());
-                stash();
-                render();
-                undoBar("Команда применена");
-              } catch (IllegalStateException e) {
-                // Конфликт не закрывает черновик: пользователь видит, что именно не применилось.
-                toast(e.getMessage() == null ? "Команда не применена" : e.getMessage());
-              } catch (Exception e) {
-                toast("Не удалось применить команду. Никакие изменения не сохранены.");
-              }
-            }),
-        new LinearLayout.LayoutParams(0, -2, 1));
+    TextView apply = compactButton("Применить", true, () -> {
+      buzz(1);
+      try {
+        CommandExecutor.Outcome outcome = CommandExecutor.apply(store, message);
+        // Системные будильники и календарь меняются только после успешного commit.
+        for (CommandExecutor.Change change : outcome.reminders)
+          Reminders.scheduleEdited(getApplicationContext(), change.before, change.after);
+        CalendarSync.runAsync(getApplicationContext());
+        stash();
+        render();
+        undoBar("Команда применена");
+      } catch (IllegalStateException e) {
+        // Конфликт не закрывает черновик: пользователь видит, что именно не применилось.
+        toast(e.getMessage() == null ? "Команда не применена" : e.getMessage());
+      } catch (Exception e) {
+        toast("Не удалось применить команду. Никакие изменения не сохранены.");
+      }
+    });
+    actions.addView(apply, new LinearLayout.LayoutParams(0, -2, 1));
     actions.addView(new View(this), new LinearLayout.LayoutParams(dp(6), 1));
-    actions.addView(
-        compactButton(
-            "Отмена",
-            false,
-            () -> {
-              store.dismissDraft(message);
-              stash();
-              render();
-            }),
-        new LinearLayout.LayoutParams(0, -2, 1));
+    actions.addView(compactButton("Отмена", false, () -> {
+      store.dismissDraft(message);
+      stash();
+      render();
+    }), new LinearLayout.LayoutParams(0, -2, 1));
     bubble.addView(actions);
+
+    TextView summary = selectionSummary;
+    Runnable refresh = () -> {
+      previewList.removeAllViews();
+      List<String> lines = draft.preview();
+      if (lines.isEmpty()) chatNote(previewList, "Нет выбранных изменений.");
+      for (String line : lines) {
+        TextView item = text("• " + line, 13, INK);
+        item.setLineSpacing(dp(2), 1);
+        item.setPadding(0, dp(3), 0, dp(3));
+        previewList.addView(item);
+      }
+      if (summary != null)
+        summary.setText("Выбрано: " + draft.selected.size() + " из " + selectable.size());
+      apply.setEnabled(draft.hasSelectedChanges());
+      apply.setAlpha(draft.hasSelectedChanges() ? 1f : .45f);
+    };
+    if (choices != null) {
+      for (CommandDraft.NoteState note : draft.notes.values()) {
+        if (!selectable.contains(note.id)) continue;
+        LinearLayout line = row();
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        CheckBox box = new CheckBox(this);
+        box.setText(note.title);
+        box.setTextSize(13);
+        box.setTextColor(INK);
+        box.setMinHeight(dp(48));
+        box.setGravity(Gravity.CENTER_VERTICAL);
+        box.setButtonTintList(android.content.res.ColorStateList.valueOf(GREEN));
+        box.setChecked(draft.isSelected(note.id));
+        line.addView(box, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView open = text("Открыть", 12, GREEN);
+        open.setTypeface(null, Typeface.BOLD);
+        open.setGravity(Gravity.CENTER);
+        open.setMinWidth(dp(64));
+        open.setMinHeight(dp(44));
+        open.setContentDescription("Открыть заметку: " + note.title);
+        open.setOnClickListener(v -> openNote(note.id));
+        line.addView(open);
+        choices.addView(line);
+        box.setOnCheckedChangeListener((v, checked) -> {
+          draft.setSelected(note.id, checked);
+          try {
+            store.updateDraft(message, draft.toJson());
+            refresh.run();
+          } catch (Exception e) {
+            toast(e.getMessage() == null ? "Не удалось сохранить выбор" : e.getMessage());
+            render();
+          }
+        });
+      }
+    }
+    refresh.run();
   }
 
   private void reviewChatDraft(long message, JSONObject draft) {
@@ -5963,53 +6101,100 @@ public final class MainActivity extends Activity
   }
 
   private CharSequence linkedAnswer(String raw, JSONArray sources) {
+    SpannableStringBuilder out = new SpannableStringBuilder(raw);
+    applyNoteLinks(out, sources);
+    return out;
+  }
+
+  /**
+   * Ответ помощника: сначала лёгкая разметка ({@link Markup}), поверх — ссылки на заметки
+   * [[note:N]] из списка источников.
+   */
+  private CharSequence styledAnswer(String raw, JSONArray sources) {
+    Markup.Result parsed = Markup.parse(raw);
+    SpannableStringBuilder out = new SpannableStringBuilder(parsed.text);
+    for (Markup.Span s : parsed.spans) {
+      int f = Spannable.SPAN_EXCLUSIVE_EXCLUSIVE;
+      if ((s.flags & Markup.BOLD) != 0)
+        out.setSpan(new StyleSpan(Typeface.BOLD), s.start, s.end, f);
+      if ((s.flags & Markup.ITALIC) != 0)
+        out.setSpan(new StyleSpan(Typeface.ITALIC), s.start, s.end, f);
+      if ((s.flags & Markup.STRIKE) != 0)
+        out.setSpan(new StrikethroughSpan(), s.start, s.end, f);
+      if ((s.flags & Markup.HEADING) != 0)
+        out.setSpan(new RelativeSizeSpan(1.15f), s.start, s.end, f);
+      if ((s.flags & Markup.CODE) != 0) {
+        out.setSpan(new TypefaceSpan("monospace"), s.start, s.end, f);
+        out.setSpan(new BackgroundColorSpan(LINE), s.start, s.end, f);
+      }
+      if ((s.flags & Markup.QUOTE) != 0) out.setSpan(new QuoteSpan(GREEN), s.start, s.end, f);
+      if ((s.flags & Markup.LINK) != 0)
+        out.setSpan(
+            new URLSpan(s.url) {
+              @Override
+              public void updateDrawState(TextPaint paint) {
+                paint.setColor(GREEN);
+                paint.setUnderlineText(true);
+              }
+            },
+            s.start,
+            s.end,
+            f);
+    }
+    applyNoteLinks(out, sources);
+    return out;
+  }
+
+  /** Заменяет в собранном тексте токены [[note:N]] на кликабельные «Названия» заметок. */
+  private void applyNoteLinks(SpannableStringBuilder out, JSONArray sources) {
     Set<Long> allowed = new HashSet<>();
     for (int i = 0; i < sources.length(); i++) allowed.add(sources.optJSONObject(i).optLong("id"));
-    SpannableStringBuilder out = new SpannableStringBuilder();
-    Matcher m = Pattern.compile("\\[\\[note:(\\d+)]]").matcher(raw);
-    int last = 0;
+    Matcher m = Pattern.compile("\\[\\[note:(\\d+)]]").matcher(out);
+    int shift = 0;
     while (m.find()) {
-      out.append(raw, last, m.start());
+      int from = m.start() + shift, to = m.end() + shift;
       long id;
       try {
         id = Long.parseLong(m.group(1));
       } catch (NumberFormatException e) {
-        last = m.end();
+        out.replace(from, to, ""); // повреждённый токен убираем, как раньше
+        shift -= to - from;
         continue;
       }
-      if (allowed.contains(id)) {
-        int start = out.length();
-        String title = "Заметка";
-        for (int i = 0; i < sources.length(); i++) {
-          JSONObject source = sources.optJSONObject(i);
-          if (source.optLong("id") == id) {
-            title = source.optString("title", "Заметка");
-            break;
-          }
-        }
-        if (title.length() > 44) title = title.substring(0, 44) + "…";
-        out.append("«" + title + "»");
-        out.setSpan(
-            new ClickableSpan() {
-              @Override
-              public void updateDrawState(TextPaint paint) {
-                paint.setColor(GREEN);
-                paint.setUnderlineText(false);
-                paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-              }
-
-              public void onClick(View v) {
-                openNote(id);
-              }
-            },
-            start,
-            out.length(),
-            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+      if (!allowed.contains(id)) {
+        out.replace(from, to, ""); // ссылки на чужие источники не показываем
+        shift -= to - from;
+        continue;
       }
-      last = m.end();
+      String title = "Заметка";
+      for (int i = 0; i < sources.length(); i++) {
+        JSONObject source = sources.optJSONObject(i);
+        if (source.optLong("id") == id) {
+          title = source.optString("title", "Заметка");
+          break;
+        }
+      }
+      if (title.length() > 44) title = title.substring(0, 44) + "…";
+      String label = "«" + title + "»";
+      out.replace(from, to, label);
+      shift += label.length() - (to - from);
+      out.setSpan(
+          new ClickableSpan() {
+            @Override
+            public void updateDrawState(TextPaint paint) {
+              paint.setColor(GREEN);
+              paint.setUnderlineText(false);
+              paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            }
+
+            public void onClick(View v) {
+              openNote(id);
+            }
+          },
+          from,
+          from + label.length(),
+          Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
     }
-    out.append(raw.substring(last));
-    return out;
   }
 
   private boolean sendPlain;
@@ -6052,6 +6237,20 @@ public final class MainActivity extends Activity
       store.message(chatId, "user", answer, new JSONArray());
       long now = System.currentTimeMillis();
       prefs.edit().putLong(CheckInJob.progressKey(noteId), ProgressCheck.nextAsk(answer, now)).apply();
+      // Баллы внимания: «Не актуально» — сразу минус два, «Отложить» дважды подряд — минус балл,
+      // остальные ответы сбрасывают счётчик откладываний.
+      if (answer.equals(ProgressCheck.DROP)) {
+        store.attentionAdjust(noteId, -2);
+        prefs.edit().remove("attentionLater." + noteId).apply();
+      } else if (answer.equals(ProgressCheck.LATER)) {
+        String laterKey = "attentionLater." + noteId;
+        int streak = prefs.getInt(laterKey, 0) + 1;
+        if (streak >= 2) {
+          store.attentionAdjust(noteId, -1);
+          streak = 0;
+        }
+        prefs.edit().putInt(laterKey, streak).apply();
+      } else prefs.edit().remove("attentionLater." + noteId).apply();
       boolean alive = n != null && n.trashed == 0;
       boolean postpone = alive && ProgressCheck.canPostpone(n.reminder, n.repeat);
       JSONObject next = null;
@@ -8457,6 +8656,20 @@ public final class MainActivity extends Activity
     gap(content, 10);
     content.addView(button("Проверить сейчас", false, this::manualAnalysis));
     checkInSettings();
+    section("Эксперименты", true);
+    Switch attention = toggle("Баллы внимания помощника", prefs.getBoolean("attentionPoints", false));
+    attention.setOnCheckedChangeListener(
+        (v, checked) -> {
+          buzz(0);
+          prefs.edit().putBoolean("attentionPoints", checked).apply();
+        });
+    content.addView(attention);
+    secondary(
+        content,
+        "Помощник реже возвращается к заметкам, которым вы не отвечаете. У каждой новой заметки"
+            + " 5–8 баллов внимания: отклонённые предложения и молчание их тратят, открытия, правки"
+            + " и ответы — пополняют. На нуле помощник оставляет заметку в покое, пока вы сами к"
+            + " ней не вернётесь. Действует только на заметки, созданные после включения.");
   }
 
   /** Помощник сам пишет первым и по ситуации расспрашивает о делах и планах. */
@@ -10352,10 +10565,276 @@ public final class MainActivity extends Activity
     popup[0].show();
   }
 
+  /**
+   * Радиальная панель форматирования редактора: круглая ручка у правого края листа. Свайп по
+   * ней, не отрывая палец, выдвигает веер функций (списки, чекбоксы, жирный, курсив,
+   * зачёркнутый); отпустил над функцией — она применяется к тексту, отпустил раньше — панель
+   * закрывается и уходит за край. Долгое нажатие открывает тот же список окном (TalkBack).
+   * Синтаксис общий с разметкой чата: {@link TextFormat}.
+   */
+  private void formatHandle() {
+    if (bodyField == null) return;
+    RadialFan fan = new RadialFan();
+    FrameLayout overlay = new FrameLayout(this);
+    overlay.addView(fan, new FrameLayout.LayoutParams(-1, -1));
+    overlay.setVisibility(View.GONE);
+    overlay.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+    frame.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+
+    ImageView handle = new ImageView(this);
+    handle.setImageDrawable(new Glyph("fmt", WHITE, 15));
+    handle.setBackground(shape(FILL, 18));
+    handle.setAlpha(0.94f);
+    handle.setElevation(dp(3));
+    handle.setContentDescription("Форматирование текста");
+    handle.setFocusable(true);
+    FrameLayout.LayoutParams handleParams =
+        new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.END | Gravity.CENTER_VERTICAL);
+    handle.setTranslationX(dp(9)); // кругляж наполовину за краем, тексту не мешает
+    // Край экрана у жестовой навигации — системный «Назад»: исключаем зону ручки, чтобы
+    // свайп от неё доставался панели (API 29+, на кнопочной навигации конфликта нет).
+    if (Build.VERSION.SDK_INT >= 29)
+      handle.addOnLayoutChangeListener(
+          (v, l, t, r, b, ol, ot, or, ob) ->
+              handle.setSystemGestureExclusionRects(
+                  java.util.List.of(new Rect(0, -dp(48), r - l, b - t + dp(48)))));
+    frame.addView(handle, handleParams);
+
+    int[] frameXY = new int[2];
+    handle.setOnTouchListener(
+        (v, event) -> {
+          frame.getLocationOnScreen(frameXY);
+          float x = event.getRawX() - frameXY[0], y = event.getRawY() - frameXY[1];
+          switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+              overlay.setVisibility(View.VISIBLE);
+              fan.open(x, y);
+              return true;
+            case MotionEvent.ACTION_MOVE:
+              fan.track(x, y);
+              return true;
+            case MotionEvent.ACTION_UP:
+              String action = fan.selectedAction();
+              fan.close(action != null, () -> overlay.setVisibility(View.GONE));
+              if (action != null) {
+                buzz(0);
+                applyFormat(action);
+              }
+              v.performClick();
+              return true;
+            case MotionEvent.ACTION_CANCEL:
+              fan.close(false, () -> overlay.setVisibility(View.GONE));
+              return true;
+            default:
+              return true;
+          }
+        });
+    handle.setOnLongClickListener(
+        v -> {
+          String[] labels = {
+            "Маркированный список", "Нумерованный список", "Чекбоксы",
+            "Жирный", "Курсив", "Зачёркнутый"
+          };
+          String[] actions = {"bullet", "number", "check", "bold", "italic", "strike"};
+          new Ask(this)
+              .setTitle("Форматирование")
+              .setItems(labels, (d, which) -> applyFormat(actions[which]))
+              .show();
+          return true;
+        });
+  }
+
+  /** Применяет функцию панели к тексту заметки: обёртка вокруг выделения или префикс строк. */
+  private void applyFormat(String action) {
+    EditText f = bodyField;
+    if (f == null) return;
+    String text = f.getText().toString();
+    int start = Math.max(0, f.getSelectionStart()), end = Math.max(0, f.getSelectionEnd());
+    TextFormat.Result r =
+        switch (action) {
+          case "bold" -> TextFormat.wrap(text, start, end, "**");
+          case "italic" -> TextFormat.wrap(text, start, end, "*");
+          case "strike" -> TextFormat.wrap(text, start, end, "~~");
+          case "bullet" -> TextFormat.prefix(text, start, end, "bullet");
+          case "number" -> TextFormat.prefix(text, start, end, "number");
+          default -> TextFormat.prefix(text, start, end, "check");
+        };
+    f.setText(r.text);
+    f.setSelection(r.start, r.end);
+  }
+
+  /**
+   * Веер функций: круглая панель из-за правого края, функции дугой слева от ручки. Рисуется
+   * сама, состояние — центр, доля раскрытия, сдвиг при закрытии и выбранный сектор.
+   */
+  private final class RadialFan extends View {
+    final String[] actions = {"bullet", "number", "check", "bold", "italic", "strike"};
+    final String[] glyphs = {"fmt_list", "fmt_num", "fmt_checklist", "fmt_bold", "fmt_italic", "fmt_strike"};
+    final float[] angles = {165f, 139f, 113f, 247f, 221f, 195f};
+    final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+    float anchorY, fraction, slide;
+    int selected = -1;
+    android.animation.ValueAnimator running;
+
+    RadialFan() {
+      super(MainActivity.this);
+      fill.setStyle(Paint.Style.FILL);
+      stroke.setStyle(Paint.Style.STROKE);
+      stroke.setStrokeWidth(dp(1));
+    }
+
+    float radius() {
+      return dp(96);
+    }
+
+    float cx() {
+      return getWidth() > 0 ? getWidth() : getResources().getDisplayMetrics().widthPixels;
+    }
+
+    float cy() {
+      return anchorY;
+    }
+
+    void open(float x, float y) {
+      // Панель прижата к правому краю; высота центра — по якорю касания, в пределах экрана.
+      // Размеров ещё может не быть (панель только показана) — берём метрики экрана.
+      float h = getHeight() > 0 ? getHeight() : getResources().getDisplayMetrics().heightPixels;
+      float margin = radius() + dp(36);
+      anchorY = Math.max(margin, Math.min(h - margin, y));
+      selected = -1;
+      slide = 0;
+      animateTo(1, 170, null);
+    }
+
+    void track(float x, float y) {
+      float dx = x - cx(), dy = y - cy();
+      double dist = Math.hypot(dx, dy);
+      int next = -1;
+      if (dist > dp(30) && dist < radius() + dp(34)) {
+        double angle = Math.toDegrees(Math.atan2(dy, dx));
+        if (angle < 0) angle += 360;
+        double best = 20;
+        for (int i = 0; i < angles.length; i++) {
+          double d = Math.abs(angle - angles[i]);
+          if (d > 180) d = 360 - d;
+          if (d < best) {
+            best = d;
+            next = i;
+          }
+        }
+      }
+      if (next != selected) {
+        selected = next;
+        invalidate();
+      }
+    }
+
+    String selectedAction() {
+      return selected < 0 ? null : actions[selected];
+    }
+
+    /** {@code apply} — палец отпущен над функцией: быстрое сворачивание, иначе уход за край. */
+    void close(boolean apply, Runnable done) {
+      animateTo(
+          0,
+          apply ? 130 : 200,
+          () -> {
+            slide = 0;
+            selected = -1;
+            done.run();
+          });
+    }
+
+    void animateTo(float target, long ms, Runnable done) {
+      if (running != null) running.cancel();
+      if (!android.animation.ValueAnimator.areAnimatorsEnabled()) {
+        fraction = target;
+        invalidate();
+        if (done != null) done.run();
+        return;
+      }
+      float from = fraction;
+      running = android.animation.ValueAnimator.ofFloat(0, 1);
+      running.setDuration(ms);
+      running.setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0, 0, 1));
+      running.addUpdateListener(
+          a -> {
+            float f = (float) a.getAnimatedValue();
+            fraction = from + (target - from) * f;
+            slide = target == 0 && done != null ? dp(140) * f : 0;
+            invalidate();
+          });
+      running.addListener(
+          new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator a) {
+              fraction = target;
+              invalidate();
+              if (done != null) done.run();
+            }
+          });
+      running.start();
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+      if (fraction <= 0) return;
+      canvas.save();
+      canvas.translate(slide, 0);
+      float r = radius();
+      fill.setColor(SURFACE);
+      fill.setAlpha((int) (0.97f * 255 * fraction));
+      stroke.setColor(LINE);
+      stroke.setAlpha((int) (255 * fraction));
+      canvas.drawCircle(cx(), cy(), (r + dp(30)) * fraction, fill);
+      canvas.drawCircle(cx(), cy(), (r + dp(30)) * fraction, stroke);
+      int item = dp(21);
+      for (int i = 0; i < actions.length; i++) {
+        double a = Math.toRadians(angles[i]);
+        float x = cx() + (float) (r * Math.cos(a)) * fraction;
+        float y = cy() + (float) (r * Math.sin(a)) * fraction;
+        boolean on = i == selected;
+        fill.setColor(on ? LIME : SURFACE);
+        fill.setAlpha((int) (255 * fraction));
+        float half = (on ? item * 1.18f : item) * fraction;
+        canvas.drawCircle(x, y, half, fill);
+        canvas.drawCircle(x, y, half, stroke);
+        Glyph icon = new Glyph(glyphs[i], on ? FILL : MUTED, on ? 17 : 16);
+        int s = (int) (icon.getIntrinsicWidth() * fraction);
+        if (s > 0) {
+          icon.setBounds((int) x - s / 2, (int) y - s / 2, (int) x + s / 2, (int) y + s / 2);
+          icon.setAlpha((int) (255 * fraction));
+          icon.draw(canvas);
+        }
+      }
+      canvas.restore();
+    }
+  }
+
   private final class Glyph extends android.graphics.drawable.Drawable {
     private final String name;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private Paint textPaint;
     private final int size;
+
+    private Paint textPaint(boolean bold, boolean italic) {
+      if (textPaint == null) {
+        textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        textPaint.setStyle(Paint.Style.FILL);
+        textPaint.setTextAlign(Paint.Align.CENTER);
+      }
+      textPaint.setColor(paint.getColor());
+      textPaint.setAlpha(paint.getAlpha());
+      textPaint.setTextSize(13);
+      textPaint.setTypeface(
+          Typeface.create(
+              Typeface.DEFAULT,
+              bold && italic
+                  ? Typeface.BOLD_ITALIC
+                  : bold ? Typeface.BOLD : italic ? Typeface.ITALIC : Typeface.NORMAL));
+      return textPaint;
+    }
 
     Glyph(String name, int color, int size) {
       this.name = name;
@@ -10528,6 +11007,45 @@ public final class MainActivity extends Activity
           c.drawLine(9, 3, 15, 3, paint);
           c.drawLine(10, 10, 10, 17, paint);
           c.drawLine(14, 10, 14, 17, paint);
+        }
+        case "fmt" -> {
+          // Ручка панели: буква и штрихи строк.
+          c.drawText("А", 8, 16.5f, textPaint(true, false));
+          c.drawLine(14, 8, 21, 8, paint);
+          c.drawLine(14, 12, 21, 12, paint);
+          c.drawLine(14, 16, 18, 16, paint);
+        }
+        case "fmt_bold" -> c.drawText("Б", 12, 16.5f, textPaint(true, false));
+        case "fmt_italic" -> c.drawText("К", 12, 16.5f, textPaint(false, true));
+        case "fmt_strike" -> {
+          c.drawText("S", 12, 16.5f, textPaint(false, false));
+          c.drawLine(5, 12, 19, 12, paint);
+        }
+        case "fmt_list" -> {
+          for (int y = 7; y < 22; y += 6) {
+            c.drawCircle(5.5f, y, 1.1f, textPaint(false, false));
+            c.drawLine(10, y, 20, y, paint);
+          }
+        }
+        case "fmt_num" -> {
+          Paint digits = textPaint(false, false);
+          digits.setTextSize(7);
+          c.drawText("1", 5.5f, 8.5f, digits);
+          c.drawText("2", 5.5f, 16.5f, digits);
+          c.drawLine(10, 6, 20, 6, paint);
+          c.drawLine(10, 14, 20, 14, paint);
+          c.drawLine(10, 20, 17, 20, paint);
+        }
+        case "fmt_checklist" -> {
+          c.drawRoundRect(3, 4, 9, 10, 1.5f, 1.5f, paint);
+          Path tick = new Path();
+          tick.moveTo(4.2f, 6.8f);
+          tick.lineTo(5.6f, 8.4f);
+          tick.lineTo(8, 5.4f);
+          c.drawPath(tick, textPaint(false, false));
+          c.drawLine(12, 7, 21, 7, paint);
+          c.drawRoundRect(3, 13, 9, 19, 1.5f, 1.5f, paint);
+          c.drawLine(12, 16, 21, 16, paint);
         }
         default -> {
           for (int y = 5; y < 22; y += 7) c.drawLine(3, y, 21, y, paint);

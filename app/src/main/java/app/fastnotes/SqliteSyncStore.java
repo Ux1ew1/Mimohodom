@@ -438,6 +438,7 @@ public final class SqliteSyncStore implements SyncStore {
     v.put("suggestion", 0);
     v.put("suggestion_reason", "");
     v.put("suggestion_lead", -1);
+    v.put("suggestion_times", "");
     if (r.plan != null) v.put("plan", r.plan);
     if (r.trashed != null) v.put("trashed", r.trashed);
     // Список дат нужен только серии «по списку»; запись без поля (компьютер) свой список не трогает.
