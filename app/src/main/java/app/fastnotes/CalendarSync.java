@@ -29,7 +29,6 @@ import java.util.concurrent.Executors;
  * {@code CalendarContract}. События календаря без звука: оповещает по-прежнему приложение.
  */
 public final class CalendarSync {
-  public static final String ACCOUNT = "Мимоходом";
   public static final int REQUEST_CODE = 43;
   private static final String ENABLED = "calendarSync";
   private static final String STATUS = "calendarSyncStatus";
@@ -40,6 +39,10 @@ public final class CalendarSync {
 
   private static SharedPreferences settings(Context c) {
     return c.getSharedPreferences("settings", 0);
+  }
+
+  private static String account(Context c) {
+    return c.getString(R.string.calendar_account);
   }
 
   public static boolean permitted(Context c) {
@@ -79,10 +82,10 @@ public final class CalendarSync {
     WORKER.execute(() -> remove(app));
   }
 
-  private static Uri asAdapter(Uri uri) {
+  private static Uri asAdapter(Context c, Uri uri) {
     return uri.buildUpon()
         .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
-        .appendQueryParameter(Calendars.ACCOUNT_NAME, ACCOUNT)
+        .appendQueryParameter(Calendars.ACCOUNT_NAME, account(c))
         .appendQueryParameter(Calendars.ACCOUNT_TYPE, CalendarContract.ACCOUNT_TYPE_LOCAL)
         .build();
   }
@@ -91,7 +94,7 @@ public final class CalendarSync {
     if (!enabled(c)) return;
     try {
       ContentResolver resolver = c.getContentResolver();
-      long calendar = calendarId(resolver, true);
+      long calendar = calendarId(c, resolver, true);
       if (calendar < 0) {
         status(c, "Не удалось создать календарь «Мимоходом»");
         return;
@@ -120,7 +123,7 @@ public final class CalendarSync {
         try {
           if (action.kind == CalendarSyncPlan.Kind.DELETE) {
             resolver.delete(
-                ContentUris.withAppendedId(asAdapter(Events.CONTENT_URI), action.eventId), null, null);
+                ContentUris.withAppendedId(asAdapter(c, Events.CONTENT_URI), action.eventId), null, null);
             removed++;
             continue;
           }
@@ -129,14 +132,14 @@ public final class CalendarSync {
           if (link == null) continue;
           ContentValues values = eventValues(calendar, action, link);
           if (action.kind == CalendarSyncPlan.Kind.INSERT) {
-            if (resolver.insert(asAdapter(Events.CONTENT_URI), values) == null) {
+            if (resolver.insert(asAdapter(c, Events.CONTENT_URI), values) == null) {
               failed++;
               continue;
             }
             added++;
           } else {
             resolver.update(
-                ContentUris.withAppendedId(asAdapter(Events.CONTENT_URI), action.eventId),
+                ContentUris.withAppendedId(asAdapter(c, Events.CONTENT_URI), action.eventId),
                 values,
                 null,
                 null);
@@ -190,9 +193,10 @@ public final class CalendarSync {
     return v;
   }
 
-  /** Номер календаря «Мимоходом»; при {@code create} создаёт его, если нет. */
-  private static long calendarId(ContentResolver resolver, boolean create) {
-    String[] args = {ACCOUNT, CalendarContract.ACCOUNT_TYPE_LOCAL};
+  /** Номер календаря текущего варианта; при {@code create} создаёт его, если нет. */
+  private static long calendarId(Context c, ContentResolver resolver, boolean create) {
+    String account = account(c);
+    String[] args = {account, CalendarContract.ACCOUNT_TYPE_LOCAL};
     try (Cursor cursor =
         resolver.query(
             Calendars.CONTENT_URI,
@@ -204,17 +208,17 @@ public final class CalendarSync {
     }
     if (!create) return -1;
     ContentValues v = new ContentValues();
-    v.put(Calendars.ACCOUNT_NAME, ACCOUNT);
+    v.put(Calendars.ACCOUNT_NAME, account);
     v.put(Calendars.ACCOUNT_TYPE, CalendarContract.ACCOUNT_TYPE_LOCAL);
     v.put(Calendars.NAME, "mimohodom");
-    v.put(Calendars.CALENDAR_DISPLAY_NAME, ACCOUNT);
+    v.put(Calendars.CALENDAR_DISPLAY_NAME, account);
     v.put(Calendars.CALENDAR_COLOR, 0xFF28634B);
     v.put(Calendars.CALENDAR_ACCESS_LEVEL, Calendars.CAL_ACCESS_OWNER);
-    v.put(Calendars.OWNER_ACCOUNT, ACCOUNT);
+    v.put(Calendars.OWNER_ACCOUNT, account);
     v.put(Calendars.CALENDAR_TIME_ZONE, TimeZone.getDefault().getID());
     v.put(Calendars.VISIBLE, 1);
     v.put(Calendars.SYNC_EVENTS, 1);
-    Uri created = resolver.insert(asAdapter(Calendars.CONTENT_URI), v);
+    Uri created = resolver.insert(asAdapter(c, Calendars.CONTENT_URI), v);
     return created == null ? -1 : ContentUris.parseId(created);
   }
 
@@ -242,9 +246,9 @@ public final class CalendarSync {
       if (permitted(c))
         c.getContentResolver()
             .delete(
-                asAdapter(Calendars.CONTENT_URI),
+                asAdapter(c, Calendars.CONTENT_URI),
                 Calendars.ACCOUNT_NAME + "=? AND " + Calendars.ACCOUNT_TYPE + "=?",
-                new String[] {ACCOUNT, CalendarContract.ACCOUNT_TYPE_LOCAL});
+                new String[] {account(c), CalendarContract.ACCOUNT_TYPE_LOCAL});
     } catch (RuntimeException ignored) {
       // Календарь уже удалён или недоступен: забываем состояние в любом случае.
     }

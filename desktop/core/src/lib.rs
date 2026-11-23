@@ -5,5 +5,6 @@ pub mod ai;
 pub mod api;
 pub mod app;
 pub mod policy;
+pub mod reminders;
 pub mod store;
 pub mod sync;

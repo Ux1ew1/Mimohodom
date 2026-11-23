@@ -23,7 +23,11 @@ final class ManagerJob {
     boolean perNote = manual || prefs.getBoolean("backgroundAi", false);
     ManagerStore manager = new ManagerStore(store);
     List<Note> batch = manager.batch(manual);
-    JSONObject groupSnapshot = manager.groupSnapshot(batch);
+    // Колоды по теме пачки: модель может предложить добавить запись туда (extend).
+    List<Note> stacks = manager.stacksFor(batch);
+    List<Note> snapshotNotes = new ArrayList<>(batch);
+    snapshotNotes.addAll(stacks);
+    JSONObject groupSnapshot = manager.groupSnapshot(snapshotNotes);
     if (batch.isEmpty()) {
       status(
           context,
@@ -32,7 +36,7 @@ final class ManagerJob {
               : manager.failedCount() > 0
                   ? "Все доступные записи ожидают ручного повтора после ошибки. Нажмите «Проверить"
                         + " заметки»."
-                  : "Нет доступных заметок для проверки. Стопки и их исходники уже просмотрены и"
+                  : "Нет доступных заметок для проверки. Колоды и их исходники уже просмотрены и"
                         + " исключены из анализа.");
       return;
     }
@@ -41,7 +45,7 @@ final class ManagerJob {
       if (!enabled.getAsBoolean()) return;
       batch.removeIf(n -> manager.top(n.id) != 0);
       if (batch.isEmpty()) {
-        status(context, "Нет доступных заметок для проверки. Все выбранные записи уже в стопках.");
+        status(context, "Нет доступных заметок для проверки. Все выбранные записи уже в колодах.");
         return;
       }
       if (!ReviewBudget.reserve(context)) {
@@ -64,28 +68,62 @@ final class ManagerJob {
             ? ReviewAnalysis.payload(
                 batch, model, System.currentTimeMillis(), ZoneId.systemDefault())
             : ManagerAnalysis.payload(batch, model);
+    // Модель видит состав колод: что уже сгруппировано, туда можно добавлять по теме (extend).
+    List<Long> stackIds = new ArrayList<>();
+    for (Note top : stacks) stackIds.add(top.id);
+    payload =
+        ManagerAnalysis.withContext(
+            payload,
+            manager.knownGroups(batch),
+            manager.answers(batch),
+            stacks,
+            manager.stackMembers(stackIds));
+    // Потолок ответа — по настройке «Максимальная длина ответа», но не меньше 1600.
+    ManagerAnalysis.limit(
+        payload,
+        ManagerAnalysis.reviewTokens(
+            context.getSharedPreferences("settings", 0).getInt("maxTokens", 0)));
     JSONObject response = Polza.request("chat/completions", key, payload);
+    // Сколько токенов ушло — в историю проверок, и при успехе, и при ошибке разбора.
+    String used = ReviewAnalysis.usage(response, payload.optInt("max_tokens", 0));
     List<JSONObject> proposals;
     Map<Long, Analysis.Result> results = Collections.emptyMap();
-    if (perNote) {
-      ReviewAnalysis.Result parsed =
-          ReviewAnalysis.parse(response, batch, System.currentTimeMillis());
-      proposals = parsed.proposals;
-      results = parsed.notes;
-    } else {
-      JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
-      if ("length".equals(choice.optString("finish_reason")))
-        throw new ReviewAnalysis.Failure(
-            "Ответ модели оборвался по лимиту 1200 токенов. Попробуйте другую модель или более"
-                + " короткие заметки.");
-      proposals =
-          ManagerAnalysis.parse(choice.getJSONObject("message").getString("content"), batch);
+    try {
+      if (perNote) {
+        ReviewAnalysis.Result parsed =
+            ReviewAnalysis.parse(response, batch, stacks, System.currentTimeMillis());
+        proposals = parsed.proposals;
+        results = parsed.notes;
+      } else {
+        JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
+        if ("length".equals(choice.optString("finish_reason")))
+          throw new ReviewAnalysis.Failure(
+              "Ответ модели оборвался по лимиту длины. Выберите «Подробно» или «Без"
+                  + " ограничения» в настройках ИИ или другую модель.");
+        proposals =
+            ManagerAnalysis.parse(
+                choice.getJSONObject("message").getString("content"), batch, stacks);
+      }
+    } catch (Exception e) {
+      throw new ReviewAnalysis.Failure(ReviewAnalysis.error(e) + used);
     }
+    // Класс каждой записи (info/simple/event/complex) приходит в том же ответе, без запроса.
+    Set<Long> batchIds = new HashSet<>();
+    for (Note n : batch) batchIds.add(n.id);
+    Map<Long, String> kinds =
+        TaskKind.parse(
+            response
+                .getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .optString("content", ""),
+            batchIds);
     proposals = TopicSelection.proposals(batch, proposals);
     for (JSONObject p : proposals) ManagerStore.attachGroups(p, groupSnapshot);
     synchronized (lock) {
       if (!enabled.getAsBoolean()) return;
-      ManagerStore.ReviewOutcome outcome = manager.finishReview(runId, batch, proposals, results);
+      ManagerStore.ReviewOutcome outcome =
+          manager.finishReview(runId, batch, proposals, results, kinds);
       int merges = 0;
       for (JSONObject p : manager.pending()) if (p.optString("type").equals("merge")) merges++;
       int failed = manager.failedCount();
@@ -117,7 +155,8 @@ final class ManagerJob {
                   : "")
               + (perNote && outcome.reviewed < batch.size()
                   ? " Часть записей изменилась во время запроса; их правки сохранены."
-                  : ""));
+                  : "")
+              + used);
       if (outcome.added + outcome.reminders > 0) notify(context, outcome.added + outcome.reminders);
     }
   }

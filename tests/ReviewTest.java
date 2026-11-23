@@ -47,11 +47,11 @@ public final class ReviewTest {
     check(
         data.getJSONObject(0).has("created") && data.getJSONObject(0).has("has_reminder"),
         "Reminder context supplied");
-    check(payload.getInt("max_tokens") == 1200, "Shared response budget retained");
+    check(payload.getInt("max_tokens") == 1600, "Shared response budget retained");
     String instruction = payload.getJSONArray("messages").getJSONObject(0).getString("content");
     check(
         instruction.contains("ОБЕ проверки")
-            && instruction.contains("suggestions")
+            && instruction.contains("\"actions\"")
             && instruction.contains("notes"),
         "Unified response contract");
     JSONObject merge =
@@ -82,6 +82,59 @@ public final class ReviewTest {
     check(result.notes.get(2L).title.isEmpty(), "Model cannot rename custom title");
     check(result.notes.get(1L).reminder > 0, "Reminder proposal parsed");
     check(result.proposals.size() == 1, "Merge parsed in same response");
+    // Новый словарь (этап 3): {"notes":[...],"actions":[...]}.
+    JSONObject actions =
+        new JSONObject()
+            .put("notes", rows)
+            .put(
+                "actions",
+                new JSONArray(
+                    "[{\"action\":\"group\",\"sources\":[1,2],\"title\":\"Блины\","
+                        + "\"reason\":\"Один рецепт\"}]"));
+    ReviewAnalysis.Result fresh =
+        ReviewAnalysis.parse(response(actions.toString(), "stop"), notes, NOW);
+    check(
+        fresh.proposals.size() == 1 && fresh.proposals.get(0).getString("type").equals("group"),
+        "Agent actions parsed with per-note review");
+    // 0.10.17: модель опускает пустой раздел действий — это не ошибка, предложений просто нет.
+    ReviewAnalysis.Result noActions =
+        ReviewAnalysis.parse(response(new JSONObject().put("notes", rows).toString(), "stop"), notes, NOW);
+    check(noActions.proposals.isEmpty() && noActions.notes.size() == notes.size(), "Missing action section means no proposals");
+    // Пояснение вокруг JSON не ломает разбор.
+    ReviewAnalysis.Result wrapped =
+        ReviewAnalysis.parse(
+            response("Вот ответ:\n" + new JSONObject().put("notes", rows).put("actions", new JSONArray()) + "\nГотово.", "stop"),
+            notes,
+            NOW);
+    check(wrapped.notes.size() == notes.size(), "Text around JSON is ignored");
+    check(ReviewAnalysis.error(new org.json.JSONException("JSONObject[\"notes\"] not found.")).contains("notes"), "Format error names what failed");
+    // Токены и цена для истории проверок.
+    JSONObject paid =
+        new JSONObject()
+            .put("usage",
+                new JSONObject()
+                    .put("prompt_tokens", 2718)
+                    .put("completion_tokens", 1600)
+                    .put("completion_tokens_details", new JSONObject().put("reasoning_tokens", 1450))
+                    .put("cost_rub", "0.05613728"));
+    String used = ReviewAnalysis.usage(paid, 1600);
+    check(used.equals(" Токенов: запрос 2718, ответ 1600 из 1600, из них размышление 1450 · 0,06 ₽."), "usage line: " + used);
+    check(ReviewAnalysis.usage(paid, 0).contains("(без ограничения)"), "unlimited shown");
+    check(ReviewAnalysis.usage(new JSONObject(), 1600).isEmpty(), "no usage, no line");
+    check(ReviewAnalysis.usage(new JSONObject().put("usage", new JSONObject().put("completion_tokens", 7)), 1600).equals(" Токенов: запрос ?, ответ 7 из 1600."), "partial usage");
+    check(
+        ReviewAnalysis.parse(
+                    response(
+                        new JSONObject()
+                            .put("notes", rows)
+                            .put("actions", new JSONArray("[{\"action\":\"name\",\"note\":1,\"title\":\"x\"}]"))
+                            .toString(),
+                        "stop"),
+                    notes,
+                    NOW)
+                .proposals
+                .isEmpty(),
+        "Only names in actions is not a source error");
     fails(response(answer.toString(), "length"), notes, "Truncated response is explicit error");
     fails(response("", "stop"), notes, "Empty response fails");
     fails(response("{\"suggestions\":[]}", "stop"), notes, "Missing per-note section fails");

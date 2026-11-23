@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мимоходом · Заметки</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#e2e6db;color:#1e3028;font:15px/1.45 Roboto,Arial,sans-serif;display:grid;min-height:100dvh;place-items:center}
+main{width:min(100%,420px);height:min(820px,100dvh);background:#f7f8f2;border-radius:28px;box-shadow:0 12px 60px #1e302823;display:flex;flex-direction:column;position:relative;overflow:hidden}
+header{padding:25px 20px 12px;display:flex;align-items:center;justify-content:space-between}h1{font:36px Georgia,serif;letter-spacing:-1.5px;margin:0}button,input{font:inherit;color:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible{outline:3px solid #488064;outline-offset:2px}
+.icons{display:flex}.icon{display:grid;place-items:center;width:44px;height:44px;background:none;border:0;border-radius:50%}svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.chips{display:flex;gap:7px;padding:5px 20px 15px;overflow:auto}.chips button,.action{white-space:nowrap;border:1px solid #d9dfd4;border-radius:10px;background:white;padding:8px 13px;font-size:13px}.chips [aria-pressed=true],.action{background:#e9f1d6;border-color:#bccca9}
+#search{margin:0 20px 10px;display:flex;align-items:center;background:white;border:1px solid #b4c3af;border-radius:12px;padding-left:12px}#search input{width:100%;min-width:0;background:transparent;border:0;padding:10px}#search[hidden],dialog:not([open]){display:none}
+#feed{overflow:auto;flex:1;padding:4px 20px 30px}.row{display:flex;gap:11px;align-items:flex-start}.col{flex:1;min-width:0;display:grid;gap:12px}.card{background:white;border:1px solid #dfe4da;border-radius:14px;position:relative;min-width:0}.card button.note{display:block;text-align:left;width:100%;padding:15px;background:none;border:0;border-radius:14px}
+.title{display:block;font-weight:700;font-size:16px;line-height:1.25}.body{display:block;color:#526157;margin-top:7px;font-size:14px;white-space:pre-line}.date,.label{display:block;font-size:12px}.date{margin-top:14px;color:#687469}.label{font-weight:650;margin-bottom:8px;color:#28634b}.due{background:#edf0e2}.deck{background:#f0e8fa;border-color:#d5c1e2}.stack{margin-bottom:7px;box-shadow:2px 4px 0 -1px #e1ceef,-1px 8px 0 -2px #cfb4e1}
+.toggle{width:100%;display:flex;align-items:center;justify-content:space-between;background:none;border:0;color:#75449b;padding:12px 13px 0;font-size:13px;font-weight:bold;min-height:42px}.toggle svg{width:16px}.deck .note{padding-top:6px!important}.group{margin:10px 0 16px;background:#f0e8fa;border-radius:15px;padding:0 10px 12px}.group>.toggle{padding:7px 3px}.group .card{border-color:#ded0e6}.group .toggle svg{transform:rotate(180deg)}
+progress{display:block;width:100%;height:5px;accent-color:#28634b;margin:13px 0 5px}mark{background:#e9f1d6;color:#1e3028;font-weight:bold}footer{display:flex;justify-content:center;gap:14px;margin:0 auto 12px;border-radius:24px;background:white;border:1px solid #dfe4da;padding:5px 12px;box-shadow:0 3px 12px #23382c10}footer span{padding:7px 12px;color:#6c786f;font-size:13px}footer .active{background:#e9f1d6;border-radius:16px;color:#28634b;font-weight:bold}
+dialog{width:min(350px,90vw);border:1px solid #dfe4da;border-radius:19px;padding:22px;color:inherit}dialog::backdrop{background:#1e302867}dialog h2{font:25px Georgia,serif;margin:0}dialog p{white-space:pre-line}.empty{padding:22px 4px}.list .body{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}@media(max-width:480px){main{height:100dvh;border-radius:0}}
+</style>
+<main>
+<header><h1>Заметки</h1><div class="icons"><button class="icon" id="find" aria-label="Поиск по заметкам"></button><button class="icon" id="layout" aria-label="Показать списком"></button></div></header>
+<div id="search" hidden><input id="query" placeholder="Поиск по заметкам" aria-label="Поиск по заметкам"><button id="closeSearch" class="icon" aria-label="Закрыть поиск">×</button></div>
+<nav class="chips" aria-label="Папки"></nav><section id="feed" aria-label="Заметки"></section>
+<footer aria-label="Нижняя панель макета"><span>Новая</span><span class="active">Заметки</span><span>Чаты</span></footer>
+</main>
+<dialog><h2></h2><p></p><button class="action" id="back">К заметкам</button></dialog>
+<script>
+const $=s=>document.querySelector(s);
+const icon=path=>'<svg aria-hidden="true" viewBox="0 0 24 24">'+path+'</svg>';
+const arrow=icon('<path d="m6 9 6 6 6-6"/>');
+$('#find').innerHTML=icon('<circle cx="10.5" cy="10.5" r="6.8"/><path d="m16 16 5 5"/>');
+const notes=[
+ {t:'Забрать керамику',b:'Мастерская на Покровке. Взять коробку для чашек.',f:'Личное',due:'Сегодня, 18:00'},
+ {t:'Выходные в Туле',b:'Места, билеты и вещи в дорогу.',f:'Поездки',deck:true,date:'Изменено вчера'},
+ {t:'Для мастерской',b:'Крафтовая бумага\nМалярная лента\nМягкий карандаш 2B',f:'Работа',date:'20 ноября'},
+ {t:'Квартира',b:'Запасные ключи у Лены. Счётчики передавать до 25-го числа. Вход со двора, второй подъезд. Домофон: 4821.',f:'Личное',date:'Изменено 19 ноя'},
+ {t:'Зимняя серия',b:'Выбрать три эскиза и собрать палитру для печати.',f:'Работа',plan:true,date:'18 ноября'},
+ {t:'Что почитать',b:'«Заповедник»\n«Понедельник начинается в субботу»',f:'Личное',date:'17 ноября'},
+ {t:'Билеты',b:'Электричка в субботу в 08:45.',f:'Поездки',member:true,date:'20 ноября'},
+ {t:'Что взять',b:'Термос, зарядку и тёплые носки.',f:'Поездки',member:true,date:'19 ноября'}
+];
+let folder='Все',expanded=false,list=false;
+const node=(tag,cls,txt)=>{const el=document.createElement(tag);el.className=cls;if(txt)el.textContent=txt;return el};
+function toggle(){const b=node('button','toggle','Колода · 3 заметки');b.insertAdjacentHTML('beforeend',arrow);b.setAttribute('aria-expanded',expanded);b.onclick=()=>{expanded=!expanded;render();$('#feed .toggle')?.focus({preventScroll:true})};return b}
+function excerpt(parent,text,q){const i=text.toLowerCase().indexOf(q);if(!q||i<0){parent.textContent=text;return}const start=Math.max(0,text.lastIndexOf('. ',i-1)+2);parent.append(start>1?'… '+text.slice(start,i):text.slice(0,i),node('mark','',text.slice(i,i+q.length)),text.slice(i+q.length))}
+function card(n,q,inside=false){const a=node('article','card'+(n.due?' due':'')+(n.deck?' deck':''));
+ if(n.deck&&!inside&&!q){a.classList.add('stack');a.append(toggle())}
+ const b=node('button','note');if(n.due)b.append(node('span','label','◷ '+n.due));
+ const title=node('span','title');excerpt(title,n.t,q);const body=node('span','body');excerpt(body,!q&&n.t==='Квартира'?'Запасные ключи у Лены. Счётчики передавать до 25-го числа…':n.b,q);b.append(title,body);
+ if(n.plan){const p=node('progress','');p.value=2;p.max=5;b.append(p,node('span','label','План: 2 из 5'))}if(n.date)b.append(node('span','date',n.date));
+ b.onclick=()=>{$('dialog h2').textContent=n.t;$('dialog p').textContent=n.b;$('dialog').showModal()};a.append(b);return a}
+function render(){const feed=$('#feed');feed.replaceChildren();feed.classList.toggle('list',list);
+ const q=$('#query').value.trim().toLowerCase();const chips=$('.chips');chips.replaceChildren();for(const name of ['Все','Личное','Работа','Поездки']){const b=node('button','',name==='Все'?'Все · '+notes.length:name);b.setAttribute('aria-pressed',folder===name);b.onclick=()=>{folder=name;render();feed.scrollTop=0};chips.append(b)}
+ $('#layout').innerHTML=icon(list?'<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/>':'<path d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"/>');$('#layout').ariaLabel=list?'Показать плиткой':'Показать списком';
+ function columns(parent){const row=node('div','row');parent.append(row);return Array.from({length:list?1:2},()=>{const c=node('div','col');row.append(c);return c})}
+ let cols=[];function place(arr,el){arr.reduce((a,b)=>a.offsetHeight<=b.offsetHeight?a:b).append(el)}
+ for(const n of notes){if((folder!=='Все'&&n.f!==folder)||(!q&&n.member)||!(n.t+' '+n.b).toLowerCase().includes(q))continue;
+ if(n.deck&&expanded&&!q){const group=node('div','group');feed.append(group);group.append(toggle());const g=columns(group);for(const m of [n,...notes.filter(x=>x.member)])place(g,card(m,q,true));cols=[]}else{if(!cols.length)cols=columns(feed);place(cols,card(n,q))}}
+ if(!feed.childElementCount){const e=node('div','empty','Ничего не найдено.');feed.append(e);if(folder!=='Все'){const all=node('button','action','Искать во всех папках');all.onclick=()=>{folder='Все';render()};feed.append(all)}}
+}
+$('#find').onclick=()=>{$('#search').hidden=false;$('#query').focus()};$('#closeSearch').onclick=()=>{$('#query').value='';$('#search').hidden=true;render();$('#find').focus()};$('#query').oninput=()=>{render();$('#feed').scrollTop=0};$('#layout').onclick=()=>{list=!list;render()};$('#back').onclick=()=>$('dialog').close();render();
+</script>
+</html>

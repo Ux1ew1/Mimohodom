@@ -104,7 +104,8 @@ public final class CalendarSyncPlan {
 
   /** Нужно ли заново создавать событие: есть время, и оно не старше суток либо повторяется. */
   public static boolean wanted(Note n, long now) {
-    return n.reminder > 0 && (n.repeat != 0 || n.reminder + GRACE_MS >= now);
+    // Серия по списку дат после последней даты больше не повторяется — как разовое событие.
+    return n.reminder > 0 && (ReminderPolicy.periodic(n.repeat) || n.reminder + GRACE_MS >= now);
   }
 
   /**

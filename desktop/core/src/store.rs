@@ -120,6 +120,42 @@ pub struct Chat {
 }
 
 
+/// Триггеры синхронизации чатов и сообщений (те же правила, что `addChatSync` на Android).
+/// Новая строка получает uid, ts и seq; правка названия чата и содержимого сообщения — новые ts и
+/// seq (только если seq не менял сам приём записи соседа); удаление чата оставляет надгробие.
+/// Удаление сообщений отдельно не передаётся: они уходят вместе с чатом.
+const CHAT_TRIGGERS: &str = "
+CREATE TRIGGER IF NOT EXISTS chats_sync_ins AFTER INSERT ON chats WHEN new.sync_seq=0 BEGIN
+  UPDATE sync_meta SET seq=seq+1, hlc=max(hlc+1, CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)) WHERE id=1;
+  UPDATE chats SET uid=CASE WHEN new.uid='' THEN lower(hex(randomblob(16))) ELSE new.uid END,
+    sync_ts=(SELECT hlc FROM sync_meta WHERE id=1), sync_seq=(SELECT seq FROM sync_meta WHERE id=1), sync_from=''
+    WHERE id=new.id;
+END;
+CREATE TRIGGER IF NOT EXISTS chats_sync_upd AFTER UPDATE OF title ON chats
+  WHEN new.sync_seq=old.sync_seq AND new.title<>old.title BEGIN
+  UPDATE sync_meta SET seq=seq+1, hlc=max(hlc+1, CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)) WHERE id=1;
+  UPDATE chats SET sync_ts=(SELECT hlc FROM sync_meta WHERE id=1), sync_seq=(SELECT seq FROM sync_meta WHERE id=1),
+    sync_from='' WHERE id=new.id;
+END;
+CREATE TRIGGER IF NOT EXISTS chats_sync_del AFTER DELETE ON chats WHEN old.uid<>'' BEGIN
+  UPDATE sync_meta SET seq=seq+1, hlc=max(hlc+1, CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)) WHERE id=1;
+  INSERT OR REPLACE INTO tombstones(kind,uid,ts,seq,from_peer)
+    VALUES('chat',old.uid,(SELECT hlc FROM sync_meta WHERE id=1),(SELECT seq FROM sync_meta WHERE id=1),'');
+END;
+CREATE TRIGGER IF NOT EXISTS messages_sync_ins AFTER INSERT ON messages WHEN new.sync_seq=0 BEGIN
+  UPDATE sync_meta SET seq=seq+1, hlc=max(hlc+1, CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)) WHERE id=1;
+  UPDATE messages SET uid=CASE WHEN new.uid='' THEN lower(hex(randomblob(16))) ELSE new.uid END,
+    sync_ts=(SELECT hlc FROM sync_meta WHERE id=1), sync_seq=(SELECT seq FROM sync_meta WHERE id=1), sync_from=''
+    WHERE id=new.id;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_sync_upd AFTER UPDATE OF body,sources,draft ON messages
+  WHEN new.sync_seq=old.sync_seq AND (new.body<>old.body OR new.sources<>old.sources OR new.draft<>old.draft) BEGIN
+  UPDATE sync_meta SET seq=seq+1, hlc=max(hlc+1, CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)) WHERE id=1;
+  UPDATE messages SET sync_ts=(SELECT hlc FROM sync_meta WHERE id=1), sync_seq=(SELECT seq FROM sync_meta WHERE id=1),
+    sync_from='' WHERE id=new.id;
+END;
+";
+
 const NOTE_COLS: &str = "id,uid,title,body,created,updated,reminder,repeat_mode,lead_minutes,image,folder,title_auto,ai_checked,metadata,sync_ts,sync_seq";
 
 fn read_note(r: &Row) -> rusqlite::Result<Note> {
@@ -262,6 +298,40 @@ impl Store {
                  PRAGMA user_version=3;",
             )?;
         }
+        if version < 4 {
+            // Этап 2, часть 4: синхронизация чатов, сообщений и стопок (docs/SYNC.md). У чатов и
+            // сообщений — постоянный uid, время и номер изменения; всё остальное ведут триггеры,
+            // поэтому любой путь записи (чат, помощник) учитывается без правок кода.
+            let tx = self.conn.unchecked_transaction()?;
+            self.conn.execute_batch(
+                "ALTER TABLE chats ADD COLUMN uid TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE chats ADD COLUMN sync_ts INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE chats ADD COLUMN sync_seq INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE chats ADD COLUMN sync_from TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE messages ADD COLUMN uid TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE messages ADD COLUMN sync_ts INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE messages ADD COLUMN sync_seq INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE messages ADD COLUMN sync_from TEXT NOT NULL DEFAULT '';
+                 CREATE INDEX IF NOT EXISTS chats_seq ON chats(sync_seq);
+                 CREATE INDEX IF NOT EXISTS messages_seq ON messages(sync_seq);
+                 CREATE TABLE IF NOT EXISTS stack_sync(
+                   top TEXT PRIMARY KEY, members TEXT NOT NULL, ts INTEGER NOT NULL, seq INTEGER NOT NULL,
+                   from_peer TEXT NOT NULL DEFAULT '', deleted INTEGER NOT NULL DEFAULT 0);
+                 CREATE INDEX IF NOT EXISTS stack_sync_seq ON stack_sync(seq);
+                 UPDATE chats SET uid=lower(hex(randomblob(16))), sync_ts=created,
+                   sync_seq=(SELECT seq FROM sync_meta WHERE id=1)+id WHERE uid='';
+                 UPDATE messages SET uid=lower(hex(randomblob(16))), sync_ts=created,
+                   sync_seq=(SELECT seq FROM sync_meta WHERE id=1)+(SELECT ifnull(max(id),0) FROM chats)+id
+                   WHERE uid='';
+                 UPDATE sync_meta SET
+                   seq=max(seq,(SELECT ifnull(max(sync_seq),0) FROM chats),(SELECT ifnull(max(sync_seq),0) FROM messages)),
+                   hlc=max(hlc,(SELECT ifnull(max(sync_ts),0) FROM chats),(SELECT ifnull(max(sync_ts),0) FROM messages))
+                   WHERE id=1;",
+            )?;
+            self.conn.execute_batch(CHAT_TRIGGERS)?;
+            self.conn.execute_batch("PRAGMA user_version=4;")?;
+            tx.commit()?;
+        }
         Ok(())
     }
 
@@ -320,6 +390,49 @@ impl Store {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM settings WHERE k=?1", params![key])?;
+        Ok(())
+    }
+
+    /// Все настройки, чьё имя начинается с `prefix` (для напоминаний: по одной записи на заметку).
+    pub fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let mut st = self.conn.prepare("SELECT k,v FROM settings WHERE substr(k,1,?2)=?1 ORDER BY k")?;
+        let rows = st.query_map(params![prefix, prefix.chars().count() as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    // ---------- напоминания ----------
+
+    /// Заметки, у которых напоминание ещё может сработать: время не раньше `min` либо серия (её время
+    /// всегда передвигается вперёд).
+    pub fn reminder_notes(&self, min: i64) -> Result<Vec<Note>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {} FROM notes WHERE reminder>0 AND (reminder>=?1 OR repeat_mode<>0) ORDER BY reminder",
+            NOTE_COLS
+        ))?;
+        let rows = st.query_map(params![min], read_note)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Заметки с напоминанием, которые могут попасть в окно `[from, to)` календаря: одиночные по времени,
+    /// серии — все, чьё ближайшее время не позже конца окна.
+    pub fn calendar_notes(&self, from: i64, to: i64) -> Result<Vec<Note>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {} FROM notes WHERE reminder>0 AND ((reminder>=?1 AND reminder<?2) OR (repeat_mode<>0 AND reminder<?2)) ORDER BY reminder",
+            NOTE_COLS
+        ))?;
+        let rows = st.query_map(params![from, to], read_note)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Передвигает время напоминания серии, не считая это правкой для синхронизации (как на телефоне:
+    /// каждое устройство само переносит серию, поэтому конфликтов правок не возникает).
+    pub fn advance_reminder(&self, id: i64, expected: i64, next: i64) -> Result<bool> {
+        let n = self.conn.execute("UPDATE notes SET reminder=?3 WHERE id=?1 AND reminder=?2", params![id, expected, next])?;
+        Ok(n == 1)
     }
 
     // ---------- индекс поиска ----------
@@ -600,10 +713,8 @@ impl Store {
     }
 
     pub fn delete_chat(&self, id: i64) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        self.conn.execute("DELETE FROM messages WHERE chat=?1", params![id])?;
+        // Сообщения уходят каскадом (внешний ключ), надгробие остаётся только у чата.
         self.conn.execute("DELETE FROM chats WHERE id=?1", params![id])?;
-        tx.commit()?;
         Ok(())
     }
 
@@ -620,7 +731,7 @@ impl Store {
     }
 
     pub fn messages(&self, chat: i64) -> Result<Vec<Message>> {
-        let mut st = self.conn.prepare("SELECT id,chat,role,body,sources,draft,created FROM messages WHERE chat=?1 ORDER BY id")?;
+        let mut st = self.conn.prepare("SELECT id,chat,role,body,sources,draft,created FROM messages WHERE chat=?1 ORDER BY created, id")?;
         let rows = st.query_map(params![chat], read_message)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -1021,5 +1132,47 @@ mod tests {
         j.id = Some(n.id);
         let n2 = s.save_note(&j).unwrap();
         assert_eq!((n2.reminder, n2.repeat, n2.lead), (0, 0, -1));
+    }
+
+    /// База версии 3 с чатами получает uid и номера, а новые строки нумеруют триггеры.
+    #[test]
+    fn upgrade_v3_to_v4_numbers_existing_chats() {
+        let s = Store::open_memory().unwrap();
+        s.conn
+            .execute_batch(
+                "DROP TRIGGER chats_sync_ins; DROP TRIGGER chats_sync_upd; DROP TRIGGER chats_sync_del;
+                 DROP TRIGGER messages_sync_ins; DROP TRIGGER messages_sync_upd;
+                 DROP INDEX chats_seq; DROP INDEX messages_seq; DROP TABLE stack_sync;
+                 ALTER TABLE chats DROP COLUMN uid; ALTER TABLE chats DROP COLUMN sync_ts;
+                 ALTER TABLE chats DROP COLUMN sync_seq; ALTER TABLE chats DROP COLUMN sync_from;
+                 ALTER TABLE messages DROP COLUMN uid; ALTER TABLE messages DROP COLUMN sync_ts;
+                 ALTER TABLE messages DROP COLUMN sync_seq; ALTER TABLE messages DROP COLUMN sync_from;
+                 PRAGMA user_version=3;
+                 INSERT INTO chats(title,created) VALUES('Старый',1000),('Второй',2000);
+                 INSERT INTO messages(chat,role,body,created) VALUES(1,'user','a',1100),(1,'assistant','b',1200),(2,'user','c',2100);",
+            )
+            .unwrap();
+        let seq_before = s.current_seq().unwrap();
+        s.migrate().unwrap();
+        let uids: Vec<String> = {
+            let mut st = s.conn.prepare("SELECT uid FROM chats UNION ALL SELECT uid FROM messages").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(uids.len(), 5);
+        assert!(uids.iter().all(|u| u.len() == 32));
+        let seqs: std::collections::HashSet<i64> = {
+            let mut st = s.conn.prepare("SELECT sync_seq FROM chats UNION ALL SELECT sync_seq FROM messages").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(seqs.len(), 5, "номера должны быть разными");
+        assert!(seqs.iter().all(|q| *q > seq_before));
+        assert_eq!(s.current_seq().unwrap(), *seqs.iter().max().unwrap());
+        let version: i64 = s.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 4);
+        // новая строка после миграции нумеруется триггером
+        let c = s.new_chat("Новый").unwrap();
+        let (uid, seq): (String, i64) = s.conn.query_row("SELECT uid,sync_seq FROM chats WHERE id=?1", params![c], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(uid.len(), 32);
+        assert!(seq > *seqs.iter().max().unwrap());
     }
 }

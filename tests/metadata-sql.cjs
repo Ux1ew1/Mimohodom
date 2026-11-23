@@ -40,11 +40,16 @@ for (const sql of migration.slice(2)) db.exec(sql);
 let old = db.prepare('SELECT * FROM notes WHERE id=1').get();
 check(old.created === 1000 && old.updated === 2000 && old.title === 'Семейный рецепт', 'Migration preserves note and timestamps');
 check(old.ai_checked === 0, 'Old successful revisions eligible for first AI metadata pass');
-const query = [...method('List<Note> searchNotes(String query)').matchAll(/rawQuery\(\s*((?:"(?:\\.|[^"\\])*"\s*(?:\+\s*)?)+)\s*,/g)]
+const query = [...method('List<Note> searchNotes(String query, long folder)').matchAll(/rawQuery\(\s*((?:"(?:\\.|[^"\\])*"\s*(?:\+\s*)?)+)\s*,/g)]
   .map(match => [...match[1].matchAll(/"(?:\\.|[^"\\])*"/g)].map(x => JSON.parse(x[0])).join(''))
   .find(sql => sql.startsWith('SELECT n.* FROM notes_fts'));
 check(Boolean(query), 'Use production FTS lookup SQL');
-const search = term => db.prepare(query).all(term);
+// Столбец корзины появляется только в SQLite 13 (в конце файла), до него условие убираем.
+check(query.includes(' AND n.trashed=0'), 'Search hides notes in trash');
+let hasTrash = false;
+const search = (term, folder = '0') => hasTrash
+  ? db.prepare(query).all(term, folder, folder)
+  : db.prepare(query.replace(' AND n.trashed=0', '').replace('n.folder=?', '0=?')).all(term, folder, folder);
 check(search('реце*').length === 1, 'Backfilled note indexed');
 db.prepare('INSERT INTO notes(title,body,created,updated,metadata,search_text) VALUES(?,?,?,?,?,?)').run('Билеты', 'Купить билеты', 3000, 3000, '{}', 'отпуск каникулы Самара');
 check(search('каникул*')[0].title === 'Билеты', 'AI-only synonym found through index');
@@ -75,5 +80,16 @@ check(advance.run(9000, 1, 5000).changes === 1, 'Recurring reminder advances fro
 check(advance.run(12000, 1, 5000).changes === 0, 'Advance is rejected when the reminder was edited meanwhile');
 const advanced = db.prepare('SELECT title,repeat_mode,lead_minutes,reminder FROM notes WHERE id=1').get();
 check(advanced.reminder === 9000 && advanced.repeat_mode === 2 && advanced.lead_minutes === 30, 'Advance keeps repeat and lead');
+// Корзина (SQLite 13): поиск по настоящему запросу не находит заметки в корзине.
+for (const sql of statements(method('void addFolders(SQLiteDatabase db)'))) db.exec(sql);
+for (const sql of statements(method('void addTrash(SQLiteDatabase db)'))) db.exec(sql);
+hasTrash = true;
+check(search('реце*').length === 1, 'Note outside trash is found');
+db.exec('UPDATE notes SET trashed=5 WHERE id=1');
+check(search('реце*').length === 0, 'Notes in trash are not found');
+const insert = db.prepare('INSERT INTO notes(title,body,created,updated,folder,search_text) VALUES(?,?,?,?,?,?)');
+insert.run('Квартира', '', 1, 1, 7, 'домофон');
+for (let i = 0; i < 201; i++) insert.run('Другая квартира', '', 2, 2, 0, 'домофон');
+check(search('домоф*').length === 200 && search('домоф*', '7')[0]?.title === 'Квартира', 'Folder filter precedes search limit');
 db.close();
 console.log(`PASS: ${count} SQLite metadata/index checks (production SQL)`);

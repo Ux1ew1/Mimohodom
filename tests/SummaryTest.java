@@ -48,10 +48,52 @@ public final class SummaryTest {
               .equals(selected.stream().map(n -> n.id).toList()),
           "Topic independent of rotating seed");
     }
-    List<JSONObject> proposals = TopicSelection.proposals(selected, Collections.emptyList());
     check(
-        proposals.size() == 1 && proposals.get(0).getJSONArray("sources").length() == 4,
-        "Whole topic offered, not random pair");
+        TopicSelection.proposals(selected, Collections.emptyList()).isEmpty(),
+        "Word overlap alone no longer offers a stack");
+    JSONObject modelLink =
+        ManagerAnalysis.parse(
+                new JSONObject()
+                    .put(
+                        "suggestions",
+                        new JSONArray()
+                            .put(
+                                new JSONObject()
+                                    .put("type", "link")
+                                    .put("sources", new JSONArray("[1,3,4]"))
+                                    .put("reason", "Все про одну машину")))
+                    .toString(),
+                selected)
+            .get(0);
+    List<JSONObject> proposals = TopicSelection.proposals(selected, Arrays.asList(modelLink));
+    check(
+        proposals.size() == 1
+            && proposals.get(0).getString("type").equals("group")
+            && proposals.get(0).getJSONArray("sources").length() == 3
+            && proposals.get(0).getString("reason").startsWith("Все про одну машину"),
+        "Model chooses the stack members and its reason is kept");
+    JSONObject modelMerge = new JSONObject(modelLink.toString()).put("type", "merge");
+    modelMerge.put("body", "x").put("title", "y");
+    check(
+        TopicSelection.proposals(selected, Arrays.asList(modelMerge, modelLink)).size() == 1,
+        "Only one stack per review");
+    JSONObject ask =
+        ManagerAnalysis.parse(
+                new JSONObject()
+                    .put(
+                        "suggestions",
+                        new JSONArray()
+                            .put(
+                                new JSONObject()
+                                    .put("type", "clarify")
+                                    .put("sources", new JSONArray("[2]"))
+                                    .put("reason", "Что это за запись?")
+                                    .put("options", new JSONArray("[\"Список покупок\",\"Памятка\"]"))))
+                    .toString(),
+                selected)
+            .get(0);
+    List<JSONObject> withAsk = TopicSelection.proposals(selected, Arrays.asList(ask));
+    check(withAsk.size() == 1 && withAsk.get(0).getString("type").equals("clarify"), "Clarify passes through");
     check(
         TopicSelection.select(Collections.singletonList(archive.get(4))).size() == 1,
         "No unrelated padding");

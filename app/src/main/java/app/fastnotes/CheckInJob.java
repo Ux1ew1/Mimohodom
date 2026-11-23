@@ -29,6 +29,10 @@ public final class CheckInJob extends JobService {
       CHAT = "checkInChat",
       MISSED = "checkInMissed",
       SLOT = "checkInSlot",
+      // Сроки двух расписаний и день последнего обхода дел («Как продвигается?»).
+      AI_SLOT = "checkInAiSlot",
+      PROGRESS_SLOT = "progressSlot",
+      PROGRESS_DAY = "progressDay",
       STATUS = "checkInStatus";
 
   // ---- Настройки ----
@@ -50,12 +54,46 @@ public final class CheckInJob extends JobService {
     return CheckIn.every(prefs(c).getInt(EVERY, CheckIn.DEFAULT_EVERY));
   }
 
-  public static boolean isCheckInChat(Context c, long chat) {
-    return chat > 0 && prefs(c).getBoolean("checkInChat." + chat, false);
+  /** Настройка: раньше этого времени не спрашивать «Как продвигается?» о заметке. */
+  public static String progressKey(long note) {
+    return "progressNext." + note;
   }
 
-  public static void forgetChat(Context c, long chat) {
-    prefs(c).edit().remove("checkInChat." + chat).apply();
+  /**
+   * Дела для «Как продвигается?» (до {@code limit}): заметки вне корзины и вне колод (кроме верхней), с
+   * классом из проверки агента, открытым планом и сроком — выбор по правилам {@link ProgressCheck}.
+   */
+  static List<ProgressCheck.Candidate> progressCandidates(
+      Context c, Store store, long now, int limit) {
+    ManagerStore manager = new ManagerStore(store);
+    Map<Long, String> kinds = manager.kinds();
+    Map<Long, Long> tops = manager.topMap();
+    // Эксперимент «баллы внимания»: о заметках на нуле «Как продвигается?» не спрашивает.
+    Set<Long> muted = new HashSet<>();
+    if (store.attentionEnabled())
+      try (android.database.Cursor rows =
+          store.getReadableDatabase().rawQuery("SELECT id FROM notes WHERE attention=0", null)) {
+        while (rows.moveToNext()) muted.add(rows.getLong(0));
+      }
+    List<ProgressCheck.Candidate> all = new ArrayList<>();
+    for (Note n : store.notes()) {
+      if (muted.contains(n.id)) continue;
+      Long top = tops.get(n.id);
+      if (top != null && top != n.id) continue;
+      ProgressCheck.Candidate k = new ProgressCheck.Candidate();
+      k.id = n.id;
+      k.title = n.title;
+      k.kind = kinds.getOrDefault(n.id, "");
+      k.reminder = n.reminder;
+      k.repeat = n.repeat;
+      k.updated = n.updated;
+      k.created = n.created;
+      PlanTree plan = PlanTree.parse(store.plan(n.id));
+      k.planOpen = plan.checkable() > plan.done();
+      k.nextAsk = prefs(c).getLong(progressKey(n.id), 0);
+      all.add(k);
+    }
+    return ProgressCheck.pick(all, now, limit);
   }
 
   /** Сообщение о последнем запуске для экрана настроек. */
@@ -96,54 +134,67 @@ public final class CheckInJob extends JobService {
     return !store.chatExists(chat) || !store.userText(chat).isEmpty();
   }
 
-  /** Ставит или снимает будильник ближайшего вопроса в соответствии с настройками. */
+  /**
+   * Ставит или снимает будильник ближайшего вопроса. Два расписания: «Как продвигается?» —
+   * каждый день в выбранное время, без модели и ключа; вопрос от ИИ — с выбранной частотой и только
+   * через Polza.AI. Будильник один — на ближайший из сроков.
+   */
   public static void arm(Context c) {
     AlarmManager alarm = c.getSystemService(AlarmManager.class);
     PendingIntent pending = alarmIntent(c);
-    if (!enabled(c) || !LocalLlm.cloudBackground(c)) {
+    if (!enabled(c)) {
       alarm.cancel(pending);
-      prefs(c).edit().remove(SLOT).apply();
+      prefs(c).edit().remove(SLOT).remove(AI_SLOT).remove(PROGRESS_SLOT).apply();
       return;
     }
-    int missed;
-    try (Store store = new Store(c)) {
-      missed = confirmedMisses(c, store);
+    long now = System.currentTimeMillis();
+    ZoneId zone = ZoneId.systemDefault();
+    long progressAt =
+        ProgressCheck.nextDaily(now, minutes(c), prefs(c).getLong(PROGRESS_DAY, -1), zone);
+    long aiAt = -1;
+    if (LocalLlm.cloudBackground(c)) {
+      int missed;
+      try (Store store = new Store(c)) {
+        missed = confirmedMisses(c, store);
+      }
+      aiAt = CheckIn.nextAt(now, minutes(c), every(c), prefs(c).getLong(LAST, 0), missed, zone);
+      if (aiAt < 0)
+        status(c, "Вопросы от ИИ на паузе: вы не отвечали на последние. Ответьте на любой из них"
+            + " в чате, и они продолжатся. «Как продвигается?» работает.");
     }
-    long at =
-        CheckIn.nextAt(
-            System.currentTimeMillis(),
-            minutes(c),
-            every(c),
-            prefs(c).getLong(LAST, 0),
-            missed,
-            ZoneId.systemDefault());
-    if (at < 0) {
-      alarm.cancel(pending);
-      prefs(c).edit().remove(SLOT).apply();
-      status(c, "Помощник замолчал: вы не отвечали на последние вопросы. Ответьте на любой из них"
-          + " в чате, и он продолжит.");
-      return;
-    }
-    prefs(c).edit().putLong(SLOT, at).apply();
+    long at = aiAt < 0 ? progressAt : Math.min(aiAt, progressAt);
+    prefs(c)
+        .edit()
+        .putLong(SLOT, at)
+        .putLong(AI_SLOT, aiAt)
+        .putLong(PROGRESS_SLOT, progressAt)
+        .apply();
     alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending);
   }
 
-  /** Будильник сработал: сразу ставим следующий (запасной) срок и запускаем задачу с сетью. */
+  /**
+   * Будильник сработал: какие из вопросов наступили, запоминаем до перестановки будильника, затем
+   * ставим следующий срок и запускаем задачу (сеть нужна только вопросу от ИИ).
+   */
   static void onAlarm(Context c) {
     long due = prefs(c).getLong(SLOT, 0);
+    long ai = prefs(c).getLong(AI_SLOT, -1), progress = prefs(c).getLong(PROGRESS_SLOT, -1);
+    boolean aiDue = ai > 0 && ai <= due, progressDue = progress > 0 && progress <= due;
     arm(c);
-    if (!enabled(c) || due == 0) return;
-    enqueue(c, due, false);
+    if (!enabled(c) || due == 0 || (!aiDue && !progressDue)) return;
+    enqueue(c, due, aiDue, progressDue);
   }
 
-  private static boolean enqueue(Context c, long due, boolean manual) {
+  private static boolean enqueue(Context c, long due, boolean ai, boolean progress) {
     PersistableBundle extras = new PersistableBundle();
     extras.putLong("due", due);
-    extras.putBoolean("manual", manual);
+    extras.putBoolean("ai", ai);
+    extras.putBoolean("progress", progress);
     return c.getSystemService(JobScheduler.class)
             .schedule(
                 new JobInfo.Builder(JOB, new ComponentName(c, CheckInJob.class))
-                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                    .setRequiredNetworkType(
+                        ai ? JobInfo.NETWORK_TYPE_ANY : JobInfo.NETWORK_TYPE_NONE)
                     .setExtras(extras)
                     .setMinimumLatency(1)
                     .build())
@@ -156,10 +207,12 @@ public final class CheckInJob extends JobService {
   public boolean onStartJob(JobParameters params) {
     if (!RUNNING.compareAndSet(false, true)) return false;
     long due = params.getExtras().getLong("due", 0);
+    boolean ai = params.getExtras().getBoolean("ai", true);
+    boolean progress = params.getExtras().getBoolean("progress", false);
     new Thread(
             () -> {
               try {
-                runScheduled(getApplicationContext(), due);
+                runScheduled(getApplicationContext(), due, ai, progress);
               } finally {
                 RUNNING.set(false);
                 new Handler(getMainLooper()).post(() -> jobFinished(params, false));
@@ -175,7 +228,7 @@ public final class CheckInJob extends JobService {
     return false; // Платный запрос повторно не отправляем.
   }
 
-  private static void runScheduled(Context c, long due) {
+  private static void runScheduled(Context c, long due, boolean ai, boolean progress) {
     long now = System.currentTimeMillis();
     if (!enabled(c)) return;
     try (Store store = new Store(c)) {
@@ -191,8 +244,23 @@ public final class CheckInJob extends JobService {
         status(c, "Вопрос не отправлен: уведомления выключены.");
         return;
       }
-      long chat = compose(c, store);
-      if (chat > 0) notifyChat(c, chat, store.firstMessage(chat));
+      if (progress) {
+        prefs(c)
+            .edit()
+            .putLong(
+                PROGRESS_DAY,
+                java.time.Instant.ofEpochMilli(now)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+                    .toEpochDay())
+            .apply();
+        for (long chat : composeProgress(c, store, ProgressCheck.PER_RUN))
+          notifyChat(c, chat, PlanChat.split(store.firstMessage(chat)).text);
+      }
+      if (ai) {
+        long chat = composeQuestion(c, store);
+        if (chat > 0) notifyChat(c, chat, PlanChat.split(store.firstMessage(chat)).text);
+      }
     } catch (Exception e) {
       status(c, "Не удалось задать вопрос. " + describe(e));
     } finally {
@@ -200,19 +268,61 @@ public final class CheckInJob extends JobService {
     }
   }
 
-  /**
-   * Просит модель составить вопрос и создаёт чат с ним. Выполняется вне основного потока. Возвращает
-   * номер чата или 0, если задавать нечего.
-   */
+  private static long dayStart(long now, ZoneId zone) {
+    return java.time.Instant.ofEpochMilli(now)
+        .atZone(zone)
+        .toLocalDate()
+        .atStartOfDay(zone)
+        .toInstant()
+        .toEpochMilli();
+  }
+
+  /** «Спросить сейчас»: сначала «Как продвигается?» о подходящем деле, иначе вопрос от ИИ. */
   public static long compose(Context c, Store store) throws Exception {
+    List<Long> chats = composeProgress(c, store, 1);
+    return chats.isEmpty() ? composeQuestion(c, store) : chats.get(0);
+  }
+
+  /**
+   * «Как продвигается?» о делах с близким сроком или давно без движения (до {@code max} чатов, в
+   * пределах 4 чатов помощника в сутки). Без модели и без ключа. Возвращает созданные чаты.
+   */
+  public static List<Long> composeProgress(Context c, Store store, int max) {
+    synchronized (LOCK) {
+      List<Long> out = new ArrayList<>();
+      long now = System.currentTimeMillis();
+      ZoneId zone = ZoneId.systemDefault();
+      int left = Math.min(max, ProgressCheck.left(store.agentChatsSince(dayStart(now, zone))));
+      if (left <= 0) return out;
+      for (ProgressCheck.Candidate task : progressCandidates(c, store, now, left)) {
+        String question = ProgressCheck.question(task, now, zone);
+        out.add(store.newProgressChat(task.id, "Как дела: " + task.title, question));
+        prefs(c).edit().putLong(progressKey(task.id), ProgressCheck.nextAsk("", now)).apply();
+        status(
+            c,
+            "Последний вопрос: «Как продвигается?» о «"
+                + CheckIn.line(task.title, 40)
+                + "», "
+                + new java.text.SimpleDateFormat("d MMM, HH:mm", new Locale("ru"))
+                    .format(new Date(now)));
+      }
+      return out;
+    }
+  }
+
+  /**
+   * Просит модель составить вопрос о планах и создаёт чат с ним. Выполняется вне основного потока.
+   * Возвращает номер чата или 0, если задавать нечего.
+   */
+  public static long composeQuestion(Context c, Store store) throws Exception {
     synchronized (LOCK) {
       if (!LocalLlm.cloudBackground(c)) {
-        status(c, "Пауза: выбран локальный GGUF. Вопросы идут через Polza.AI.");
+        status(c, "Вопросы от ИИ на паузе: выбран локальный GGUF. «Как продвигается?» работает.");
         return 0;
       }
       String key = Secrets.read(c), model = prefs(c).getString("model", "").trim();
       if (key.isEmpty() || model.isEmpty()) {
-        status(c, "Для вопросов сохраните ключ и модель Polza.AI.");
+        status(c, "Для вопросов от ИИ сохраните ключ и модель Polza.AI.");
         return 0;
       }
       long now = System.currentTimeMillis();
@@ -222,6 +332,11 @@ public final class CheckInJob extends JobService {
       int streak = previous == 0 || answered(store, previous) ? 0 : prefs(c).getInt(MISSED, 0) + 1;
       if (streak >= CheckIn.MAX_MISSED) {
         prefs(c).edit().putInt(MISSED, streak).apply();
+        return 0;
+      }
+      // Не больше 4 чатов в день, начатых помощником (решение пользователя 4).
+      if (!ProgressCheck.allowed(store.agentChatsSince(dayStart(now, zone)))) {
+        status(c, "Сегодня помощник уже начал 4 чата — следующий вопрос завтра.");
         return 0;
       }
       JSONObject payload =
@@ -248,7 +363,6 @@ public final class CheckInJob extends JobService {
       long chat = store.newAssistantChat(Note.autoTitle("", question), question);
       prefs(c)
           .edit()
-          .putBoolean("checkInChat." + chat, true)
           .putLong(LAST, now)
           .putLong(CHAT, chat)
           .putInt(MISSED, streak)
@@ -279,8 +393,8 @@ public final class CheckInJob extends JobService {
     for (String[] chat : store.chats()) {
       long id = Long.parseLong(chat[0]);
       if (past.size() >= 3) break;
-      if (isCheckInChat(c, id))
-        past.add(CheckIn.pastLine(store.firstMessage(id), store.userText(id)));
+      if (ChatOrigin.AGENT.equals(chat.length > 4 ? chat[4] : ""))
+        past.add(CheckIn.pastLine(PlanChat.split(store.firstMessage(id)).text, store.userText(id)));
     }
     return CheckIn.prompt(now, zone, events, recent, past);
   }

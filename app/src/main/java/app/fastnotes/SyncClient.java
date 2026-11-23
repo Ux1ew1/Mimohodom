@@ -185,14 +185,14 @@ public final class SyncClient {
           reply = link.post("/v1/sync", request(own, ownName, since, firstPage, out.records));
         JSONObject v = new JSONObject(new String(reply, StandardCharsets.UTF_8));
         reply = null;
-        for (SyncRecord sentRecord : out.records) if (!sentRecord.isFolder()) report.sent++;
+        for (SyncRecord sentRecord : out.records) if (sentRecord.isNote()) report.sent++;
         sent = Math.max(sent, out.next);
         JSONArray array = v.optJSONArray("records");
         List<SyncRecord> incoming = new ArrayList<>();
         if (array != null)
           for (int i = 0; i < array.length(); i++)
             incoming.add(SyncRecord.fromJson(array.getJSONObject(i)));
-        for (SyncRecord r : incoming) if (!r.isFolder() && !r.deleted) report.received++;
+        for (SyncRecord r : incoming) if (r.isNote() && !r.deleted) report.received++;
         report.stats.add(store.apply(peer.device, sent, incoming));
         store.progress(peer.device, sent, -1, -1);
         since = v.optLong("next", since);
@@ -260,6 +260,7 @@ public final class SyncClient {
           .put("since", since)
           .put("limit", 300)
           .put("first", first)
+          .put("features", new JSONArray().put("chats"))
           .put("records", array);
     } catch (JSONException e) {
       throw new IllegalStateException(e);

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Мимоходом — открытая заметка</title>
+<style>
+:root{--paper:#f7f8f2;--ink:#1e3028;--muted:#65736a;--line:#dce2d8;--green:#28634b;--lime:#e9f1d6;--purple:#75449b}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:#e7ebe2;font:15px/1.45 Roboto,"Segoe UI",Arial,sans-serif}button,input,textarea{font:inherit;color:inherit}button{cursor:pointer;border:0;background:none}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--green);outline-offset:2px}svg{display:block;width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.gallery{max-width:886px;margin:0 auto;padding:16px 22px 20px}.mast{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px}.brand{font:24px Georgia,serif;letter-spacing:-1px}.mast small,.subtle{color:var(--muted)}.phones{display:grid;grid-template-columns:1fr 1fr;gap:22px}.phone{position:relative;height:min(816px,calc(100dvh - 76px));min-height:460px;display:flex;flex-direction:column;overflow:hidden;background:#fff;border:1px solid #d3dbd0;border-radius:24px;box-shadow:0 6px 24px #23382c0d}.bar,.tools,.between{display:flex;align-items:center;justify-content:space-between}.bar{padding:8px 14px;border-bottom:1px solid #edf0e9}.back,.icon,.action,.chip,.toggle{display:inline-flex;align-items:center;justify-content:center;gap:7px}.back,.icon{height:40px;color:var(--green)}.icon{width:40px;border-radius:12px}.back{font-weight:600}.scroll{overflow:auto;padding:22px 21px 24px;flex:1;min-height:0;scrollbar-width:thin}h1,h2{font:normal 35px/1.1 Georgia,serif;letter-spacing:-1.3px;margin:0 0 14px}h2{font-size:25px;letter-spacing:-.6px}.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{font-size:12px;padding:6px 10px;border-radius:20px;background:var(--paper);color:#536251}.chip svg{width:15px;height:15px}.due{background:var(--lime);color:var(--green)}.paragraph{font-size:16px;line-height:1.52;white-space:pre-wrap;overflow-wrap:anywhere;margin:18px 0;text-align:left;display:block;width:100%;padding:0}.editable{cursor:text}.titleButton{font:inherit;letter-spacing:inherit;text-align:left;padding:0;overflow-wrap:anywhere}.photo{display:block;width:100%;padding:0;border-radius:12px;overflow:hidden}.photo img{display:block;width:100%;height:clamp(100px,16vh,150px);object-fit:cover;object-position:50% 62%}.plan{margin-top:19px;border-top:1px solid var(--line);padding-top:8px}.toggle{width:100%;justify-content:space-between;text-align:left;font-weight:650;min-height:40px}.toggle small{font-weight:400;color:var(--muted)}.toggle[aria-expanded=true] svg{transform:rotate(180deg)}.step{display:flex;align-items:center;gap:11px;min-height:36px;cursor:pointer}.step input{width:17px;height:17px;accent-color:var(--green);margin:0}.step:has(:checked) span{text-decoration:line-through;color:var(--muted)}.tools{padding:10px 16px;border-top:1px solid var(--line);gap:8px}.action{font-weight:600;font-size:14px;border-radius:12px;background:var(--lime);color:var(--green);min-height:42px;padding:0 14px}.secondary{background:transparent}.primary{background:var(--green);color:white}.tabs{display:none}.sheet{position:absolute;inset:0;background:#1e302853;display:flex;align-items:flex-end;z-index:2}.panel{background:white;width:100%;padding:16px 20px 22px;border-radius:20px 20px 0 0;max-height:90%;overflow:auto}.panel h2{margin:0}.panel .between{margin-bottom:12px}.option{display:block;width:100%;text-align:left;border-top:1px solid var(--line);padding:13px 2px}.field{display:block;border:1px solid var(--line);padding:10px;border-radius:9px;width:100%;margin:8px 0 14px}.editTitle,.editBody{display:block;border:0;background:none;width:100%;padding:0;resize:vertical}.editTitle{font:32px Georgia,serif;margin-bottom:16px}.editBody{font:16px/1.52 Roboto,"Segoe UI",Arial,sans-serif;margin:18px 0;min-height:6em}.panel img{width:100%;border-radius:12px}.msg{padding:10px 14px;background:var(--paper);border-radius:12px}.result{display:block;width:100%;padding:14px;background:var(--paper);border:1px solid var(--line);border-radius:12px;text-align:left;margin:8px 0}.result span{display:block;color:var(--muted);font-size:13px;margin-top:5px}mark{background:#e1eebf;color:inherit;border-radius:3px;font-weight:650;padding:1px 2px}.toast{position:absolute;bottom:70px;left:16px;background:var(--ink);color:white;padding:7px 13px;border-radius:10px;font-size:13px}
+@media(max-width:700px){.gallery{padding:0}.mast{display:none}.tabs{display:flex;gap:5px;padding:7px 12px;background:#e7ebe2;justify-content:center}.tabs button{padding:5px 12px;color:var(--muted);border-radius:16px;font-size:13px}.tabs button[aria-pressed=true]{background:white;color:var(--ink)}.phones{display:block}.phone{height:calc(100dvh - 43px);min-height:0;border:0;border-radius:0}.phone:not(.selected){display:none}}
+</style>
+<main class="gallery"><header class="mast"><span class="brand">Мимоходом</span><small>Открытая заметка</small></header>
+<nav class="tabs" aria-label="Примеры заметок"></nav><div class="phones"></div></main>
+<script>
+const paths={back:'m14 5-7 7 7 7',more:'M5 12h.1M12 12h.1M19 12h.1',folder:'M3 6h7l2 2h9v11H3z',clock:'M12 8v5l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',plus:'M12 5v14M5 12h14',chat:'M4 4h16v12H9l-5 4z',down:'m6 9 6 6 6-6',close:'m6 6 12 12M18 6 6 18'};
+const svg=k=>'<svg aria-hidden="true" viewBox="0 0 24 24"><path d="'+paths[k]+'"/></svg>';
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const btn=(a,label,cls='',icon='')=>'<button data-act="'+a+'" class="'+cls+'">'+(icon?svg(icon):'')+label+'</button>';
+const seed=[{title:'Квартира',folder:'Дом',body:'Переулок Маяковского, 12\nВторой подъезд, квартира 24.\n\nДомофон: 4821.\nЗапасные ключи у Лены.',date:'',photo:'',steps:[]},{title:'Забрать керамику',folder:'Личное',body:'Мастерская на Покровке. Вход со двора, вторая дверь справа.',date:'Сегодня, 18:00',photo:'note-ceramic-cup.jpg',steps:[['Уточнить время',true],['Взять коробку для чашки',false],['Забрать заказ',false]]}];
+const states=seed.map((note,i)=>({note,edit:false,expanded:true,highlight:i===0,page:'note',messages:[]}));
+const phones=document.querySelector('.phones'),tabs=document.querySelector('.tabs');
+function draw(host,s){
+ const n=s.note,scroll=host.querySelector('.scroll')?.scrollTop||0;
+ if(s.page==='list'){host.innerHTML='<div class="scroll"><h1>Заметки</h1>'+(s===states[0]?'<div class="chip">Поиск · домофон</div>':'')+btn('open','<strong>'+esc(n.title)+'</strong><span>'+esc(s===states[0]?(n.body.split('\n').find(x=>/домофон/i.test(x))||n.body):n.body)+'</span>','result')+'</div>';return}
+ const marked=esc(n.body).replace(/домофон/i,m=>s.highlight?'<mark>'+m+'</mark>':m);
+ const title=s.edit?'<input class="editTitle" aria-label="Название">':'<h1>'+btn('editTitle',esc(n.title),'titleButton')+'</h1>';
+ const body=s.edit?'<textarea class="editBody" aria-label="Текст заметки"></textarea>':btn('editBody',marked||'Что хочется запомнить?','paragraph editable');
+ const chips=(n.folder?btn('folder',esc(n.folder),'chip','folder'):'')+(n.date?btn('date',esc(n.date),'chip due','clock'):'');
+ let plan='';if(n.steps.length){plan='<section class="plan"><button class="toggle" data-act="plan" aria-expanded="'+s.expanded+'"><span>План <small>· '+n.steps.filter(x=>x[1]).length+' из '+n.steps.length+'</small></span>'+svg('down')+'</button>';
+ if(s.expanded)plan+=n.steps.map(([label,done],i)=>'<label class="step"><input type="checkbox" data-step="'+i+'" '+(done?'checked':'')+'><span>'+esc(label)+'</span></label>').join('');plan+='</section>'}
+ host.innerHTML='<header class="bar">'+btn('back','Заметки','back','back')+'<button class="icon" aria-label="Меню заметки" data-act="menu">'+svg('more')+'</button></header><div class="scroll">'+title+'<div class="chips">'+chips+'</div>'+body+(n.photo?btn('photo','<img src="'+esc(n.photo)+'" alt="Открыть фотографию заметки">','photo'):'')+plan+'</div><footer class="tools">'+btn('add','Добавить','action','plus')+(s.edit?btn('done','Готово','action primary'):btn('discuss','Обсудить','action secondary','chat'))+'</footer>';
+ if(s.edit){host.querySelector('.editTitle').value=n.title;host.querySelector('.editBody').value=n.body}
+ host.querySelector('.scroll').scrollTop=scroll;
+}
+function notify(host,text){const t=document.createElement('div');t.className='toast';t.setAttribute('role','status');t.textContent=text;host.append(t);setTimeout(()=>t.remove(),1600)}
+function sheet(host,title,body){host.querySelector('.sheet')?.remove();const layer=document.createElement('div');layer.className='sheet';layer.innerHTML='<section class="panel" role="dialog" aria-label="'+esc(title)+'"><div class="between"><h2>'+esc(title)+'</h2><button class="icon" data-act="close" aria-label="Закрыть">'+svg('close')+'</button></div>'+body+'</section>';host.append(layer);layer.querySelector('button').focus()}
+function act(host,s,a){
+ const n=s.note;
+ switch(a){
+ case 'open':s.page='note';s.highlight=s===states[0];draw(host,s);host.querySelector('mark')?.scrollIntoView({block:'nearest'});return;
+ case 'back':s.edit=false;s.page='list';draw(host,s);return;
+ case 'editTitle':case 'editBody':s.edit=true;s.highlight=false;draw(host,s);host.querySelector(a==='editTitle'?'.editTitle':'.editBody').focus();return;
+ case 'done':s.edit=false;draw(host,s);notify(host,'Сохранено в макете');return;
+ case 'plan':s.expanded=!s.expanded;draw(host,s);host.querySelector('.toggle').focus({preventScroll:true});return;
+ case 'close':host.querySelector('.sheet')?.remove();return;
+ case 'menu':sheet(host,'Заметка',btn('editTitle','Редактировать название','option')+btn('folder','Переместить в папку','option'));return;
+ case 'add':sheet(host,'Добавить',btn('upload','Фотографию','option')+btn('date','Напоминание','option')+btn('folder','Папку','option')+btn('step','Пункт плана','option'));return;
+ case 'folder':sheet(host,'Папка',['Дом','Личное','Работа','Без папки'].map((f,i)=>btn('folder'+i,esc(f)+(n.folder===f?' ✓':''),'option')).join(''));return;
+ case 'date':sheet(host,'Когда напомнить',btn('today','Сегодня в 18:00','option')+btn('tomorrow','Завтра в 09:00','option')+btn('clearDate','Убрать напоминание','option'));return;
+ case 'today':case 'tomorrow':case 'clearDate':n.date={today:'Сегодня, 18:00',tomorrow:'Завтра, 09:00',clearDate:''}[a];break;
+ case 'step':sheet(host,'Новый пункт','<input aria-label="Текст пункта" class="field" placeholder="Что сделать?">'+btn('saveStep','Добавить','action primary'));host.querySelector('.field').focus();return;
+ case 'saveStep':{const text=host.querySelector('.field').value.trim();if(!text)return;n.steps.push([text,false]);s.expanded=true;break}
+ case 'photo':sheet(host,'Фотография','<img src="'+esc(n.photo)+'" alt="Фотография из заметки">');return;
+ case 'upload':{const file=document.createElement('input');file.type='file';file.accept='image/*';file.onchange=()=>{if(file.files[0]){if(n.photo.startsWith('blob:'))URL.revokeObjectURL(n.photo);n.photo=URL.createObjectURL(file.files[0]);draw(host,s)}};file.click();return}
+ case 'discuss':sheet(host,'Обсудить заметку','<p class="subtle">'+esc(n.title)+'</p>'+s.messages.map(m=>'<p class="msg">'+esc(m)+'</p>').join('')+'<textarea class="field" aria-label="Сообщение" placeholder="Что хотите обсудить?"></textarea>'+btn('message','Добавить в демочат','action'));return;
+ case 'message':{const text=host.querySelector('.field').value.trim();if(text)s.messages.push(text);act(host,s,'discuss');return}
+ default:if(a.startsWith('folder'))n.folder=['Дом','Личное','Работа',''][Number(a.slice(6))];else return;
+ }
+ draw(host,s);
+}
+states.forEach((s,i)=>{const host=document.createElement('article');host.className='phone'+(i?'':' selected');host.setAttribute('aria-label',s.note.title);phones.append(host);draw(host,s);
+ host.onclick=e=>{if(e.target.classList.contains('sheet')){act(host,s,'close');return}const b=e.target.closest('[data-act]');if(b)act(host,s,b.dataset.act)};
+ host.oninput=e=>{if(e.target.matches('.editTitle'))s.note.title=e.target.value;if(e.target.matches('.editBody'))s.note.body=e.target.value};
+ host.onchange=e=>{if(e.target.hasAttribute('data-step')){s.note.steps[+e.target.dataset.step][1]=e.target.checked;draw(host,s);host.querySelector('[data-step="'+e.target.dataset.step+'"]').focus({preventScroll:true})}};
+ host.onkeydown=e=>{if(e.key==='Escape'){if(host.querySelector('.sheet'))act(host,s,'close');else if(s.edit)act(host,s,'done')}};
+ const tab=document.createElement('button');tab.textContent=s.note.title;tab.setAttribute('aria-pressed',!i);tabs.append(tab);tab.onclick=()=>{[...phones.children].forEach((p,j)=>p.classList.toggle('selected',j===i));[...tabs.children].forEach((t,j)=>t.setAttribute('aria-pressed',j===i))};
+});
+</script>
+</html>

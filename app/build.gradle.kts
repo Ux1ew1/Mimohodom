@@ -4,8 +4,10 @@ android {
     compileSdk = 35
     ndkVersion = "28.2.13676358"
     if (rootProject.file(".tools/ndk/android-ndk-r28c/source.properties").exists()) { ndkPath = rootProject.file(".tools/ndk/android-ndk-r28c").absolutePath }
-    defaultConfig { applicationId = "app.fastnotes"; minSdk = 26; targetSdk = 35; versionCode = 45; versionName = "0.10.2"; testInstrumentationRunner = "app.fastnotes.SmokeInstrumentation"
+    defaultConfig { applicationId = "app.fastnotes"; minSdk = 26; targetSdk = 35; versionCode = 80; versionName = "0.11.5"; testInstrumentationRunner = "app.fastnotes.SmokeInstrumentation"
         manifestPlaceholders["appLabel"] = "Мимоходом"
+        // -PseparateInstrumentation запускает тот же smoke в изолированной копии, не трогая данные основной.
+        testBuildType = if (rootProject.hasProperty("separateInstrumentation")) "separate" else "debug"
         ndk { abiFilters += listOf("arm64-v8a","x86_64") }
         externalNativeBuild { cmake { cppFlags += "-O3"; arguments += "-DANDROID_STL=c++_shared" } }
     }
@@ -15,6 +17,14 @@ android {
         // Сборка для проверки агентом: как debug (тот же applicationId и ключ, ставится поверх), плюс мост консольных команд из src/agent.
         // В обычные debug и release он не попадает.
         create("agent") { initWith(getByName("debug")); matchingFallbacks += listOf("debug") }
+        // Независимая копия для установки рядом с основной: свой пакет, данные и календарь.
+        create("separate") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".separate"
+            versionNameSuffix = "-separate"
+            manifestPlaceholders["appLabel"] = "Мимоходом Отдельно"
+            matchingFallbacks += listOf("debug")
+        }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }

@@ -32,7 +32,7 @@ public final class FolderStore {
     List<Folder> out = new ArrayList<>();
     try (Cursor c =
         db.rawQuery(
-            "SELECT f.id,f.name,f.auto,(SELECT count(*) FROM notes n WHERE n.folder=f.id) FROM"
+            "SELECT f.id,f.name,f.auto,(SELECT count(*) FROM notes n WHERE n.folder=f.id AND n.trashed=0) FROM"
                 + " folders f ORDER BY f.key",
             null)) {
       while (c.moveToNext())
@@ -44,7 +44,7 @@ public final class FolderStore {
   public Folder folder(long id) {
     try (Cursor c =
         db.rawQuery(
-            "SELECT f.id,f.name,f.auto,(SELECT count(*) FROM notes n WHERE n.folder=f.id) FROM"
+            "SELECT f.id,f.name,f.auto,(SELECT count(*) FROM notes n WHERE n.folder=f.id AND n.trashed=0) FROM"
                 + " folders f WHERE f.id=?",
             new String[] {"" + id})) {
       return c.moveToFirst()

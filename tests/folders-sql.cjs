@@ -53,6 +53,10 @@ const kept = db.prepare('SELECT title,body,created,updated,folder FROM notes WHE
 check(kept.title === 'Заметка 3' && kept.created === 3000 && kept.updated === 6000 && kept.folder === 0, 'Migration keeps notes and puts them in All notes');
 check(db.prepare('SELECT count(*) AS n FROM notes_fts').get().n === 5, 'Search index untouched by migration');
 
+// Корзина (SQLite 13): FolderStore считает только заметки вне корзины, поэтому столбец нужен до запросов.
+const trashSql = statements(method(store, "void addTrash(SQLiteDatabase db)"));
+for (const s of trashSql) db.exec(s);
+
 // Запросы из FolderStore.
 const sqlOf = prefix => {
   const found = [...folders.matchAll(new RegExp(literal.source, 'g'))].map(m => join(m[1])).find(s => s.startsWith(prefix));
@@ -74,7 +78,11 @@ db.prepare(move).run(work, 1, 1);
 db.prepare(move).run(work, 2, 2);
 check(db.prepare('SELECT count(*) AS n FROM notes WHERE folder=?').get(work).n === 2, 'Notes move into a folder');
 check(db.prepare('SELECT updated FROM notes WHERE id=1').get().updated === 2000, 'Moving does not change updated');
-check(db.prepare(list).all().find(f => f.id === work)['(SELECT count(*) FROM notes n WHERE n.folder=f.id)'] === 2, 'Folder note counts');
+const folderCount = () => Object.values(db.prepare(list).all().find(f => f.id === work))[3];
+check(folderCount() === 2, 'Folder note counts');
+db.exec('UPDATE notes SET trashed=5 WHERE id=1');
+check(folderCount() === 1, 'Notes in trash are not counted in a folder');
+db.exec('UPDATE notes SET trashed=0 WHERE id=1');
 check(db.prepare('SELECT n.* FROM notes_fts JOIN notes n ON n.id=notes_fts.rowid WHERE notes_fts MATCH ?').all('заметка*').length === 5, 'Search still finds moved notes');
 
 // Стопка: итог переносит участников.
@@ -93,5 +101,47 @@ check(db.prepare('SELECT count(*) AS n FROM notes').get().n === 5, 'Deleting a f
 check(db.prepare('SELECT count(*) AS n FROM notes WHERE folder=?').all(work)[0].n === 0, 'No note points at a deleted folder');
 check(db.prepare('SELECT folder FROM notes WHERE id=1').get().folder === 0, 'Notes return to All notes');
 check(db.prepare('SELECT count(*) AS n FROM notes WHERE folder=?').get(videos).n === 2, 'Other folders are untouched');
+// Версия 11: за сколько минут ИИ предлагает напомнить (Store.addSuggestionLead).
+const lead = statements(method(store, "void addSuggestionLead(SQLiteDatabase db)"));
+check(lead.length === 1 && lead[0].includes("suggestion_lead INTEGER NOT NULL DEFAULT -1"), "Read actual suggestion lead migration SQL");
+db.exec(lead[0]);
+check(db.prepare("SELECT suggestion_lead FROM notes WHERE id=1").get().suggestion_lead === -1, "Old notes have no suggested lead");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addSuggestionLead(db)"), "Fresh install also gets the column");
+check(/oldV < 11\)\s*addSuggestionLead\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 10 -> 11 adds the column");
+// Версия 12: план у заметки (дерево PlanTree) и привязка чата к заметке.
+const plans = statements(method(store, "void addPlans(SQLiteDatabase db)"));
+check(plans.length === 2, "Read actual plan migration SQL");
+for (const sql of plans) db.exec(sql);
+check(db.prepare("SELECT plan FROM notes WHERE id=1").get().plan === "", "Old notes have no plan");
+check(db.prepare("PRAGMA table_info(chats)").all().some(c => c.name === "note"), "Chats have note column");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addPlans(db)"), "Fresh install also gets plans");
+check(/oldV < 12\)\s*addPlans\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 11 -> 12 adds plans");
+// Версия 13: корзина (столбец добавлен выше, перед запросами FolderStore).
+check(trashSql.length === 1 && trashSql[0].includes("trashed INTEGER NOT NULL DEFAULT 0"), "Read actual trash migration SQL");
+check(db.prepare("SELECT trashed FROM notes WHERE id=1").get().trashed === 0, "Old notes are not in trash");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addTrash(db)"), "Fresh install also gets trash");
+check(/oldV < 13\)\s*addTrash\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 12 -> 13 adds trash");
+// Версия 14: журнал агента (AgentLog), проверяется в tests/agent-log-sql.cjs.
+// Версия 15: все даты серии «по списку» (триггер обмена — в tests/sync-sql.cjs).
+const times = statements(method(store, "void addReminderTimes(SQLiteDatabase db)"));
+check(times.length === 1 && times[0].includes("reminder_times TEXT NOT NULL DEFAULT ''"), "Read actual reminder times migration SQL");
+db.exec(times[0]);
+check(db.prepare("SELECT reminder_times FROM notes WHERE id=1").get().reminder_times === "", "Old notes have no date list");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addReminderTimes(db)"), "Fresh install also gets date lists");
+check(/oldV < 15\)\s*addReminderTimes\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 14 -> 15 adds date lists");
+check(/oldV < 15\)\s*addReminderTimes\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 14 -> 15 kept");
+// Версия 16: кто начал чат (chats.origin) — триггер и перенос пометок в tests/sync-sql.cjs.
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addChatOrigin(db)"), "Fresh install also gets chat origin");
+check(/oldV < 16\)\s*\{\s*addChatOrigin\(db\);\s*moveCheckInMarks\(db\);/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 15 -> 16 adds chat origin and moves marks");
+// Версия 18: локальные векторы в note_embeddings (tests/semantic-sql.cjs).
+// Версия 20: баллы внимания помощника (docs/ATTENTION-POINTS.md) — локальные, без триггеров.
+const attention = statements(method(store, "void addAttention(SQLiteDatabase db)"));
+check(attention.length === 3 && attention.every(s => s.startsWith("ALTER TABLE notes ADD COLUMN attention")), "Read actual attention migration SQL");
+for (const sql of attention) db.exec(sql);
+check(db.prepare("SELECT attention FROM notes WHERE id=1").get().attention === -1, "Old notes have no attention points");
+check(method(store, "void onCreate(SQLiteDatabase db)").includes("addAttention(db)"), "Fresh install also gets attention columns");
+check(/oldV < 20\)\s*addAttention\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 19 -> 20 adds attention columns");
+check(/oldV < 21\)\s*\{[^}]*addSuggestionTimes\(db\)[^}]*addAttention\(db\)/s.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade -> 21 re-ensures suggestion_times and attention");
+check(/super\(context, name, null, 21\)/.test(store), "Database version is 21");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

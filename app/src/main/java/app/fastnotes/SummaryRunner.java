@@ -28,12 +28,22 @@ final class SummaryRunner {
                 if (!manager.current(proposal))
                   throw new IllegalStateException(
                       "Исходники изменились. Запустите новую проверку.");
-                List<Note> sources = manager.summarySources(proposal);
+                // extend: прежняя сводка колоды — начало выжимки, фрагменты — только новые записи.
+                boolean extend = proposal.optString("type").equals("extend");
+                Note head = extend ? store.note(proposal.getLong("stack")) : null;
+                if (extend
+                    && (head == null || head.trashed > 0 || manager.top(head.id) != head.id))
+                  throw new IllegalStateException("Колоды уже нет. Запустите новую проверку.");
+                List<Note> sources =
+                    extend ? manager.extendSources(proposal) : manager.summarySources(proposal);
                 for (Note source : sources)
                   if (manager.top(source.id) != 0)
                     throw new IllegalStateException(
-                        "Эти заметки уже в стопке и исключены из повторного анализа.");
+                        "Эти заметки уже в колоде и исключены из повторного анализа.");
                 StringBuilder version = new StringBuilder("summary-v1");
+                if (head != null)
+                  version.append("|stack:").append(head.id).append(':')
+                      .append(ManagerAnalysis.fingerprint(head));
                 for (Note n : sources)
                   version
                       .append('|')
@@ -42,8 +52,15 @@ final class SummaryRunner {
                       .append(ManagerAnalysis.fingerprint(n));
                 String revision = version.toString();
                 JSONObject progress = manager.summaryProgress(proposal.getLong("id"));
-                if (!revision.equals(progress.optString("revision")))
+                if (!revision.equals(progress.optString("revision"))) {
                   progress = new JSONObject().put("revision", revision).put("cursor", 0);
+                  if (head != null)
+                    progress
+                        .put("title", head.title)
+                        .put(
+                            "body",
+                            head.body.length() > 5000 ? head.body.substring(0, 5000) : head.body);
+                }
                 List<String> fragments = SummaryAnalysis.fragments(sources);
                 int cursor = progress.optInt("cursor");
                 while (cursor < fragments.size()) {
@@ -83,7 +100,7 @@ final class SummaryRunner {
                 result = progress;
                 ReviewLog.record(
                     app,
-                    "Выжимка готова. Откройте предложение и подтвердите создание стопки."
+                    "Выжимка готова. Откройте предложение и подтвердите колоду."
                         + " Исходников: "
                         + sources.size()
                         + ".");

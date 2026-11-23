@@ -1,6 +1,6 @@
 [package]
 name = "mimohodom"
-version = "0.10.2-3"
+version = "0.10.5-7"
 edition = "2021"
 description = "Мимоходом для Windows и macOS"
 
@@ -9,6 +9,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 mimo-core = { path = "../core" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 serde_json = "1"

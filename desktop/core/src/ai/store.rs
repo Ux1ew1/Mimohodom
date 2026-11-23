@@ -443,7 +443,7 @@ impl Store {
 
     /// Текст пользователя в чате (пустой — на вопрос так и не ответили).
     pub fn user_text(&self, chat: i64) -> String {
-        let mut st = match self.conn.prepare("SELECT body FROM messages WHERE chat=?1 AND role='user' ORDER BY id") {
+        let mut st = match self.conn.prepare("SELECT body FROM messages WHERE chat=?1 AND role='user' ORDER BY created, id") {
             Ok(s) => s,
             Err(_) => return String::new(),
         };
@@ -452,7 +452,7 @@ impl Store {
     }
 
     pub fn first_message(&self, chat: i64) -> String {
-        self.conn.query_row("SELECT body FROM messages WHERE chat=?1 ORDER BY id LIMIT 1", params![chat], |r| r.get(0)).unwrap_or_default()
+        self.conn.query_row("SELECT body FROM messages WHERE chat=?1 ORDER BY created, id LIMIT 1", params![chat], |r| r.get(0)).unwrap_or_default()
     }
 
     /// Ближайшие заметки с напоминаниями: (время, название).
@@ -620,7 +620,15 @@ mod tests {
         assert!(st.review_batch(false).unwrap().is_empty());
         assert_eq!(st.failed_count().unwrap(), 2);
         assert_eq!(st.review_batch(true).unwrap().len(), 2, "ручной запуск берёт всё");
-        let proposals = review::proposals(&batch, vec![json!({"type": "task", "reason": "r", "title": "t", "body": "b", "sources": [{"id": a.id, "revision": review::fingerprint(&a)}]})]).unwrap();
+        let both = json!([{"id": a.id, "revision": review::fingerprint(&a)}, {"id": b.id, "revision": review::fingerprint(&b)}]);
+        let proposals = review::proposals(
+            &batch,
+            vec![
+                json!({"type": "task", "reason": "r", "title": "t", "body": "b", "sources": [{"id": a.id, "revision": review::fingerprint(&a)}]}),
+                json!({"type": "link", "reason": "оба про борщ", "sources": both}),
+            ],
+        )
+        .unwrap();
         let analysis: HashMap<i64, AnalysisResult> = batch.iter().map(|n| (n.id, AnalysisResult::default())).collect();
         let out = st.finish_review(&batch, proposals.clone(), &analysis).unwrap();
         assert_eq!((out.reviewed, out.added), (2, 2));

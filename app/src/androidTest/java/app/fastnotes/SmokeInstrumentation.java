@@ -8,18 +8,41 @@ import org.json.JSONArray;
 
 /** Run on a disposable emulator: creates and removes its own records only. */
 public final class SmokeInstrumentation extends Instrumentation {
+  private boolean importOnly, commandOnly;
+
   @Override
   public void onCreate(Bundle args) {
     super.onCreate(args);
+    importOnly = "true".equals(args.getString("importOnly"));
+    commandOnly = "true".equals(args.getString("commandOnly"));
     start();
   }
 
   @Override
   public void onStart() {
     Bundle result = new Bundle();
+    if (importOnly || commandOnly) {
+      try {
+        if (commandOnly) {
+          int checks = CommandStorageTest.run(getTargetContext());
+          result.putString("stream", "PASS: " + checks + " command Android SQLite checks\n");
+        } else {
+          ImportStorageTest.run(getTargetContext());
+          result.putString("stream", "PASS: import storage, deduplication and transaction rollback\n");
+        }
+        finish(Activity.RESULT_OK, result);
+      } catch (Throwable e) {
+        android.util.Log.e("SmokeInstrumentation", "Isolated storage failed", e);
+        result.putString("stream", "FAIL: " + e + "\n");
+        finish(Activity.RESULT_CANCELED, result);
+      }
+      return;
+    }
     long id = 0, chat = 0;
     try (Store db = new Store(getTargetContext())) {
       ManagerStorageTest.run(getTargetContext());
+      ImportStorageTest.run(getTargetContext());
+      checkToday(db);
       id = db.save(0, "", "Проверочная заметка\nТекст", 0);
       Note note = db.note(id);
       require(note.title.equals("Проверочная заметка"), "Auto title");
@@ -231,6 +254,7 @@ public final class SmokeInstrumentation extends Instrumentation {
           "PASS: storage, editing, deletion, chat cascade, cache, reminder scheduling, launch\n");
       finish(Activity.RESULT_OK, result);
     } catch (Throwable e) {
+      android.util.Log.e("SmokeInstrumentation", "Smoke failed", e);
       result.putString("stream", "FAIL: " + e + "\n");
       finish(Activity.RESULT_CANCELED, result);
     } finally {
@@ -242,6 +266,29 @@ public final class SmokeInstrumentation extends Instrumentation {
         if (chat != 0) db.deleteChat(chat);
       }
     }
+  }
+
+  private static void checkToday(Store db) {
+    long at = System.currentTimeMillis() + 3600000;
+    String times = ReminderPolicy.encodeTimes(new long[]{at, at + 3600000});
+    long id = db.save(0, "Проверка экрана дня", "Текст", at, ReminderPolicy.REPEAT_LIST, 15, times);
+    try {
+      Note before = db.note(id);
+      require(db.dayReminders(at, at + 1).stream().anyMatch(n -> n.id == id), "Day reminder selected");
+      long later = at + 7200000;
+      String moved = ReminderPolicy.encodeTimes(new long[]{at + 3600000, later});
+      Note after = db.changeSchedule(before, at + 3600000, moved);
+      require(after != null && after.reminderTimes.equals(moved) && after.lead == 15, "Moved one date");
+      require(db.changeSchedule(before, at, times) == null, "Stale move rejected");
+      Note restored = db.changeSchedule(after, before.reminder, times);
+      require(restored != null && restored.reminder == at && restored.reminderTimes.equals(times), "Undo move");
+      PlanTree plan = new PlanTree();
+      PlanTree.Node step = plan.add(null, PlanTree.STEP, "Собрать сумку");
+      plan.add(step.id, PlanTree.TIME, "Срок").at = at;
+      db.savePlan(id, plan.toJson());
+      require(db.markScheduledStep(id, step) && db.markScheduledStep(id, step), "Step retry");
+      require(PlanTree.parse(db.plan(id)).find(step.id).done, "Retry keeps step checked");
+    } finally { db.delete(id); }
   }
 
   private static void require(boolean ok, String name) {

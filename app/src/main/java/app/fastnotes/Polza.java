@@ -396,8 +396,9 @@ public final class Polza {
               .put("text", tail.isEmpty() ? query : query + "\n\n" + tail));
       messages.put(new JSONObject().put("role", "user").put("content", parts));
     } else messages.put(new JSONObject().put("role", "user").put("content", query));
-    JSONObject payload =
-        new JSONObject().put("model", model).put("messages", messages).put("max_tokens", maxTokens);
+    JSONObject payload = new JSONObject().put("model", model).put("messages", messages);
+    // maxTokens ≤ 0 — режим «Без ограничения»: потолок ставит сама модель.
+    if (maxTokens > 0) payload.put("max_tokens", maxTokens);
     String hash = hash(payload.toString() + store.revision());
     String cached = store.cached(hash);
     JSONObject response;

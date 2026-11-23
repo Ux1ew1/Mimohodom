@@ -119,3 +119,13 @@ fn removed_peer_cannot_sync() {
     assert!(err.contains("Сопрягите заново") || err.contains("сопряжение"), "{}", err);
     server::stop(&a);
 }
+
+#[test]
+fn app_version_is_shown_with_four_numbers() {
+    let a = App::open_memory(&temp("version")).unwrap();
+    let v = mimo_core::api::dispatch(&a, "app_version", serde_json::json!({})).unwrap();
+    let text = v.as_str().unwrap();
+    assert!(!text.contains('-'), "semver-версия показывается через точку: {}", text);
+    assert_eq!(text.split('.').count(), 4, "{}", text);
+    assert_eq!(text, env!("CARGO_PKG_VERSION").replace('-', "."));
+}

@@ -122,12 +122,12 @@ pub fn sync_peer(app: &Arc<App>, device: &str) -> Result<Report> {
     let mut first_reply: Option<Vec<u8>> = None;
     let first_req = |rec_batch: Vec<Value>, since: i64| {
         json!({"device": own_device, "name": own_name, "hosts": my_hosts, "since": since,
-               "limit": 300, "first": true, "records": rec_batch})
+               "limit": 300, "first": true, "features": ["chats"], "records": rec_batch})
     };
     // Первая пачка отправки собирается один раз и используется при выборе адреса.
     let (batch0, more0, next0) = {
         let s = app.store.lock().unwrap();
-        engine::collect(&s, peer.sent_seq, &peer.device, BATCH, true)?
+        engine::collect(&s, peer.sent_seq, &peer.device, BATCH, true, true)?
     };
     let wire0: Vec<Value> = batch0.iter().map(|r| r.to_wire()).collect();
     let mut last_error = String::from("Устройство не найдено в сети");
@@ -175,7 +175,7 @@ pub fn sync_peer(app: &Arc<App>, device: &str) -> Result<Report> {
             Some(b) => b,
             None => {
                 let body = json!({"device": own_device, "name": own_name, "hosts": my_hosts, "since": since,
-                                  "limit": 300, "first": first, "records": pending_out.0});
+                                  "limit": 300, "first": first, "features": ["chats"], "records": pending_out.0});
                 link.post("/v1/sync", body).map_err(describe)?
             }
         };
@@ -207,7 +207,7 @@ pub fn sync_peer(app: &Arc<App>, device: &str) -> Result<Report> {
         }
         pending_out = if more_out {
             let s = app.store.lock().unwrap();
-            let (b, m, n) = engine::collect(&s, sent, &peer.device, BATCH, false)?;
+            let (b, m, n) = engine::collect(&s, sent, &peer.device, BATCH, false, true)?;
             (b.iter().map(|r| r.to_wire()).collect(), m, n)
         } else {
             (vec![], false, sent)

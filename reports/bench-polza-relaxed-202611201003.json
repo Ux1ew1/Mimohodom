@@ -1,0 +1,3258 @@
+{
+ "now": "2026-11-20T10:00+03:00[Europe/Moscow]",
+ "budget": 20,
+ "spent_by_usage": 13.159419700000003,
+ "balance_before": 194.81702166,
+ "balance_after": 181.543383,
+ "results": {
+  "google/gemini-2.5-flash-lite": {
+   "tasks": {
+    "analysis": {
+     "score": 16,
+     "max": 28
+    },
+    "gate": {
+     "score": 6,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.15010333,
+   "lat": [
+    5806,
+    3559,
+    1129,
+    1429,
+    1446,
+    797,
+    1161,
+    994,
+    607,
+    570,
+    977,
+    1112,
+    2228,
+    1867
+   ],
+   "errors": [
+    "429 {\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"message\":\"Превышен лимит запросов к провайдеру. Попробуйте позже или выберите другую модель\",\"trace_id\":\"dca5c908-5ea7-45b",
+    "429 {\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"message\":\"Превышен лимит запросов к провайдеру. Попробуйте позже или выберите другую модель\",\"trace_id\":\"a4d0d8c7-781c-49a",
+    "429 {\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"message\":\"Превышен лимит запросов к провайдеру. Попробуйте позже или выберите другую модель\",\"trace_id\":\"74367d0e-e65b-40f",
+    "429 {\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"message\":\"Превышен лимит запросов к провайдеру. Попробуйте позже или выберите другую модель\",\"trace_id\":\"d87f635e-d11c-417",
+    "429 {\"error\":{\"code\":\"TOO_MANY_REQUESTS\",\"message\":\"Превышен лимит запросов к провайдеру. Попробуйте позже или выберите другую модель\",\"trace_id\":\"41fb9391-cc71-4b6"
+   ]
+  },
+  "google/gemini-2.5-flash": {
+   "tasks": {
+    "analysis": {
+     "score": 28,
+     "max": 28
+    },
+    "gate": {
+     "score": 10,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.86175041,
+   "lat": [
+    5696,
+    5606,
+    688,
+    1006,
+    1048,
+    655,
+    878,
+    697,
+    519,
+    871,
+    875,
+    675,
+    548,
+    1217
+   ],
+   "errors": []
+  },
+  "openai/gpt-4o-mini": {
+   "tasks": {
+    "analysis": {
+     "score": 18,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.16707062000000003,
+   "lat": [
+    12675,
+    15157,
+    935,
+    1100,
+    1138,
+    1037,
+    1088,
+    915,
+    839,
+    777,
+    824,
+    1536,
+    1129,
+    1290
+   ],
+   "errors": []
+  },
+  "google/gemini-3.1-flash-lite": {
+   "tasks": {
+    "analysis": {
+     "score": 28,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.3109362000000001,
+   "lat": [
+    2432,
+    3177,
+    1197,
+    1012,
+    1001,
+    1074,
+    950,
+    1435,
+    1438,
+    1522,
+    2487,
+    937,
+    1283,
+    1227
+   ],
+   "errors": []
+  },
+  "google/gemini-3.5-flash-lite": {
+   "tasks": {
+    "analysis": {
+     "score": 22,
+     "max": 28
+    },
+    "gate": {
+     "score": 11,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.6546335099999998,
+   "lat": [
+    2462,
+    3973,
+    1687,
+    1303,
+    1281,
+    1065,
+    1234,
+    2077,
+    4385,
+    1196,
+    1121,
+    1246,
+    1628,
+    1264
+   ],
+   "errors": []
+  },
+  "google/gemini-3.6-flash": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 11,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 4.06075733,
+   "lat": [
+    10928,
+    15098,
+    2591,
+    2057,
+    1969,
+    2088,
+    1921,
+    2191,
+    2452,
+    2133,
+    2764,
+    1957,
+    2226,
+    3279
+   ],
+   "errors": []
+  },
+  "openai/gpt-4.1-mini": {
+   "tasks": {
+    "analysis": {
+     "score": 25,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.5497511199999999,
+   "lat": [
+    13675,
+    10996,
+    1858,
+    1178,
+    1231,
+    819,
+    1432,
+    843,
+    1184,
+    1080,
+    1183,
+    2597,
+    988,
+    1555
+   ],
+   "errors": []
+  },
+  "openai/gpt-4.1-nano": {
+   "tasks": {
+    "analysis": {
+     "score": 8,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.09873901999999998,
+   "lat": [
+    4284,
+    2784,
+    1523,
+    1465,
+    1468,
+    1484,
+    1576,
+    1232,
+    2234,
+    1741,
+    2641,
+    1288,
+    2657,
+    1546
+   ],
+   "errors": []
+  },
+  "openai/gpt-5-nano": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 5,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.4445296700000001,
+   "lat": [
+    39855,
+    29604,
+    5543,
+    3631,
+    2672,
+    3332,
+    3720,
+    2602,
+    6744,
+    4871,
+    4503,
+    4288,
+    7396,
+    5242
+   ],
+   "errors": []
+  },
+  "openai/gpt-5-mini": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 11,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 1.9512337099999997,
+   "lat": [
+    44158,
+    65723,
+    7852,
+    3868,
+    11085,
+    3028,
+    4333,
+    4396,
+    3842,
+    2998,
+    3494,
+    2751,
+    3516,
+    2786
+   ],
+   "errors": []
+  },
+  "openai/gpt-oss-120b": {
+   "tasks": {
+    "analysis": {
+     "score": 9,
+     "max": 28
+    },
+    "gate": {
+     "score": 10,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.29642852,
+   "lat": [
+    15122,
+    10971,
+    1409,
+    2888,
+    1785,
+    1697,
+    1979,
+    1166,
+    1309,
+    1450,
+    1808,
+    1717,
+    1800,
+    1235
+   ],
+   "errors": []
+  },
+  "anthropic/claude-haiku-5.5": {
+   "tasks": {
+    "analysis": {
+     "score": 28,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.37246459,
+   "lat": [
+    11457,
+    15859,
+    901,
+    1372,
+    1048,
+    1233,
+    1150,
+    1192,
+    1222,
+    1346,
+    1368,
+    1858,
+    1987,
+    1644
+   ],
+   "errors": []
+  },
+  "deepseek/deepseek-v4-flash": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 11,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.2637347000000001,
+   "lat": [
+    50799,
+    14931,
+    7355,
+    853,
+    1132,
+    1020,
+    1216,
+    758,
+    1996,
+    1050,
+    8285,
+    1605,
+    1136,
+    2745
+   ],
+   "errors": []
+  },
+  "deepseek/deepseek-v4.1-flash": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 11,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 1.0566292,
+   "lat": [
+    16429,
+    15141,
+    2587,
+    1031,
+    1096,
+    1529,
+    1523,
+    1317,
+    1643,
+    1091,
+    1382,
+    1438,
+    1676,
+    1176
+   ],
+   "errors": []
+  },
+  "deepseek/deepseek-chat": {
+   "tasks": {
+    "analysis": {
+     "score": 25,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.3221941099999999,
+   "lat": [
+    11261,
+    12157,
+    3971,
+    2088,
+    1969,
+    4858,
+    2541,
+    1335,
+    919,
+    1066,
+    1234,
+    6374,
+    2896,
+    3102
+   ],
+   "errors": []
+  },
+  "qwen/qwen3.8-flash": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 9,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.5020827800000001,
+   "lat": [
+    43601,
+    36555,
+    6335,
+    3623,
+    3817,
+    3380,
+    4437,
+    2510,
+    3511,
+    5348,
+    4746,
+    3385,
+    3191,
+    3437
+   ],
+   "errors": []
+  },
+  "qwen/qwen3.5-flash-02-23": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 0,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.31666770000000005,
+   "lat": [
+    16901,
+    18581,
+    2481,
+    3673,
+    2954,
+    2468,
+    2538,
+    3112,
+    3103,
+    2519,
+    2090,
+    2741,
+    2559,
+    2705
+   ],
+   "errors": []
+  },
+  "qwen/qwen3-30b-a3b-instruct-2507": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.11330622,
+   "lat": [
+    13150,
+    11794,
+    659,
+    567,
+    717,
+    568,
+    959,
+    1225,
+    767,
+    451,
+    794,
+    614,
+    2008,
+    939
+   ],
+   "errors": []
+  },
+  "z-ai/glm-5.3-flash": {
+   "tasks": {
+    "analysis": {
+     "score": 28,
+     "max": 28
+    },
+    "gate": {
+     "score": 11,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.13032829,
+   "lat": [
+    9041,
+    6471,
+    2247,
+    746,
+    2489,
+    1901,
+    2938,
+    2979,
+    1273,
+    1081,
+    2264,
+    3869,
+    2446,
+    1403
+   ],
+   "errors": []
+  },
+  "xiaomi/mimo-v2.6-flash": {
+   "tasks": {
+    "analysis": {
+     "score": 14,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.18012786000000003,
+   "lat": [
+    16071,
+    20973,
+    2698,
+    2366,
+    2106,
+    11537,
+    2752,
+    1693,
+    2660,
+    2033,
+    1780,
+    2119,
+    1980,
+    2108
+   ],
+   "errors": []
+  },
+  "mistralai/mistral-small-3.2-24b-instruct": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.01189542,
+   "lat": [
+    90020,
+    90015,
+    2936,
+    5164,
+    4091,
+    1570,
+    1651,
+    9685,
+    6718,
+    879,
+    6867,
+    1695,
+    7335,
+    1451
+   ],
+   "errors": [
+    "0 The operation was aborted due to timeout",
+    "0 The operation was aborted due to timeout"
+   ]
+  },
+  "meta-llama/llama-3.3-70b-instruct": {
+   "tasks": {
+    "analysis": {
+     "score": 0,
+     "max": 28
+    },
+    "gate": {
+     "score": 11,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.20194465,
+   "lat": [
+    15040,
+    13966,
+    1256,
+    628,
+    747,
+    1030,
+    972,
+    859,
+    956,
+    920,
+    1003,
+    1058,
+    576,
+    966
+   ],
+   "errors": []
+  },
+  "google/gemma-4-31b-it": {
+   "tasks": {
+    "analysis": {
+     "score": 28,
+     "max": 28
+    },
+    "gate": {
+     "score": 12,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.13061709,
+   "lat": [
+    3218,
+    3454,
+    1219,
+    634,
+    943,
+    1287,
+    1204,
+    888,
+    1121,
+    1051,
+    1393,
+    1566,
+    705,
+    1854
+   ],
+   "errors": []
+  },
+  "mistralai/mistral-nemo": {
+   "tasks": {
+    "analysis": {
+     "score": 12,
+     "max": 28
+    },
+    "gate": {
+     "score": 6,
+     "max": 12
+    }
+   },
+   "calls": 14,
+   "cost": 0.011493650000000001,
+   "lat": [
+    42032,
+    35760,
+    1539,
+    1177,
+    1224,
+    1521,
+    1061,
+    3168,
+    1250,
+    1488,
+    1793,
+    1196,
+    1204,
+    903
+   ],
+   "errors": []
+  }
+ },
+ "samples": [
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "analysis",
+   "answer": "```json\n{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог\",\n      \"reminder_at\": \"2026-11-25T18:30:00+03:00\",\n      \"lead_minutes\": 120,\n      \"reason\": \"Явно указана дата и время: 'в среду в 18:30'. Напомнить за 2 часа, чтобы собраться и взять паспорт.\",\n      \"metadata\": {\n        \"search_title\": \"Визит к стоматологу\",\n        \"summary\": \"Запись к стоматологу на среду в 18:30. Необходимо взять с собой паспорт.\",\n        \"aliases\": [\n          \"зубной\",\n          \"врач\",\n          \"прием\",\n          \"визит\",\n          \"паспорт\"\n        ],\n        \"topics\": [\n          \"здоровье\",\n          \"медицина\",\n          \"документы\"\n        ],\n        \"people\": [],\n        \"places\": [],\n",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1222
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "analysis",
+   "answer": "```json\n{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог\",\n      \"reminder_at\": \"2026-11-26T18:30:00+03:00\",\n      \"lead_minutes\": 120,\n      \"reason\": \"Напомнить за 2 часа до визита к стоматологу в среду в 18:30.\",\n      \"metadata\": {\n        \"search_title\": \"Стоматолог\",\n        \"summary\": \"Визит к стоматологу в среду в 18:30. Необходимо взять паспорт.\",\n        \"aliases\": [\n          \"зубной врач\",\n          \"лечение зубов\",\n          \"прием у врача\"\n        ],\n        \"topics\": [\n          \"здоровье\",\n          \"медицина\"\n        ],\n        \"people\": [],\n        \"places\": [],\n        \"dates\": [\n          \"среда\"\n        ]\n      }\n    },\n    {\n      \"id\": 2,\n      \"title\": \"",
+   "note": "дата#1,дата#2,дата#5,заголовок#5,дата#6,заголовок#6",
+   "finish": "stop",
+   "ctok": 1211
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "",
+   "ctok": 0
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "analysis",
+   "answer": "```json\n{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог\",\n      \"reminder_at\": \"2026-11-23T09:00+03:00\",\n      \"lead_minutes\": 120,\n      \"reason\": \"Напомнить за 120 минут, чтобы успеть взять паспорт.\",\n      \"metadata\": {\n        \"search_title\": \"Стоматолог\",\n        \"summary\": \"Запланирован визит к стоматологу в среду в 18:30.\",\n        \"aliases\": [\"стоматология\", \"врач\", \"приём\", \"зубы\", \"зубной врач\"],\n        \"topics\": [\"здоровье\", \"медицина\"],\n        \"people\": [],\n        \"places\": [],\n        \"dates\": [\"2026-11-23\"]\n      }\n    },\n    {\n      \"id\": 2,\n      \"title\": \"\",\n      \"reminder_at\": null,\n      \"lead_minutes\": null,\n      \"reason\": \"\",\n      \"metadata\": {\n     ",
+   "note": "дата#1,дата#2,lead#2,дата#5,заголовок#5",
+   "finish": "stop",
+   "ctok": 849
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "",
+   "ctok": 0
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "",
+   "ctok": 0
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "",
+   "ctok": 0
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "",
+   "ctok": 0
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "analysis",
+   "answer": "{\"notes\":[{\"id\":1,\"title\":\"Визит к стоматологу\",\"reminder_at\":\"2026-11-25T18:30:00+03:00\",\"lead_minutes\":120,\"reason\":\"Врач, нужно время на дорогу, напомнить за 2 часа.\",\"metadata\":{\"search_title\":\"Стоматолог\",\"summary\":\"Визит к стоматологу в среду, необходимо взять паспорт.\",\"aliases\":[\"зубной\",\"врач\",\"клиника\",\"лечение\"],\"topics\":[\"здоровье\"],\"people\":[],\"places\":[],\"dates\":[\"2026-11-25\"]}},{\"id\":2,\"title\":\"\",\"reminder_at\":\"2026-11-28T09:00:00+03:00\",\"lead_minutes\":2880,\"reason\":\"Оплата до 28 числа, напомнить за 2 дня в 09:00.\",\"metadata\":{\"search_title\":\"Оплата интернета\",\"summary\":\"Необходимо оплатить интернет до 28 ноября.\",\"aliases\":[\"счет\",\"связь\",\"провайдер\",\"оплата\"],\"topics\":[\"фина",
+   "note": "",
+   "finish": "stop",
+   "ctok": 599
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "analysis",
+   "answer": "{\"notes\":[{\"id\":1,\"title\":\"Стоматолог\",\"reminder_at\":\"2026-11-25T18:30:00+03:00\",\"lead_minutes\":120,\"reason\":\"Событие врач в среду 25.11.2026 в 18:30, напомнить за 120 минут на сборы. Опорные слова: Стоматолог в среду в 18:30\"},{\"metadata\":{\"search_title\":\"Стоматолог\",\"summary\":\"Визит к стоматологу в среду в 18:30, нужно взять паспорт.\",\"aliases\":[\"зубной\",\"врач\",\"клиника\"],\"topics\":[\"здоровье\"],\"people\":[],\"places\":[],\"dates\":[\"2026-11-25\"]}},{\"id\":2,\"title\":\"Интернет\",\"reminder_at\":\"2026-11-26T09:00:00+03:00\",\"lead_minutes\":2880,\"reason\":\"Срок оплаты до 28 ноября без времени, напомнить в 09:00 за 48 часов. Опорные слова: Оплатить интернет до 28 ноября\"},{\"metadata\":{\"search_title\":\"Оплата ",
+   "note": "дата#2,заголовок#2,заголовок#4,заголовок#5",
+   "finish": "stop",
+   "ctok": 678
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "openai/gpt-4o-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "analysis",
+   "answer": "```json\n{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог\",\n      \"reminder_at\": \"2026-11-25T18:30:00+03:00\",\n      \"lead_minutes\": 120,\n      \"reason\": \"Приём у стоматолога 25 ноября в 18:30; напоминание за 2 часа (120 минут), чтобы собраться и доехать.\",\n",
+   "note": "JSON не разобран",
+   "finish": "length",
+   "ctok": 2996
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "analysis",
+   "answer": "{\"notes\": [{\"id\": 1, \"title\": \"Стоматолог в среду в 18:30, взять паспорт\", \"reminder_at\": \"2026-11-22T16:30:00+03:00\", \"lead_minutes\": 60, \"reason\": \"Встреча в среду в 18:30, напомнить за час\", \"metadata\": {\"search_title\": \"Стоматолог среда 18:30\", \"summary\": \"Посещение стоматолога в среду в 18:30, нужно взять паспорт\", \"aliases\": [\"стоматолог\", \"зубной врач\", \"встреча\", \"паспорт\"], \"topics\": [\"зубы\", \"медицина\"], \"people\": [], \"places\": [], \"dates\": [\"2026-11-22\"]}}, {\"id\": 2, \"title\": \"Интернет\", \"reminder_at\": null, \"lead_minutes\": null, \"reason\": \"Оплата до 28 ноября, дата не указана\", \"metadata\": {\"search_title\": \"Оплата интернета\", \"summary\": \"Оплатить интернет до 28 ноября\", \"aliases\"",
+   "note": "дата#1,lead#1,дата#2,заголовок#2,lead#2,заголовок#4,дата#5,заголовок#5,дата#6,заголовок#6",
+   "finish": "stop",
+   "ctok": 848
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "analysis",
+   "answer": "```json\n{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог в среду в 18:30\",\n      \"reminder_at\": \"2026-11-25T18:30:00+03:00\",\n      \"lead_minutes\": 120,\n      \"reason\": \"Напомнить за 2 часа, чтобы успеть взять паспорт и подготовиться к приему\",\n      \"metadata\": {\n        \"search_title\": \"Стоматолог среда 18:30\",\n        \"summary\": \"Прием у стоматолога назначен на среду в 18:30, нужно взять паспорт.\",\n        \"aliases\": [\"стоматолог\", \"прием у врача\", \"зубной врач\", \"встреча с врачом\"],\n        \"topics\": [\"здоровье\", \"врач\", \"прием\"],\n        \"people\": [],\n        \"places\": [],\n        \"dates\": [\"2026-11-25T18:30:00+03:00\"]\n      }\n    },\n    {\n      \"id\": 2,\n      \"title\": \"\",\n",
+   "note": "дата#5,заголовок#6",
+   "finish": "stop",
+   "ctok": 1073
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 285
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 181
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 183
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 101
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 232
+  },
+  {
+   "model": "openai/gpt-4.1-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 187
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 260
+  },
+  {
+   "model": "openai/gpt-4.1-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 167
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "Constraint Check:**\n    *   Answer with exactly one word",
+   "note": "",
+   "finish": "length",
+   "ctok": 296
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 137
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 202
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 207
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "analysis",
+   "answer": "[\n  {\n    \"id\": 1,\n    \"title\": \"Стоматолог 18:30\",\n    \"reminder_at\": \"2026-11-25T18:30:00+03:00\",\n    \"lead_minutes\": 15,\n    \"reason\": \"За 15 мин до визита к стоматологу\",\n    \"metadata\": {\n      \"search_title\": \"стоматолог\",\n      \"summary\": \"Записаться к стоматологу в среду 18:30, взять паспорт.\",\n      \"aliases\": [\"визит к стоматологу\", \"приём у врача\"],\n      \"topics\": [\"здоровье\", \"медицина\"],\n      \"people\": [],\n      \"places\": [],\n      \"dates\": [\"2026-11-25\"]\n    }\n  },\n  {\n    \"id\": 2,\n    \"title\": \"\",\n    \"reminder_at\": \"2026-11-28T09:00:00+03:00\",\n    \"lead_minutes\": 2880,\n    \"reason\": \"За 2 дня, чтобы успеть оплатить интернет\",\n    \"metadata\": {\n      \"search_title\": \"оплата ",
+   "note": "нет notes[]",
+   "finish": "stop",
+   "ctok": 2743
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "analysis",
+   "answer": "",
+   "note": "JSON не разобран",
+   "finish": "length",
+   "ctok": 2944
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 140
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 142
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "analysis",
+   "answer": "{\"notes\":[{\"id\":1,\"title\":\"Приём у стоматолога\",\"reminder_at\":\"2026-11-25T18:30:00+03:00\",\"lead_minutes\":120,\"reason\":\"Приём у стоматолога в среду в 18:30 — нужно собраться, поэтому за 120 минут.\",\"metadata\":{\"search_title\":\"стоматолог среда 18:30\",\"summary\":\"Приём у стоматолога в указанную среду в 18:30. Нужно взять паспорт.\",\"aliases\":[\"приём у стоматолога\",\"стоматолог\",\"встреча с врачом\",\"зубной\"],\"topics\":[\"здоровье\",\"встреча\",\"доки\"],\"people\":[],\"places\":[],\"dates\":[\"среду в 18:30\"]}},{\"id\":2,\"title\":\"\",\"reminder_at\":\"2026-11-28T09:00:00+03:00\",\"lead_minutes\":2880,\"reason\":\"Оплатить интернет до 28 ноября; дата без времени — ставлю 09:00 и напомню за 2880 минут.\",\"metadata\":{\"search_titl",
+   "note": "JSON не разобран",
+   "finish": "length",
+   "ctok": 3000
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 155
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 185
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 157
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "stop",
+   "ctok": 159
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 159
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 169
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 133
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 138
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 166
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "analysis",
+   "answer": "{\"notes\":[{\"id\":1,\"title\":\"Стоматолог, взять паспорт\",\"reminder_at\":\"2026-11-25T18:30:00+03:00\",\"lead_minutes\":120,\"reason\":\"«в среду в 18:30»: ближайшая среда — 25 ноября, время из текста. Визит к врачу, нужно собраться и взять паспорт, поэтому напомнить за 120 минут.\",\"metadata\":{\"search_title\":\"Стоматолог среда 18:30 паспорт\",\"summary\":\"Визит к стоматологу в среду в 18:30. Нужно взять паспорт.\",\"aliases\":[\"стоматолог\",\"зубной врач\",\"приём у стоматолога\",\"поход к стоматологу\",\"паспорт\",\"запись к зубному\"],\"topics\":[\"здоровье\",\"визит к врачу\"],\"people\":[],\"places\":[],\"dates\":[\"среда\"]}},{\"id\":2,\"title\":\"\",\"reminder_at\":\"2026-11-28T09:00:00+03:00\",\"lead_minutes\":2880,\"reason\":\"«до 28 ноября»",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2591
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 256
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 254
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 222
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 238
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 282
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 255
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 5
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 256
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 5
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 256
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "anthropic/claude-haiku-5.5",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 5
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 256
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 256
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 256
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 256
+  },
+  {
+   "model": "openai/gpt-5-nano",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 256
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 157
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 177
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "analysis",
+   "answer": "",
+   "note": "JSON не разобран",
+   "finish": "length",
+   "ctok": 3000
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 133
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 185
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 194
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 199
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 126
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "analysis",
+   "answer": "{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог в среду 18:30\",\n      \"reminder_at\": \"2026-11-25T18:30:00+03:00\",\n      \"lead_minutes\": 60,\n      \"reason\": \"Напомнить за час до приёма у стоматолога, чтобы успеть собраться и взять паспорт\",\n      \"metadata\": {\n        \"search_title\": \"Стоматолог\",\n        \"summary\": \"Приём у стоматолога в среду в 18:30, взять паспорт\",\n        \"aliases\": [\"стоматолог\", \"зубной\", \"врач\", \"паспорт\"],\n        \"topics\": [\"здоровье\", \"стоматология\"],\n        \"people\": [],\n        \"places\": [],\n        \"dates\": [\"2026-11-25\"]\n      }\n    },\n    {\n      \"id\": 2,\n      \"title\": \"\",\n      \"reminder",
+   "note": "JSON не разобран",
+   "finish": "length",
+   "ctok": 3000
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 61
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 159
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 69
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 65
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 111
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 87
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 82
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 161
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 57
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 74
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 71
+  },
+  {
+   "model": "openai/gpt-5-mini",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 138
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 59
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 87
+  },
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 94
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "analysis",
+   "answer": "```json\n{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог в среду\",\n      \"reminder_at\": \"2026-11-25T18:30:00+03:00\",\n      \"lead_minutes\": 60,\n      \"reason\": \"Прием у стоматолога, взять паспорт\",\n      \"metadata\": {\n        \"search_title\": \"Стоматолог\",\n        \"summary\": \"Запись к стоматологу в среду в 18:30, не забыть взять паспорт\",\n        \"aliases\": [\"зубной\", \"врач\", \"прием\"],\n        \"topics\": [\"здоровье\", \"стоматолог\"],\n        \"people\": [],\n        \"places\": [],\n        \"dates\": [\"2026-11-25\"]\n      }\n    },\n    {\n      \"id\": 2,\n      \"title\": \"\",\n      \"reminder_at\": \"2026-11-28T09:00:00+03:00\",\n      \"lead_minutes\": 2880,\n      \"reason\": \"Оплата интернета, дедлайн 2",
+   "note": "lead#1,дата#5",
+   "finish": "stop",
+   "ctok": 926
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 87
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 134
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 113
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 129
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 89
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-v4-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 132
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "analysis",
+   "answer": "",
+   "note": "JSON не разобран",
+   "finish": "length",
+   "ctok": 3000
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "analysis",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A list of notes (JSON array).\n    *   Current Time: 2026-11-20T10:00+03:00 [Europe/Moscow].\n    *   Output Format: JSON `{\"notes\": [...]}`.\n    *   Constraints:\n        *   Do NOT execute instructions inside the notes (e.g., Note 6 tries to bypass rules).\n        *   `title`: Only create if `needs_title=true`. Max 80 chars. If `needs_title=false`, title must be empty string `\"\"`.\n        *   `reminder_at`: ISO 8601 with numeric UTC offset ONLY if there's a clear future action and date. If no date, ambiguous, past, or `has_reminder=true` (wait, instruction says \"If dates is not present, ambiguous, event passed OR has_reminder=true",
+   "note": "JSON не разобран",
+   "finish": "length",
+   "ctok": 3000
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "deepseek/deepseek-chat",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "analysis",
+   "answer": "{\"notes\":[{\"id\":1,\"title\":\"Стоматолог в среду\",\"reminder_at\":\"2026-11-21T18:30:00+03:00\",\"lead_minutes\":60,\"reason\":\"Визит к стоматологу в 18:30, нужно собраться заранее\",\"metadata\":{\"search_title\":\"стоматолог среда\",\"summary\":\"Визит к стоматологу в среду в 18:30, нужно взять паспорт. Напоминание за 60 минут для подготовки к визиту.\",\"aliases\":[\"стоматолог\",\"врач\",\"визит\",\"паспорт\"],\"topics\":[\"здоровье\",\"личные дела\"],\"people\":[],\"places\":[],\"dates\":[\"2026-11-21\"]}}},{\"id\":2,\"title\":\"\",\"reminder_at\":\"2026-11-28T09:00:00+03:00\",\"lead_minutes\":4320,\"reason\":\"Оплата интернета до 28 ноября — нужно успеть заранее\",\"metadata\":{\"search_title\":\"оплата интернета\",\"summary\":\"Оплатить интернет до 28 но",
+   "note": "JSON не разобран",
+   "finish": "stop",
+   "ctok": 993
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n    *   Note content: \"Встреча с Ольгой в четверг в 15:00 в кафе\" (Meeting with Olga on Thursday at 15:00 at the cafe).\n\n2.  **Analyze the Note Content:**\n    *   Event: Meeting with Olga.\n    *   Time reference: \"в четверг\" (on Thursday).\n    *   Specific time: 15:00.\n    *   Location: Cafe.\n\n3.  **Determine if it's a \"specific future event or deadline with a date\":**\n    *   The current date is November",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026.\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n    *   Input note: \"Рецепт блинов: 200 г муки, 2 яйца, молоко\" (Pancake recipe: 200g flour, 2 eggs, milk).\n\n2.  **Analyze the Input Note:**\n    *   Content: A list of ingredients for making pancakes.\n    *   Dates/Deadlines: None present.\n    *   Events: None present.\n\n3.  **Evaluate against Criteria:**\n    *   Does it contain a specific future event? No.\n    *   Does it contain a deadline with a date? No.\n    *   Is the",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Input note: \"Сдать отчёт до 5 декабря\" (Submit the report by December 5th).\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n\n2.  **Evaluate the Input Note:**\n    *   The note says \"Submit the report by December 5th\".\n    *   This is a specific deadline/event.\n    *   The date is December 5th.\n\n3.  **Compare with Current Date:**\n    *   Current date: November 20, 2026.\n    *   Target date: December 5, 2026 (implied year based on context of \"futu",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n    *   Input note: \"Идея для проекта: приложение для заметок\" (Idea for a project: a notes app).\n\n2.  **Analyze the Input Note:**\n    *   Content: \"Идея для проекта: приложение для заметок\".\n    *   Meaning: It's a brainstorming idea or a task to create an app.\n    *   Dates/Deadlines: There are no dates mentioned in the text.\n    *   Future Events: There is no specific event scheduled.\n\n3.  **Evaluate a",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n    *   Note content: \"День рождения Миши 3 января, купить подарок\" (Misha's birthday January 3, buy a gift).\n\n2.  **Evaluate the Date:**\n    *   Current date: 2026-11-20.\n    *   Event date: January 3rd (3 января).\n    *   Year of the event: Since the current date is late 2026, the next January 3rd will be in 2027.\n    *   Is it in the future? Yes, January 3, 2027 is after November 20, 2026.\n    *   Is i",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n    *   Input note: \"Вчера был на концерте, очень понравилось\" (Yesterday I was at a concert, really liked it).\n\n2.  **Analyze the Input Note:**\n    *   Content: \"Вчера был на концерте, очень понравилось\".\n    *   Time reference: \"Вчера\" (Yesterday).\n    *   Event status: Past tense (\"был\" - was).\n    *   Future events/deadlines: None mentioned.\n    *   Dates: No specific dates mentioned (just relative ti",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Input note: \"Завтра в 9 утра созвон по бюджету\" (Tomorrow at 9 AM call about budget).\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n\n2.  **Analyze the Input Note:**\n    *   \"Завтра\" (Tomorrow) refers to November 21, 2026.\n    *   \"в 9 утра\" (at 9 AM) specifies the time.\n    *   \"созвон по бюджету\" (call about budget) is the event.\n    *   Since today is November 20, 2026, \"tomorrow\" is in the future relative to the current date provided in th",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n\n2.  **Analyze the Note:**\n    *   Text: \"Надо бы как-нибудь записаться к врачу\" (Should probably sign up for a doctor's appointment sometime).\n    *   Content: It expresses an intention or a vague plan (\"как-нибудь\" - sometime/anytime).\n    *   Date/Time Specificity: There is no specific date, time, or deadline mentioned.\n\n3.  **Evaluate against Criteria:**\n    *   Does it contain a specific future event",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3-30b-a3b-instruct-2507",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n    *   Input note: \"Рейс в Сочи 14 декабря в 06:40, регистрация за 3 часа\" (Flight to Sochi December 14 at 06:40, check-in 3 hours before).\n\n2.  **Analyze the Note Content:**\n    *   Event: Flight to Sochi.\n    *   Date: December 14 (14 декабря).\n    *   Time: 06:40.\n    *   Context: Check-in info.\n\n3.  **Compare with Current Date:**\n    *   Current Date: November 20, 2026.\n    *   Event Date: December 1",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 124
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026.\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Input note: \"Список покупок: молоко, хлеб, сыр\" (Shopping list: milk, bread, cheese).\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n\n2.  **Analyze the Input Note:**\n    *   Content: \"Список покупок: молоко, хлеб, сыр\".\n    *   Meaning: It's a shopping list containing items (milk, bread, cheese).\n    *   Dates/Deadlines: There are no dates, times, or specific future events mentioned in the text.\n\n3.  **Evaluate against Criteria:**\n    *   Does it contain a spe",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 157
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026 (20 ноября 2026).\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Note content: \"Оплатить налог до 1 декабря\" (Pay tax by December 1st).\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n\n2.  **Evaluate the Date:**\n    *   Current date: 2026-11-20.\n    *   Deadline in note: December 1st (implied year 2026, as it's a near-future task relative to the current date).\n    *   Is December 1, 2026, in the future relative to November 20, 2026? Yes.\n    *   Is it a specific event/deadline with a date? Yes (\"до 1 декабря",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "analysis",
+   "answer": "```json\n{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог в среду в 18:30\",\n      \"reminder_at\": \"2026-11-25T18:30:00+03:00\",\n      \"lead_minutes\": 120,\n      \"reason\": \"Приём у врача в среду (25 ноября) в 18:30; нужно успеть собраться и взять паспорт — напомню за 2 часа.\",\n      \"metadata\": {\n        \"search_title\": \"Стоматолог среда 18:30\",\n        \"summary\": \"Приём у стоматолога в среду 25.11.2026 в 18:30. Взять с собой паспорт.\",\n        \"aliases\": [\"зубной врач\", \"приём у стоматолога\", \"дантист\"],\n        \"topics\": [\"здоровье\", \"врач\", \"визит\"],\n        \"people\": [],\n        \"places\": [\"стоматология\"],\n        \"dates\": [\"2026-11-25\"]\n      }\n    },\n    {\n      \"id\": 2,\n    ",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1462
+  },
+  {
+   "model": "qwen/qwen3.5-flash-02-23",
+   "task": "gate",
+   "answer": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Current date: November 20, 2026.\n    *   Task: Determine if the note contains a specific future event or deadline with a date that needs reminding.\n    *   Output constraint: Exactly one word: \"да\" (yes) or \"нет\" (no).\n    *   Input note: \"Книга «Мастер и Маргарита», 1967, прочитать ещё раз\" (Book \"The Master and Margarita\", 1967, read again).\n\n2.  **Analyze the Input Note:**\n    *   Content: \"Книга «Мастер и Маргарита», 1967, прочитать ещё раз\".\n    *   Meaning: It's a to-do item about reading a book again.\n    *   Date/Time information: \"1967\" refers to the publication year of the edition mentioned, not a deadline or event date in the",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 120
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 201
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 112
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "**Нет**\n\nВ заметке указано «в четверг в 15:00», но без конкретной даты. Формально из этого можно вычислить дату ближайшего четверга (26 ноября",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 13
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 156
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 146
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 102
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 111
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "analysis",
+   "answer": "```json\n{\"notes\":[\n{\"id\":1,\"title\":\"Стоматолог в среду в 18:30, взять паспорт\",\"reminder_at\":\"2026-11-25T18:30:00+03:00\",\"lead_minutes\":120,\"reason\":\"Встреча у врача — нужно время собраться, в тексте явно указано «в среду в 18:30»\",\"metadata\":{\"search_title\":\"Приём у стоматолога\",\"summary\":\"Запись к стоматологу в среду в 18:30, не забрать взять паспорт с собой.\",\"aliases\":[\"стоматолог\",\"зубной врач\",\"дантист\",\"приём зубной\",\"паспорт\",\"зубы\"],\"topics\":[\"здоровье\",\"медицина\",\"запись\"],\"people\":[],\"places\":[\"стоматолог\"],\"dates\":[\"среда 18:30\"]}},\n{\"id\":2,\"title\":\"\",\"reminder_at\":\"2026-11-28T09:00:00+03:00\",\"lead_minutes\":4320,\"reason\":\"Оплата — успеть заплатить заранее; дедлайн указан только д",
+   "note": "JSON не разобран",
+   "finish": "stop",
+   "ctok": 1280
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 187
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 38
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "",
+   "note": "",
+   "finish": "length",
+   "ctok": 300
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 22
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 44
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 137
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 63
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 137
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 39
+  },
+  {
+   "model": "qwen/qwen3.8-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 171
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 44
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 60
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 19
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 50
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "analysis",
+   "answer": "[\n  {\n    \"id\": 1,\n    \"title\": \"Стоматолог\",\n    \"reminder_at\": \"2026-11-25T18:15+03:00\",\n    \"lead_minutes\": 15,\n    \"reason\": \"Напомнить за 15 минут до приема стоматолога\",\n    \"metadata\": {\n      \"search_title\": \"Стоматолог\",\n      \"summary\": \"Посещение стоматолога\",\n      \"aliases\": [\"Врач\", \"Зубной\"],\n      \"topics\": [\"Здоровье\"],\n      \"people\": [],\n      \"places\": [],\n      \"dates\": [\"среда\"]\n    }\n  },\n  {\n    \"id\": 2,\n    \"title\": \"\",\n    \"reminder_at\": \"2026-11-28T09:00+03:00\",\n    \"lead_minutes\": 2880,\n    \"reason\": \"Напомнить за 2 дня до оплаты интернета\",\n    \"metadata\": {\n      \"search_title\": \"Интернет\",\n      \"summary\": \"Оплата интернета\",\n      \"aliases\": [\"Связь\", \"Онлайн\"",
+   "note": "нет notes[]",
+   "finish": "stop",
+   "ctok": 762
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 68
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 63
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 52
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 75
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 32
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 41
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 38
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 3
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 16
+  },
+  {
+   "model": "meta-llama/llama-3.3-70b-instruct",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "task": "gate",
+   "answer": "Нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 69
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "analysis",
+   "answer": "```json\n{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог\",\n      \"reminder_at\": \"2026-11-25T18:30:00+03:00\",\n      \"lead_minutes\": 120,\n      \"reason\": \"Визит к врачу в среду 18:30, напоминание за 2 часа, чтобы собраться\",\n      \"metadata\": {\n        \"search_title\": \"Стоматолог\",\n        \"summary\": \"Визит к стоматологу в среду в 18:30, необходимо взять паспорт\",\n        \"aliases\": [\n          \"зубной\",\n          \"врач\",\n          \"прием\",\n          \"стоматология\"\n        ],\n        \"topics\": [\n          \"здоровье\"\n        ],\n        \"people\": [],\n        \"places\": [\n          \"стоматология\"\n        ],\n        \"dates\": [\n          \"среда\"\n        ]\n      }\n    },\n    {\n      \"id",
+   "note": "",
+   "finish": "stop",
+   "ctok": 1170
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "Да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "analysis",
+   "answer": "{\n  \"notes\": [\n    {\n      \"id\": 1,\n      \"title\": \"Стоматолог в среду\",\n      \"reminder_at\": \"2026-11-23T18:30:00+03:00\",\n      \"lead_minutes\": 120,\n      \"reason\": \"Напомнить заранее, чтобы успеть собраться\",\n      \"metadata\": {\n        \"search_title\": \"Стоматолог\",\n        \"summary\": \"Врач в среду в 18:30, взять паспорт\",\n        \"aliases\": [\"Дентальный врач\", \"Зубной врач\"],\n        \"topics\": [\"Здоровье\"],\n        \"people\": [\"Стоматолог\"],\n        \"places\": [],\n        \"dates\": [\"2026-11-23\"]\n      }\n    },\n    {\n      \"id\": 2,\n      \"title\": \"Оплата интернета\",\n      \"reminder_at\": \"2026-11-27T09:00:00+03:00\",\n      \"lead_minutes\": 2880,\n      \"reason\": \"Напомнить заранее, чтобы успеть ",
+   "note": "дата#1,дата#2,заголовок#2,заголовок#4,дата#5,заголовок#5,дата#6,заголовок#6",
+   "finish": "stop",
+   "ctok": 1032
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "analysis",
+   "answer": "",
+   "note": ""
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-nemo",
+   "task": "gate",
+   "answer": "Нет.",
+   "note": "",
+   "finish": "stop",
+   "ctok": 4
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "да",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  },
+  {
+   "model": "mistralai/mistral-small-3.2-24b-instruct",
+   "task": "gate",
+   "answer": "нет",
+   "note": "",
+   "finish": "stop",
+   "ctok": 2
+  }
+ ]
+}

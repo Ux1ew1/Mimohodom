@@ -35,6 +35,7 @@ final class AgentData {
     o.put("updated", n.updated);
     o.put("reminder", n.reminder);
     o.put("repeat", n.repeat);
+    o.put("reminderTimes", n.reminderTimes);
     o.put("lead", n.lead);
     o.put("folder", n.folder);
     o.put("image", n.image);

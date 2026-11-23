@@ -37,6 +37,78 @@ public final class ManagerTest {
         "Order independent deduplication");
     row.put("sources", new JSONArray("[1,99]"));
     check(parse(row, notes).isEmpty(), "Invented source rejected");
+
+    // Уточняющий вопрос: одна запись и 2–4 варианта ответа
+    JSONObject ask =
+        new JSONObject()
+            .put("type", "clarify")
+            .put("sources", new JSONArray("[1]"))
+            .put("reason", "Что это за запись?")
+            .put("options", new JSONArray("[\"Список покупок\",\"Про карту\",\"Список покупок\"]"));
+    List<JSONObject> asked = parse(ask, notes);
+    check(asked.size() == 1, "Clarify accepted without title and body");
+    check(asked.get(0).getJSONArray("options").length() == 2, "Duplicate options removed");
+    check(asked.get(0).getString("identity").startsWith("clarify|1:"), "Clarify identity per note");
+    ask.put("options", new JSONArray("[\"Только один\"]"));
+    check(parse(ask, notes).isEmpty(), "One option is not a question");
+    ask.put("options", new JSONArray("[\"Да\",\"Нет\"]")).put("sources", new JSONArray("[1,2]"));
+    check(parse(ask, notes).isEmpty(), "Clarify is about one note");
+    ask.put("sources", new JSONArray("[1]")).put("reason", "я".repeat(301));
+    check(parse(ask, notes).isEmpty(), "Long question rejected");
+
+    // Подсказка модели: прошлые группы и ответы пользователя
+    JSONObject base = ManagerAnalysis.payload(notes, "m");
+    ManagerAnalysis.withContext(
+        base, Arrays.asList(new TreeSet<>(Arrays.asList(1L, 2L))), Map.of(1L, "Список покупок"));
+    String system = base.getJSONArray("messages").getJSONObject(0).getString("content");
+    check(system.contains("[[1,2]]"), "Known groups handed to the model");
+    check(system.contains("Список покупок"), "User answers handed to the model");
+    check(system.contains("\"action\":\"ask\""), "Prompt describes clarifying questions");
+    check(system.contains("\"actions\""), "Prompt asks for the agent action list");
+    check(system.contains("extend"), "Prompt offers adding to an existing deck");
+    check(parsed.get(0).getString("type").equals("group"), "Old merge becomes a deck card");
+    // Колоды по теме: модель видит их и может предложить extend.
+    Note top = new Note(10, "Рецепт блинов", "Мука, молоко, яйца", 1, 2, 0);
+    JSONObject withStacks = ManagerAnalysis.payload(notes, "m");
+    ManagerAnalysis.withContext(
+        withStacks, Collections.emptyList(), Collections.emptyMap(), Arrays.asList(top));
+    check(
+        withStacks.getJSONArray("messages").getJSONObject(0).getString("content")
+            .contains("\"stack\":10"),
+        "Existing decks handed to the model");
+    // Состав колоды: модель видит, какие записи уже сгруппированы.
+    JSONObject withMembers = ManagerAnalysis.payload(notes, "m");
+    ManagerAnalysis.withContext(
+        withMembers,
+        Collections.emptyList(),
+        Collections.emptyMap(),
+        Arrays.asList(top),
+        Map.of(10L, Arrays.asList("Мука и молоко", "Яйца")));
+    check(
+        withMembers.getJSONArray("messages").getJSONObject(0).getString("content")
+            .contains("\"contains\":[\"Мука и молоко\",\"Яйца\"]"),
+        "Deck members handed to the model");
+    String extendText =
+        "{\"actions\":[{\"action\":\"extend\",\"stack\":10,\"sources\":[2],"
+            + "\"reason\":\"Тоже про блины\"}]}";
+    List<JSONObject> extended = ManagerAnalysis.parse(extendText, notes, Arrays.asList(top));
+    check(extended.size() == 1 && extended.get(0).getString("type").equals("extend"), "Extend card");
+    check(extended.get(0).getLong("stack") == 10, "Extend keeps its deck");
+    check(extended.get(0).getJSONArray("sources").length() == 2, "Deck revision is checked too");
+    check(
+        extended.get(0).getString("identity").startsWith("extend|2:"), "Extend identity by sources");
+    check(ManagerAnalysis.parse(extendText, notes).isEmpty(), "Unknown deck rejected");
+    List<JSONObject> grouped =
+        ManagerAnalysis.parse(
+            "{\"actions\":[{\"action\":\"group\",\"sources\":[1,2],\"title\":\"Блины\","
+                + "\"reason\":\"Один рецепт\",\"trash\":[2,7]}]}",
+            notes);
+    check(grouped.size() == 1 && grouped.get(0).getString("body").isEmpty(), "Deck needs no text");
+    check(grouped.get(0).getJSONArray("trash").toString().equals("[2]"), "Trash only from sources");
+    check(
+        ManagerAnalysis.payload(notes, "m").getJSONArray("messages").getJSONObject(0)
+            .getString("content").contains("название магазина"),
+        "Prompt rejects grouping by shared brand");
     row.put("sources", new JSONArray("[1,1]"));
     check(parse(row, notes).isEmpty(), "Duplicate source rejected");
     row.put("sources", new JSONArray("[1]"));
@@ -47,7 +119,24 @@ public final class ManagerTest {
     row.put("type", "link");
     check(parse(row, notes).size() == 1, "Truncated source allowed for links");
     JSONObject payload = ManagerAnalysis.payload(notes, "test");
-    check(payload.getInt("max_tokens") == 1200, "Existing background output budget preserved");
+    check(payload.getInt("max_tokens") == ManagerAnalysis.MAX_TOKENS && ManagerAnalysis.MAX_TOKENS == 1600, "Review output budget 1600 (stage 5 headroom)");
+    // Настройка «Максимальная длина ответа»: коротко 300, обычно 2000, подробно 3000.
+    check(ManagerAnalysis.answerTokens(0) == 2000, "No setting is normal 2000");
+    check(ManagerAnalysis.answerTokens(300) == 300, "Short stays 300");
+    check(ManagerAnalysis.answerTokens(600) == 2000, "Old normal 600 becomes 2000");
+    check(ManagerAnalysis.answerTokens(1200) == 3000, "Old detailed 1200 becomes 3000");
+    check(ManagerAnalysis.answerTokens(2000) == 2000 && ManagerAnalysis.answerTokens(3000) == 3000, "New values kept");
+    check(ManagerAnalysis.answerMode(300) == 0 && ManagerAnalysis.answerMode(600) == 1 && ManagerAnalysis.answerMode(1200) == 2, "Spinner position");
+    check(ManagerAnalysis.reviewTokens(300) == 1600, "Review never below 1600");
+    check(ManagerAnalysis.reviewTokens(0) == 2000 && ManagerAnalysis.reviewTokens(3000) == 3000, "Review follows the setting");
+    // «Без ограничения»: max_tokens в запросе нет.
+    check(ManagerAnalysis.answerTokens(ManagerAnalysis.UNLIMITED) == ManagerAnalysis.UNLIMITED, "Unlimited kept");
+    check(ManagerAnalysis.answerMode(ManagerAnalysis.UNLIMITED) == 3, "Unlimited is the fourth option");
+    check(ManagerAnalysis.reviewTokens(ManagerAnalysis.UNLIMITED) == ManagerAnalysis.UNLIMITED, "Review unlimited too");
+    JSONObject open = ManagerAnalysis.limit(ManagerAnalysis.payload(notes, "m"), ManagerAnalysis.UNLIMITED);
+    check(!open.has("max_tokens"), "Unlimited request has no max_tokens");
+    check(ManagerAnalysis.limit(open, 2000).getInt("max_tokens") == 2000, "Limit put back");
+    check(ManagerAnalysis.atLeast(ManagerAnalysis.UNLIMITED, 3000) == ManagerAnalysis.UNLIMITED && ManagerAnalysis.atLeast(2000, 3000) == 3000, "At least keeps unlimited");
     JSONArray sent =
         new JSONArray(payload.getJSONArray("messages").getJSONObject(1).getString("content"));
     check(

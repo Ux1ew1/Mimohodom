@@ -50,6 +50,16 @@ lines(pc, 'pc', l => {
   need(dump.notes.find(n => n.title === 'Купить молоко и хлеб').body === 'Купить молоко, хлеб и сыр', 'правка телефона применена');
   need(titles.includes('Новая с ПК'), 'заметка компьютера цела');
   need(dump.files.includes('phone-img.jpg'), 'картинка телефона загружена на компьютер');
+  const phoneChat = dump.chats.find(c => c.title === 'С телефона');
+  need(phoneChat && phoneChat.messages.length === 2, 'чат телефона дошёл до компьютера');
+  const milk = dump.notes.find(n => n.title === 'Купить молоко и хлеб');
+  const phoneAnswer = phoneChat.messages.find(m => m.role === 'assistant');
+  need(phoneAnswer.body.startsWith('Вот [[note:' + milk.id + ']]'), 'ссылка на заметку переведена в номер компьютера');
+  need(phoneAnswer.sources.length === 1 && phoneAnswer.sources[0].id === milk.id, 'источник переведён в номер компьютера');
+  need(dump.files.includes('phone-chat.jpg'), 'картинка чата телефона загружена на компьютер');
+  need(dump.chats.some(c => c.title === 'Про отчёт'), 'чат компьютера цел');
+  const phoneTop = dump.notes.find(n => n.title === 'С телефона');
+  need(dump.stacks.length === 1 && dump.stacks[0].top === phoneTop.uid && dump.stacks[0].members.length === 1 && dump.stacks[0].members[0] === milk.uid, 'стопка телефона заменила стопку компьютера');
   need(dump.notes.find(n => n.title === 'С телефона').images[0] === 'phone-img.jpg', 'ссылка на картинку');
   pc.stdin.write('QUIT\n');
   console.log('E2E driver OK');

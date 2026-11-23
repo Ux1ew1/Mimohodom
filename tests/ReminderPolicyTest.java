@@ -184,6 +184,70 @@ public final class ReminderPolicyTest {
         ReminderPolicy.upcomingToday(meeting, at(zu, 2026, 11, 16, 8, 0), zu),
         "unadvanced event stays in today's digest");
 
+    // «За сколько напомнить», предложенное моделью
+    long deadline = at(zu, 2026, 11, 20, 18, 0), today = at(zu, 2026, 11, 13, 10, 0);
+    check(ReminderPolicy.cleanSuggestedLead(2880, deadline, today) == 2880, "two days lead accepted");
+    check(ReminderPolicy.cleanSuggestedLead(10080, deadline, today) == 10080, "week lead fits");
+    check(ReminderPolicy.cleanSuggestedLead(7, deadline, today) == -1, "unknown lead rejected");
+    check(ReminderPolicy.cleanSuggestedLead(null, deadline, today) == -1, "missing lead is default");
+    check(ReminderPolicy.cleanSuggestedLead("1440", deadline, today) == -1, "text lead rejected");
+    check(ReminderPolicy.cleanSuggestedLead(1.5, deadline, today) == -1, "fractional lead rejected");
+    long soon = at(zu, 2026, 11, 14, 12, 0);
+    check(ReminderPolicy.cleanSuggestedLead(4320, soon, today) == 1440, "too long lead is shortened");
+    check(ReminderPolicy.cleanSuggestedLead(10080, today + 20 * 60_000L, today) == 15, "lead shortened to 15 min");
+    check(ReminderPolicy.cleanSuggestedLead(60, today + 30 * 60_000L, today) == 30, "lead shortened to 30 min");
+    check(ReminderPolicy.cleanSuggestedLead(1440, today + 60_000L, today) == 0, "lead shortened to zero");
+    check(ReminderPolicy.LEAD_GUIDE.contains("2880"), "guide mentions days");
+
+    // Серия по списку дат
+    long d1 = at(zone, 2026, 11, 20, 10, 0), d2 = at(zone, 2026, 11, 22, 10, 0), d3 = at(zone, 2026, 11, 25, 18, 30);
+    long[] parsed = ReminderPolicy.parseTimes("[" + d3 + ", " + d1 + ",x," + d2 + "," + d1 + ",-5,0]");
+    check(parsed.length == 3 && parsed[0] == d1 && parsed[1] == d2 && parsed[2] == d3, "times sorted and cleaned");
+    check(ReminderPolicy.parseTimes("").length == 0, "empty times");
+    check(ReminderPolicy.parseTimes(null).length == 0, "null times");
+    check(ReminderPolicy.parseTimes("{oops").length == 0, "broken times");
+    check(ReminderPolicy.parseTimes(" " + d1 + " ").length == 1, "bare number accepted");
+    check(ReminderPolicy.encodeTimes(new long[] {d2, d1, d2}).equals("[" + d1 + "," + d2 + "]"), "encode sorted unique");
+    check(ReminderPolicy.encodeTimes(new long[0]).isEmpty(), "encode empty");
+    check(ReminderPolicy.encodeTimes(null).isEmpty(), "encode null");
+    check(ReminderPolicy.parseTimes(ReminderPolicy.encodeTimes(parsed)).length == 3, "round trip");
+    long[] many = new long[50];
+    for (int i = 0; i < many.length; i++) many[i] = d1 + (49 - i) * day;
+    long[] capped = ReminderPolicy.parseTimes(ReminderPolicy.encodeTimes(many));
+    check(capped.length == ReminderPolicy.MAX_TIMES && capped[0] == d1, "keeps earliest MAX_TIMES");
+    long before = at(zone, 2026, 11, 19, 12, 0);
+    check(ReminderPolicy.nextInList(d1, parsed, d1) == d2, "next after first");
+    check(ReminderPolicy.nextInList(d1, parsed, d1 + 500) == d2, "next with alarm delay");
+    check(ReminderPolicy.nextInList(d1, parsed, d2 + hour) == d3, "missed middle date skipped");
+    check(ReminderPolicy.nextInList(d3, parsed, d3) == d3, "series ends on last");
+    check(ReminderPolicy.nextInList(d1, new long[0], d1) == d1, "empty list keeps reminder");
+    check(ReminderPolicy.nextInList(before, parsed, before) == d1, "reminder outside list moves to first");
+    check(ReminderPolicy.currentInList(parsed, before) == d1, "current is nearest future");
+    check(ReminderPolicy.currentInList(parsed, d1) == d2, "current skips now");
+    check(ReminderPolicy.currentInList(parsed, d3 + day) == d3, "all past keeps last");
+    check(ReminderPolicy.currentInList(new long[0], before) == 0, "empty list no reminder");
+    long[] added = ReminderPolicy.withTime(parsed, d1 + hour);
+    check(added.length == 4 && added[1] == d1 + hour, "add keeps order");
+    check(ReminderPolicy.withTime(parsed, d2).length == 3, "add duplicate ignored");
+    long[] removed = ReminderPolicy.withoutTime(parsed, d2);
+    check(removed.length == 2 && removed[0] == d1 && removed[1] == d3, "remove date");
+    check(ReminderPolicy.remaining(parsed, d1) == 2 && ReminderPolicy.remaining(parsed, d3) == 0, "remaining dates");
+    check(ReminderPolicy.dateCount(1).equals("1 дата"), "one date");
+    check(ReminderPolicy.dateCount(3).equals("3 даты"), "three dates");
+    check(ReminderPolicy.dateCount(5).equals("5 дат"), "five dates");
+    check(ReminderPolicy.dateCount(12).equals("12 дат"), "twelve dates");
+    check(ReminderPolicy.dateCount(22).equals("22 даты"), "twenty two dates");
+    check(ReminderPolicy.dateCount(21).equals("21 дата"), "twenty one date");
+    check(ReminderPolicy.repeatLabel(ReminderPolicy.REPEAT_LIST).equals("По списку дат"), "list label");
+    check(ReminderPolicy.nextOccurrence(d1, ReminderPolicy.REPEAT_LIST, d2, zone) == d1, "rule repeat ignores list");
+    check(ReminderPolicy.periodic(ReminderPolicy.REPEAT_WEEKLY) && !ReminderPolicy.periodic(ReminderPolicy.REPEAT_LIST)
+        && !ReminderPolicy.periodic(ReminderPolicy.REPEAT_NONE), "periodic modes");
+
+    long[] dates = {100, 200, 300};
+    check(java.util.Arrays.equals(ReminderPolicy.moveInList(dates, 200, 400), new long[]{100, 300, 400}),
+        "Move just one occurrence and preserve order");
+    check(ReminderPolicy.moveInList(dates, 200, 300).length == 0, "Reject duplicate destination");
+    check(ReminderPolicy.moveInList(dates, 250, 400).length == 0, "Reject missing source");
     System.out.println("ReminderPolicyTest: " + count + " checks passed");
   }
 }

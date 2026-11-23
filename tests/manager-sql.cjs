@@ -58,11 +58,15 @@ check(!!pendingSql,'Production pending analysis SQL extracted');
 db.exec('ALTER TABLE notes ADD COLUMN ai_checked INTEGER DEFAULT 0');
 db.exec('ALTER TABLE notes ADD COLUMN updated INTEGER DEFAULT 1');
 db.exec('ALTER TABLE notes ADD COLUMN created INTEGER DEFAULT 1');
+db.exec('ALTER TABLE notes ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0');
 for(let id=45;id<=48;id++) db.prepare('INSERT INTO notes(id,title,body,created) VALUES(?,?,?,100)').run(id,'Авто','Текст');
 db.exec('INSERT INTO note_groups(top) VALUES(47)');
 db.exec('INSERT INTO note_members(note,top) VALUES(45,47),(46,47)');
 let candidates=db.prepare(pendingSql).all().map(n=>n.id);
 check(candidates.includes(48) && !candidates.some(id=>[45,46,47].includes(id)),'Standalone note eligible, whole stack excluded');
+db.exec('UPDATE notes SET trashed=5 WHERE id=48');
+check(!db.prepare(pendingSql).all().some(n=>n.id===48),'Note in trash is not analysed');
+db.exec('UPDATE notes SET trashed=0 WHERE id=48');
 // ManagerStore.topMap/membersMap (список читает стопки одним проходом) совпадают с top()/members() по заметке.
 const topOne=id=>{const r=db.prepare('SELECT top FROM note_groups WHERE top=? UNION SELECT top FROM note_members WHERE note=?').get(id,id);return r?r.top:0;};
 const topMap=new Map();
@@ -79,5 +83,46 @@ check(!candidates.some(id=>[45,46,47].includes(id)),'Expanded and edited stack r
 db.exec('DELETE FROM notes WHERE id=47');
 candidates=db.prepare(pendingSql).all().map(n=>n.id);
 check(candidates.includes(45) && candidates.includes(46),'Deleting top makes released standalone notes eligible');
+// Экран корзины (Store.trashed): исходные колоды, удалённой целиком, не показываются отдельно.
+const trashSql=[...storeSource.matchAll(/\.rawQuery\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+),/g)]
+  .map(x=>[...x[1].matchAll(/"(?:\\.|[^"\\])*"/g)].map(s=>JSON.parse(s[0])).join(''))
+  .find(sql=>sql.startsWith('SELECT * FROM notes WHERE trashed>0'));
+check(!!trashSql,'Production trash list SQL extracted');
+for(let id=60;id<=63;id++) db.prepare('INSERT INTO notes(id,title,body,created,trashed) VALUES(?,?,?,100,?)').run(id,'Т','т',id===63?0:500);
+db.exec('INSERT INTO note_groups(top) VALUES(60)');
+db.exec('INSERT INTO note_members(note,top) VALUES(61,60)');
+check(db.prepare(trashSql).all().map(n=>n.id).sort().join()==='60,62','Trash lists the stack top and loose notes, not members with it');
+db.exec('UPDATE notes SET trashed=0 WHERE id=60');
+check(db.prepare(trashSql).all().map(n=>n.id).sort().join()==='61,62','Member of a restored top is listed on its own');
+// Этап 5 (SQLite 17): класс заметки в manager_review, чаты помощника и чат по заметке.
+{
+  const literalSql = body => [...body.matchAll(/"(?:\\.|[^"\\])*"/g)].map(s => JSON.parse(s[0])).join('');
+  const queryOf = (src, prefix) => {
+    const found = [...src.matchAll(/(?:rawQuery|execSQL)\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+)[,)]/g)]
+      .map(x => literalSql(x[1])).find(sql => sql.startsWith(prefix));
+    if (!found) throw Error('SQL missing: ' + prefix);
+    return found;
+  };
+  const alter = queryOf(storeSource, 'ALTER TABLE manager_review ADD COLUMN kind');
+  db.exec(alter);
+  db.exec("INSERT INTO notes(id,title,body) VALUES(70,'Выезд','x'),(71,'Код','1234')");
+  db.exec("INSERT INTO manager_review(note,revision,attempted,failed) VALUES(70,'r',1,0),(71,'r',1,0)");
+  check(db.prepare('SELECT kind FROM manager_review WHERE note=70').get().kind === '', 'Old reviews have no kind');
+  db.prepare(queryOf(source, 'UPDATE manager_review SET kind=? WHERE note=?')).run('complex', 70);
+  // claim обновляет строку, а не заменяет её: класс сохраняется до новой оценки.
+  db.prepare('UPDATE manager_review SET revision=?,attempted=?,failed=? WHERE note=?').run('r2', 2, 1, 70);
+  check(db.prepare('SELECT kind FROM manager_review WHERE note=70').get().kind === 'complex', 'Claim keeps the kind');
+  check(!/CONFLICT_REPLACE/.test(source.slice(source.indexOf('public long claim'), source.indexOf('public List<Set<Long>> knownGroups()'))), 'Claim no longer replaces review rows');
+  const kinds = db.prepare(queryOf(source, 'SELECT note,kind FROM manager_review WHERE kind')).all();
+  check(kinds.length === 1 && kinds[0].note === 70, 'Only classified notes listed');
+  db.exec("CREATE TABLE chats(id INTEGER PRIMARY KEY,title TEXT,created INTEGER,note INTEGER NOT NULL DEFAULT 0,origin TEXT NOT NULL DEFAULT 'user')");
+  db.exec("INSERT INTO chats(id,title,created,note,origin) VALUES(1,'Как дела: Выезд',1000,70,'agent'),(2,'План: Выезд',1100,70,'note'),(3,'Вопрос',2000,0,'agent'),(4,'Свой',3000,0,'user')");
+  check(db.prepare(queryOf(storeSource, 'SELECT id FROM chats WHERE note=?')).get(70).id === 2, 'Note chat skips the progress chat');
+  db.exec('DELETE FROM chats WHERE id=2');
+  check(!db.prepare(queryOf(storeSource, 'SELECT id FROM chats WHERE note=?')).get(70), 'Progress chat is never the note chat');
+  const today = queryOf(storeSource, "SELECT count(*) FROM chats WHERE origin='agent'");
+  check(db.prepare(today).get(1500)['count(*)'] === 1 && db.prepare(today).get(0)['count(*)'] === 2, 'Agent chats counted since day start');
+  check(/oldV < 17\)\s*addTaskKinds\(db\)/.test(storeSource) && /addTaskKinds\(db\);\s*addSemanticIndex\(db\);\s*\}/.test(storeSource), 'Upgrade 16 -> 17 and fresh install add kinds');
+}
 db.close();
 console.log(`PASS: ${checks} manager SQLite checks (production migration SQL)`);

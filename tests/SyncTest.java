@@ -84,6 +84,12 @@ public final class SyncTest {
             && back.metadata.equals("{\"x\":1}")
             && back.folder.equals("ff"),
         "запись заметки");
+    check(back.reminderTimes == null && !note.toJson().has("reminderTimes"), "без списка дат поля нет");
+    note.reminderTimes = "[100,200]";
+    check(
+        "[100,200]".equals(SyncRecord.fromJson(new JSONObject(note.toJson().toString())).reminderTimes),
+        "список дат в записи заметки");
+    note.reminderTimes = null;
     JSONObject tomb = SyncRecord.tomb("note", "abc", 5).toJson();
     check(tomb.length() == 4 && tomb.getBoolean("deleted"), "надгробие: " + tomb);
     SyncRecord folder = new SyncRecord();
@@ -94,6 +100,52 @@ public final class SyncTest {
     check(SyncRecord.fromJson(folder.toJson()).name.equals("Дом"), "запись папки");
     check(SyncRecord.safeFileName("3f2a-1.jpg") && !SyncRecord.safeFileName("../x.jpg"), "имя файла");
     check(!SyncRecord.safeFileName("a/b.jpg") && !SyncRecord.safeFileName(""), "имя файла 2");
+
+    // Чаты, сообщения и стопки.
+    SyncRecord chat = new SyncRecord();
+    chat.kind = "chat";
+    chat.uid = "c1";
+    chat.title = "Про борщ";
+    chat.created = 5;
+    SyncRecord chatBack = SyncRecord.fromJson(chat.toJson());
+    check(chatBack.isChat() && chatBack.title.equals("Про борщ") && chatBack.created == 5, "запись чата");
+    check(chatBack.origin == null && chatBack.noteUid == null, "чат без происхождения и заметки — полей нет");
+    chat.origin = "note";
+    chat.noteUid = "n42";
+    SyncRecord linked = SyncRecord.fromJson(new JSONObject(chat.toJson().toString()));
+    check("note".equals(linked.origin) && "n42".equals(linked.noteUid), "происхождение и заметка чата");
+    chat.origin = null;
+    chat.noteUid = null;
+    SyncRecord message = new SyncRecord();
+    message.kind = "message";
+    message.uid = "m1";
+    message.chat = "c1";
+    message.role = "assistant";
+    message.body = "см. [[note:abc]]";
+    message.draft = "{\"title\":\"x\"}";
+    message.sources.put(new JSONObject().put("uid", "abc").put("title", "Борщ"));
+    SyncRecord messageBack = SyncRecord.fromJson(message.toJson());
+    check(
+        messageBack.isMessage()
+            && messageBack.chat.equals("c1")
+            && messageBack.role.equals("assistant")
+            && messageBack.draft.equals("{\"title\":\"x\"}")
+            && messageBack.sources.getJSONObject(0).getString("uid").equals("abc"),
+        "запись сообщения");
+    SyncRecord stack = new SyncRecord();
+    stack.kind = "stack";
+    stack.uid = "top";
+    stack.members.add("a");
+    stack.members.add("b");
+    check(SyncRecord.fromJson(stack.toJson()).members.equals(Arrays.asList("a", "b")), "запись стопки");
+    SyncRecord stackGone = SyncRecord.tomb("stack", "top", 9);
+    check(SyncRecord.fromJson(stackGone.toJson()).deleted && SyncRecord.fromJson(stackGone.toJson()).isStack(), "стопка удалена");
+    check(!SyncRecord.fromJson(chat.toJson()).isNote() && SyncRecord.fromJson(folder.toJson()).isFolder(), "виды записей различаются");
+    check(
+        SyncRecord.mapLinks("см. [[note:12]] и [[note:5]], а [[note: и [[note:x", x -> "<" + x + ">")
+            .equals("см. [[note:<12>]] и [[note:<5>]], а [[note: и [[note:x"),
+        "ссылки на заметки заменяются как в Rust");
+    check(SyncRecord.mapLinks("без ссылок", x -> "!").equals("без ссылок"), "текст без ссылок");
 
     // Чтение HTTP-ответа: с Content-Length и по частям (chunked).
     byte[] ok =

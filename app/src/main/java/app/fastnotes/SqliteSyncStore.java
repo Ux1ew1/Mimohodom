@@ -7,8 +7,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import org.json.JSONArray;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * SQLite-хранилище для синхронизации с компьютерами (docs/SYNC.md). Служебные поля заметок и
@@ -179,14 +182,17 @@ public final class SqliteSyncStore implements SyncStore {
   @Override
   public Batch collect(long since, String exclude, int limit, boolean allFolders) {
     stampPending();
+    stampStacks();
     long snapshot = currentSeq();
     List<Item> items = new ArrayList<>();
+    collectChats(since, snapshot, exclude, limit, items);
     try (Cursor c =
         db().rawQuery(
                 "SELECT n.uid,n.title,n.body,n.created,n.updated,n.reminder,n.repeat_mode,"
                     + "n.lead_minutes,n.image,n.title_auto,"
                     + "(n.ai_checked=n.updated AND n.ai_failed=0 AND n.ai_checked<>0),n.metadata,"
-                    + "n.sync_ts,n.sync_seq,ifnull((SELECT uid FROM folders f WHERE f.id=n.folder),'')"
+                    + "n.sync_ts,n.sync_seq,ifnull((SELECT uid FROM folders f WHERE f.id=n.folder),''),"
+                    + "n.plan,n.trashed,n.reminder_times"
                     + " FROM notes n WHERE n.sync_seq>? AND n.sync_seq<=? AND n.sync_from<>?"
                     + " ORDER BY n.sync_seq LIMIT ?",
                 new String[] {"" + since, "" + snapshot, exclude, "" + (limit + 1)})) {
@@ -206,6 +212,9 @@ public final class SqliteSyncStore implements SyncStore {
         r.metadata = c.getString(11);
         r.ts = c.getLong(12);
         r.folder = c.getString(14);
+        r.plan = c.getString(15);
+        r.trashed = c.getLong(16);
+        r.reminderTimes = c.getString(17);
         items.add(new Item(c.getLong(13), r));
       }
     }
@@ -268,7 +277,7 @@ public final class SqliteSyncStore implements SyncStore {
           else stats.ignored++;
         }
       for (SyncRecord r : records)
-        if (!r.isFolder()) {
+        if (r.isNote()) {
           switch (applyNote(peer, sentSeq, r, stats)) {
             case 0 -> stats.ignored++;
             case 1 -> stats.applied++;
@@ -278,6 +287,7 @@ public final class SqliteSyncStore implements SyncStore {
             }
           }
         }
+      applyChats(peer, records, stats);
       db.setTransactionSuccessful();
     } finally {
       db.endTransaction();
@@ -427,6 +437,14 @@ public final class SqliteSyncStore implements SyncStore {
     v.put("ai_failed", 0);
     v.put("suggestion", 0);
     v.put("suggestion_reason", "");
+    v.put("suggestion_lead", -1);
+    v.put("suggestion_times", "");
+    if (r.plan != null) v.put("plan", r.plan);
+    if (r.trashed != null) v.put("trashed", r.trashed);
+    // Список дат нужен только серии «по списку»; запись без поля (компьютер) свой список не трогает.
+    if (r.repeat != ReminderPolicy.REPEAT_LIST || r.reminder == 0) v.put("reminder_times", "");
+    else if (r.reminderTimes != null)
+      v.put("reminder_times", ReminderPolicy.encodeTimes(ReminderPolicy.parseTimes(r.reminderTimes)));
     v.put("metadata", metadata);
     v.put("search_text", Metadata.searchText(Metadata.read(metadata)));
     v.put("sync_ts", r.ts);
@@ -467,4 +485,322 @@ public final class SqliteSyncStore implements SyncStore {
       v.put("search_text", Metadata.searchText(meta));
     }
   }
+
+  // ---------- чаты, сообщения, стопки ----------
+
+  private String noteUid(String id) {
+    return text("SELECT uid FROM notes WHERE id=?", id);
+  }
+
+  private long noteId(String uid) {
+    return uid.isEmpty() ? 0 : scalar("SELECT id FROM notes WHERE uid=?", uid);
+  }
+
+  /** Текст сообщения для передачи: номера заметок → uid (неизвестная заметка → 0). */
+  private String bodyOut(String body) {
+    return SyncRecord.mapLinks(
+        body,
+        x -> {
+          String uid = noteUid(x);
+          return uid.isEmpty() ? "0" : uid;
+        });
+  }
+
+  private String bodyIn(String body) {
+    return SyncRecord.mapLinks(body, x -> "" + noteId(x));
+  }
+
+  private JSONArray sourcesOut(String raw) {
+    JSONArray out = new JSONArray();
+    try {
+      JSONArray list = new JSONArray(raw);
+      for (int i = 0; i < list.length(); i++) {
+        JSONObject s = list.getJSONObject(i);
+        String uid = noteUid("" + s.optLong("id", 0));
+        if (!uid.isEmpty()) out.put(new JSONObject().put("uid", uid).put("title", s.optString("title")));
+      }
+    } catch (JSONException ignored) {
+    }
+    return out;
+  }
+
+  private String sourcesIn(JSONArray list) {
+    JSONArray out = new JSONArray();
+    try {
+      for (int i = 0; i < list.length(); i++) {
+        JSONObject s = list.optJSONObject(i);
+        if (s == null) continue;
+        long id = noteId(s.optString("uid"));
+        if (id != 0) out.put(new JSONObject().put("id", id).put("title", s.optString("title")));
+      }
+    } catch (JSONException ignored) {
+    }
+    return out.toString();
+  }
+
+  private void collectChats(long since, long snapshot, String exclude, int limit, List<Item> items) {
+    String[] args = {"" + since, "" + snapshot, exclude, "" + (limit + 1)};
+    try (Cursor c =
+        db().rawQuery(
+                "SELECT c.uid,c.title,c.created,c.sync_ts,c.sync_seq,c.origin,"
+                    + "ifnull((SELECT n.uid FROM notes n WHERE n.id=c.note),'') FROM chats c WHERE"
+                    + " c.sync_seq>? AND c.sync_seq<=? AND c.sync_from<>? AND c.uid<>'' ORDER BY"
+                    + " c.sync_seq LIMIT ?",
+                args)) {
+      while (c.moveToNext()) {
+        SyncRecord r = new SyncRecord();
+        r.kind = "chat";
+        r.uid = c.getString(0);
+        r.title = c.getString(1);
+        r.created = c.getLong(2);
+        r.ts = c.getLong(3);
+        r.origin = ChatOrigin.clean(c.getString(5));
+        r.checkin = ChatOrigin.checkin(r.origin);
+        r.noteUid = c.getString(6);
+        items.add(new Item(c.getLong(4), r));
+      }
+    }
+    List<Object[]> rows = new ArrayList<>();
+    try (Cursor c =
+        db().rawQuery(
+                "SELECT m.uid,c.uid,m.role,m.body,m.sources,m.draft,m.created,m.sync_ts,m.sync_seq"
+                    + " FROM messages m JOIN chats c ON c.id=m.chat WHERE m.sync_seq>? AND"
+                    + " m.sync_seq<=? AND m.sync_from<>? AND m.uid<>'' AND c.uid<>'' ORDER BY"
+                    + " m.sync_seq LIMIT ?",
+                args)) {
+      while (c.moveToNext())
+        rows.add(
+            new Object[] {
+              c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4),
+              c.getString(5), c.getLong(6), c.getLong(7), c.getLong(8)
+            });
+    }
+    for (Object[] m : rows) {
+      SyncRecord r = new SyncRecord();
+      r.kind = "message";
+      r.uid = (String) m[0];
+      r.chat = (String) m[1];
+      r.role = (String) m[2];
+      r.body = bodyOut((String) m[3]);
+      r.sources = sourcesOut((String) m[4]);
+      r.draft = (String) m[5];
+      r.created = (Long) m[6];
+      r.ts = (Long) m[7];
+      items.add(new Item((Long) m[8], r));
+    }
+    try (Cursor c =
+        db().rawQuery(
+                "SELECT uid,ts,seq FROM tombstones WHERE kind='chat' AND seq>? AND seq<=? AND"
+                    + " from_peer<>? ORDER BY seq LIMIT ?",
+                args)) {
+      while (c.moveToNext())
+        items.add(new Item(c.getLong(2), SyncRecord.tomb("chat", c.getString(0), c.getLong(1))));
+    }
+    try (Cursor c =
+        db().rawQuery(
+                "SELECT top,members,ts,seq,deleted FROM stack_sync WHERE seq>? AND seq<=? AND"
+                    + " from_peer<>? ORDER BY seq LIMIT ?",
+                args)) {
+      while (c.moveToNext()) {
+        boolean deleted = c.getInt(4) != 0;
+        SyncRecord r = SyncRecord.tomb("stack", c.getString(0), c.getLong(2));
+        r.deleted = deleted;
+        String members = c.getString(1);
+        if (!deleted && !members.isEmpty())
+          r.members.addAll(java.util.Arrays.asList(members.split(",")));
+        items.add(new Item(c.getLong(3), r));
+      }
+    }
+  }
+
+  /** Текущие стопки: uid верхней заметки → uid исходных через запятую по возрастанию. */
+  private Map<String, String> stackState() {
+    Map<String, List<String>> map = new TreeMap<>();
+    try (Cursor c =
+        db().rawQuery(
+                "SELECT t.uid,n.uid FROM note_members m JOIN notes t ON t.id=m.top JOIN notes n ON"
+                    + " n.id=m.note WHERE t.uid<>'' AND n.uid<>'' AND n.id<>t.id",
+                null)) {
+      while (c.moveToNext())
+        map.computeIfAbsent(c.getString(0), k -> new ArrayList<>()).add(c.getString(1));
+    }
+    Map<String, String> out = new TreeMap<>();
+    for (Map.Entry<String, List<String>> e : map.entrySet()) {
+      List<String> list = e.getValue();
+      Collections.sort(list);
+      out.put(e.getKey(), String.join(",", list));
+    }
+    return out;
+  }
+
+  /**
+   * Нумерует изменившиеся стопки: триггеров на note_groups и note_members нет, изменения находятся
+   * сравнением с последним переданным состоянием (stack_sync). Зовётся перед отбором и приёмом.
+   */
+  void stampStacks() {
+    Map<String, String> current = stackState();
+    Map<String, Object[]> known = new TreeMap<>();
+    try (Cursor c = db().rawQuery("SELECT top,members,deleted FROM stack_sync", null)) {
+      while (c.moveToNext())
+        known.put(c.getString(0), new Object[] {c.getString(1), c.getInt(2) != 0});
+    }
+    for (Map.Entry<String, String> e : current.entrySet()) {
+      Object[] was = known.get(e.getKey());
+      if (was != null && !(Boolean) was[1] && was[0].equals(e.getValue())) continue;
+      long[] stamp = stampLocal();
+      db().execSQL(
+              "INSERT OR REPLACE INTO stack_sync(top,members,ts,seq,from_peer,deleted)"
+                  + " VALUES(?,?,?,?,'',0)",
+              new Object[] {e.getKey(), e.getValue(), stamp[0], stamp[1]});
+    }
+    for (Map.Entry<String, Object[]> e : known.entrySet()) {
+      if ((Boolean) e.getValue()[1] || current.containsKey(e.getKey())) continue;
+      long[] stamp = stampLocal();
+      db().execSQL(
+              "UPDATE stack_sync SET members='',ts=?,seq=?,from_peer='',deleted=1 WHERE top=?",
+              new Object[] {stamp[0], stamp[1], e.getKey()});
+    }
+  }
+
+  private void applyChats(String peer, List<SyncRecord> records, Stats stats) {
+    boolean stacks = false;
+    for (SyncRecord r : records) stacks |= r.isStack();
+    // Свои необработанные изменения стопок получают ts раньше чужих: правка «после» побеждает.
+    if (stacks) stampStacks();
+    for (SyncRecord r : records) if (r.isChat()) count(stats, applyChat(peer, r));
+    for (SyncRecord r : records) if (r.isMessage()) count(stats, applyMessage(peer, r));
+    for (SyncRecord r : records) if (r.isStack()) count(stats, applyStack(peer, r));
+  }
+
+  private static void count(Stats stats, boolean applied) {
+    if (applied) stats.applied++;
+    else stats.ignored++;
+  }
+
+  private boolean applyChat(String peer, SyncRecord r) {
+    SQLiteDatabase db = db();
+    long localId = -1, localTs = 0;
+    String localOrigin = null;
+    try (Cursor c =
+        db.rawQuery("SELECT id,sync_ts,origin FROM chats WHERE uid=?", new String[] {r.uid})) {
+      if (c.moveToFirst()) {
+        localId = c.getLong(0);
+        localTs = c.getLong(1);
+        localOrigin = c.getString(2);
+      }
+    }
+    if (r.deleted) {
+      if (localId >= 0) {
+        if (r.ts <= localTs) return false;
+        db.delete("chats", "id=?", new String[] {"" + localId}); // сообщения уходят каскадом
+        putTombstone("chat", r.uid, r.ts, peer);
+        return true;
+      }
+      if (tombstoneTs("chat", r.uid) < r.ts) {
+        putTombstone("chat", r.uid, r.ts, peer);
+        return true;
+      }
+      return false;
+    }
+    long tomb = tombstoneTs("chat", r.uid);
+    if (tomb != Long.MIN_VALUE) {
+      if (tomb >= r.ts) return false;
+      db.execSQL("DELETE FROM tombstones WHERE kind='chat' AND uid=?", new Object[] {r.uid});
+    }
+    ContentValues v = new ContentValues();
+    v.put("title", r.title.trim().isEmpty() ? "Чат" : r.title.trim());
+    v.put("created", r.created);
+    v.put("origin", ChatOrigin.fromRecord(r.origin, r.checkin, localOrigin));
+    // Заметка чата по uid; запись без поля (компьютер) свою привязку не трогает.
+    if (r.noteUid != null)
+      v.put("note", r.noteUid.isEmpty() ? 0 : Math.max(0, scalar("SELECT id FROM notes WHERE uid=?", r.noteUid)));
+    v.put("sync_ts", r.ts);
+    v.put("sync_from", peer);
+    if (localId >= 0) {
+      if (r.ts <= localTs) return false;
+      v.put("sync_seq", stampRemote(r.ts));
+      db.update("chats", v, "id=?", new String[] {"" + localId});
+    } else {
+      v.put("uid", r.uid);
+      v.put("sync_seq", stampRemote(r.ts));
+      db.insertOrThrow("chats", null, v);
+    }
+    return true;
+  }
+
+  private boolean applyMessage(String peer, SyncRecord r) {
+    SQLiteDatabase db = db();
+    long chat = r.chat.isEmpty() ? 0 : scalar("SELECT id FROM chats WHERE uid=?", r.chat);
+    // Чата нет (удалён или ещё не пришёл): сообщению некуда деться.
+    if (chat == 0 || r.uid.isEmpty() || !(r.role.equals("user") || r.role.equals("assistant")))
+      return false;
+    long localId = -1, localTs = 0;
+    try (Cursor c =
+        db.rawQuery("SELECT id,sync_ts FROM messages WHERE uid=?", new String[] {r.uid})) {
+      if (c.moveToFirst()) {
+        localId = c.getLong(0);
+        localTs = c.getLong(1);
+      }
+    }
+    if (localId >= 0 && r.ts <= localTs) return false;
+    ContentValues v = new ContentValues();
+    v.put("body", bodyIn(r.body));
+    v.put("sources", sourcesIn(r.sources));
+    v.put("draft", r.draft);
+    v.put("sync_ts", r.ts);
+    v.put("sync_from", peer);
+    v.put("sync_seq", stampRemote(r.ts));
+    if (localId >= 0) db.update("messages", v, "id=?", new String[] {"" + localId});
+    else {
+      v.put("uid", r.uid);
+      v.put("chat", chat);
+      v.put("role", r.role);
+      v.put("created", r.created);
+      db.insertOrThrow("messages", null, v);
+    }
+    return true;
+  }
+
+  private void putStack(String top, String members, long ts, String peer, boolean deleted) {
+    db().execSQL(
+            "INSERT OR REPLACE INTO stack_sync(top,members,ts,seq,from_peer,deleted)"
+                + " VALUES(?,?,?,?,?,?)",
+            new Object[] {top, members, ts, stampRemote(ts), peer, deleted ? 1 : 0});
+  }
+
+  private boolean applyStack(String peer, SyncRecord r) {
+    SQLiteDatabase db = db();
+    try (Cursor c = db.rawQuery("SELECT ts FROM stack_sync WHERE top=?", new String[] {r.uid})) {
+      if (c.moveToFirst() && r.ts <= c.getLong(0)) return false;
+    }
+    long top = noteId(r.uid);
+    if (r.deleted) {
+      if (top != 0) db.execSQL("DELETE FROM note_groups WHERE top=?", new Object[] {top});
+      putStack(r.uid, "", r.ts, peer, true);
+      return true;
+    }
+    if (top == 0) return false;
+    List<Long> members = new ArrayList<>();
+    for (String uid : r.members) {
+      long id = noteId(uid);
+      if (id != 0 && id != top && !members.contains(id)) members.add(id);
+    }
+    if (members.isEmpty()) return false;
+    // Как при создании стопки: исходные уходят из прежних стопок, а верхние заметки других стопок,
+    // попавшие в состав, становятся исходными.
+    long expanded = scalar("SELECT expanded FROM note_groups WHERE top=?", "" + top);
+    db.execSQL("DELETE FROM note_groups WHERE top=?", new Object[] {top});
+    db.execSQL("DELETE FROM note_members WHERE note=?", new Object[] {top});
+    for (long m : members) db.execSQL("DELETE FROM note_groups WHERE top=?", new Object[] {m});
+    db.execSQL("INSERT INTO note_groups(top,expanded) VALUES(?,?)", new Object[] {top, expanded});
+    for (long m : members)
+      db.execSQL("INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)", new Object[] {m, top});
+    db.execSQL(
+        "DELETE FROM note_groups WHERE NOT EXISTS(SELECT 1 FROM note_members m WHERE"
+            + " m.top=note_groups.top)");
+    String state = stackState().get(r.uid);
+    putStack(r.uid, state == null ? "" : state, r.ts, peer, false);
+    return true;
+  }
+
 }

@@ -74,10 +74,11 @@ public final class ChatRunner {
     usage = "";
     Context app = context.getApplicationContext();
     boolean local = LocalLlm.enabled(context);
-    boolean checkin = CheckInJob.isCheckInChat(context, chat);
     worker.execute(
         () -> {
           try (Store store = new Store(app, local)) {
+            // Чат начат помощником (вопрос «как дела»): помнит факты из ответов.
+            boolean checkin = ChatOrigin.AGENT.equals(store.chatOrigin(chat));
             JSONArray history = store.messages(chat);
             String stored = ChatImages.attach(query, ImageList.parse(image));
             String currentContent = stored;
@@ -98,6 +99,11 @@ public final class ChatRunner {
             if (fresh && image.equals(settings.getString("chatImage." + chat, "")))
               settings.edit().remove("chatImage." + chat).apply();
             changed();
+            long planNote = store.chatNote(chat);
+            if (planNote > 0) {
+              planReply(store, chat, planNote, key, model, query, history);
+              return;
+            }
             List<String> contents = new ArrayList<>();
             for (int i = 0; i < history.length(); i++)
               contents.add(history.getJSONObject(i).getString("content"));
@@ -132,6 +138,12 @@ public final class ChatRunner {
                 store.getWritableDatabase().endTransaction();
               }
               answer.usage = "Изображения проанализированы. Заметка сохранена.";
+            } else if (!checkin && chatImages.isEmpty() && CommandAnalysis.wantsDuplicates(query)) {
+              // Дубли ищем на устройстве: ни модель, ни облако, ни удаление записей.
+              answer = commandReply(store, key, model, query);
+            } else if (!local && !checkin && chatImages.isEmpty() && CommandAnalysis.wants(query)) {
+              // Команда получает отдельный строгий контракт. Даже валидный ответ — только черновик.
+              answer = commandReply(store, key, model, query);
             } else {
               // Диалог, начатый помощником: он продолжает расспрашивать по ситуации.
               String guidance = checkin ? CheckIn.followUp(local) : "";
@@ -182,8 +194,10 @@ public final class ChatRunner {
                       clean,
                       picked.isEmpty()
                           // Пачка напоминаний длиннее обычного ответа: блок не должен оборваться.
-                          ? (ReminderBatch.wants(query) ? Math.max(maxTokens, 3000) : maxTokens)
-                          : ChatImages.answerTokens(maxTokens),
+                          ? (ReminderBatch.wants(query)
+                              ? ManagerAnalysis.atLeast(maxTokens, 3000)
+                              : maxTokens)
+                          : maxTokens <= 0 ? maxTokens : ChatImages.answerTokens(maxTokens),
                       guidance,
                       parts,
                       picked.isEmpty() ? "" : ChatImages.questionHint());
@@ -208,7 +222,9 @@ public final class ChatRunner {
                       update.getLong("revision"),
                       update.getJSONObject("metadata"));
                 }
-                if (answer.draft != null && Polza.wantsNote(query)) {
+                if (answer.draft != null
+                    && !CommandDraft.isDraft(answer.draft)
+                    && Polza.wantsNote(query)) {
                   long id =
                       store.save(
                           0, answer.draft.getString("title"), answer.draft.getString("body"), 0);
@@ -249,6 +265,15 @@ public final class ChatRunner {
                     memoRef = id + ":" + revision;
                     answer.sources.put(new JSONObject().put("id", id).put("title", memoTitle));
                     answer.draft = null;
+                  }
+                }
+                if (answer.reminders != null && query.contains(ReminderBatch.REQUEST)) {
+                  // Запрос «напоминания по датам из заметки»: даты можно будет добавить в неё.
+                  var sourcePrefs = app.getSharedPreferences("settings", 0);
+                  long source = sourcePrefs.getLong("reminderSource", 0);
+                  if (source > 0) {
+                    answer.reminders.put("note", source);
+                    sourcePrefs.edit().remove("reminderSource").apply();
                   }
                 }
                 store.message(
@@ -303,5 +328,165 @@ public final class ChatRunner {
             changed();
           }
         });
+  }
+
+  /** Изменяющая команда: один запрос, строгий разбор и только сериализация предпросмотра. */
+  private static Polza.Answer commandReply(Store store, String key, String model, String query)
+      throws Exception {
+    long now = System.currentTimeMillis();
+    java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+    if (CommandAnalysis.wantsDuplicates(query)) return duplicatesReply(store, query, now);
+    List<Note> ranked = Retrieval.select(store.candidates(query), query, now, 24);
+    List<Note> selected = new ArrayList<>();
+    java.util.Set<Long> picked = new java.util.HashSet<>();
+    if (CommandAnalysis.clearsCompleted(query)) {
+      // Выполненные дела не должны потеряться из-за текстового рейтинга или старого срока.
+      for (Note note : store.notes())
+        if (selected.size() < 24 && (note.reminder > 0 || !note.reminderTimes.isEmpty())
+            && PlanTree.parse(store.plan(note.id)).completed() && picked.add(note.id)) selected.add(note);
+    }
+    for (Note note : ranked) if (selected.size() < 24 && picked.add(note.id)) selected.add(note);
+    List<CommandAnalysis.FolderInfo> folders = new ArrayList<>();
+    for (FolderStore.Folder folder : new FolderStore(store).list())
+      folders.add(new CommandAnalysis.FolderInfo(folder.id, folder.name));
+    AgentAction.Scope scope = new AgentAction.Scope(now, zone);
+    java.util.Set<Long> completed = new java.util.HashSet<>();
+    for (Note note : selected) {
+      scope.note(note.id, true);
+      if (PlanTree.parse(store.plan(note.id)).completed()) {
+        completed.add(note.id);
+        scope.completed(note.id);
+      }
+    }
+    JSONObject response = store.complete(key,
+        CommandAnalysis.payload(model, query, selected, folders, now, zone, completed));
+    CommandAnalysis.Reply reply;
+    try {
+      reply = CommandAnalysis.parse(CommandAnalysis.responseText(response), scope);
+    } catch (JSONException e) {
+      String detail = e.getMessage() == null ? "неизвестная ошибка JSON" : e.getMessage();
+      throw new java.io.IOException(
+          "Модель вернула неверный формат команды. Ничего не изменено."
+              + " Повторите запрос вручную или выберите другую модель.\n\nПричина: " + detail,
+          e);
+    }
+    Polza.Answer answer = new Polza.Answer();
+    answer.sources = new JSONArray();
+    String say = reply.say, question = reply.question;
+    answer.text =
+        question.isEmpty()
+            ? say
+            : say.isEmpty() ? question : say + "\n\n" + question;
+    CommandDraft draft =
+        CommandDraft.create(query, reply.actions, selected, folders, now, zone, reply.rejected);
+    if (!draft.actions.isEmpty()) {
+      answer.draft = draft.toJson();
+      if (answer.text.isEmpty()) answer.text = "Проверьте предложенные изменения.";
+    } else if (question.isEmpty()) {
+      // Не показываем «Создаю»/«Перемещаю», если проверка не нашла действия для предпросмотра.
+      answer.text = reply.rejected > 0
+          ? "Модель предложила только недопустимые действия (" + reply.rejected
+              + "). Ничего не изменено. Повторите команду или выберите другую модель."
+          : "Модель не подготовила действия для предпросмотра. Ничего не изменено."
+              + " Повторите команду или уточните её.";
+    }
+    StringBuilder used = new StringBuilder("Команда · предпросмотр без изменений");
+    JSONObject tokens = response.optJSONObject("usage");
+    if (tokens != null && tokens.has("total_tokens"))
+      used.append(" · ").append(tokens.optInt("total_tokens")).append(" токенов");
+    if (tokens != null && tokens.has("cost_rub"))
+      used.append(" · ").append(tokens.optString("cost_rub")).append(" ₽");
+    answer.usage = used.toString();
+    return answer;
+  }
+
+  private static Polza.Answer duplicatesReply(Store store, String query, long now) throws JSONException {
+    int days = CommandAnalysis.duplicateDays(query);
+    DuplicateFinder.Report report = DuplicateFinder.find(store.notes(), now, days);
+    Polza.Answer answer = new Polza.Answer();
+    answer.sources = new JSONArray();
+    StringBuilder text = new StringBuilder();
+    if (report.groups.isEmpty()) {
+      text.append("За последние ").append(days).append(" дней дублей не найдено.");
+    } else {
+      text.append("За последние ").append(days).append(" дней найдено групп дублей: ")
+          .append(report.groups.size()).append(". Ничего не удалено.");
+      java.util.Set<Long> sources = new java.util.HashSet<>();
+      int number = 0;
+      for (List<Note> group : report.groups) {
+        text.append("\n\nГруппа ").append(++number).append(':');
+        for (Note note : group) {
+          text.append("\n• ").append(note.title).append(" [[note:").append(note.id).append("]] ");
+          if (sources.add(note.id))
+            answer.sources.put(new JSONObject().put("id", note.id).put("title", note.title));
+        }
+      }
+    }
+    if (report.truncated) text.append("\n\nПроверены 300 самых новых заметок периода.");
+    answer.text = text.toString();
+    answer.usage = "Локальный поиск дублей · без изменений";
+    return answer;
+  }
+
+  /**
+   * Ответ в чате по заметке (docs/AGENT-PLANNER.md, 2.5): агент видит свежий текст заметки и её
+   * план, задаёт вопрос с вариантами или присылает план. План не записывается сам — он ложится в
+   * черновик сообщения, сохраняет его пользователь кнопкой.
+   */
+  private static void planReply(
+      Store store, long chat, long noteId, String key, String model, String query, JSONArray history)
+      throws Exception {
+    Note note = store.note(noteId);
+    if (note == null) throw new java.io.IOException("Заметка этого чата удалена.");
+    java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+    PlanTree current = PlanTree.parse(store.plan(noteId));
+    JSONArray past = new JSONArray();
+    for (int i = 0; i < history.length(); i++) {
+      JSONObject h = history.getJSONObject(i);
+      past.put(
+          new JSONObject()
+              .put("role", h.getString("role"))
+              .put("content", ChatImages.split(h.getString("content")).text));
+    }
+    JSONObject payload =
+        PlanChat.payload(
+            model,
+            note.title,
+            note.body,
+            current,
+            new ManagerStore(store).noteAnswers(noteId),
+            past,
+            query,
+            System.currentTimeMillis(),
+            zone);
+    JSONObject response = store.complete(key, payload);
+    JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
+    String text = choice.getJSONObject("message").optString("content", "");
+    if (text.trim().isEmpty())
+      throw new java.io.IOException("Модель вернула пустой ответ. Попробуйте ещё раз.");
+    if ("length".equals(choice.optString("finish_reason")) && !text.trim().endsWith("}"))
+      throw new java.io.IOException(
+          "Ответ модели оборвался. Попросите план короче или выберите другую модель.");
+    PlanChat.Reply reply = PlanChat.parse(text, zone, System.currentTimeMillis());
+    JSONObject draft = null;
+    // План и правка заметки не применяются сами: они ложатся в черновик, применяет пользователь.
+    if (reply.plan != null || reply.edit != null) {
+      draft = new JSONObject().put("note", noteId);
+      if (reply.plan != null) {
+        reply.plan.keepDone(current);
+        draft.put("plan", reply.plan.toJson());
+      }
+      if (reply.edit != null) draft.put("edit", reply.edit.toJson());
+    }
+    if (!store.chatExists(chat)) return;
+    store.message(chat, "assistant", PlanChat.store(reply), new JSONArray(), draft);
+    StringBuilder used = new StringBuilder(store.localMode() ? "Локальная модель" : "Чат по заметке");
+    JSONObject tokens = response.optJSONObject("usage");
+    if (tokens != null && tokens.has("total_tokens"))
+      used.append(" · ").append(tokens.optInt("total_tokens")).append(" токенов");
+    if (tokens != null && tokens.has("cost_rub"))
+      used.append(" · ").append(tokens.optString("cost_rub")).append(" ₽");
+    usage = used.toString();
+    usageChat = chat;
   }
 }
