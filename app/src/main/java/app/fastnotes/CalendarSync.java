@@ -15,10 +15,8 @@ import android.provider.CalendarContract.Events;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -103,20 +101,10 @@ public final class CalendarSync {
       try (Store store = new Store(c)) {
         notes = store.notes();
       }
-      Map<Long, Note> byId = new HashMap<>();
-      for (Note n : notes) byId.put(n.id, n);
       SharedPreferences remembered = c.getSharedPreferences(KNOWN, 0);
-      Map<Long, String> known = new HashMap<>();
-      for (Map.Entry<String, ?> e : remembered.getAll().entrySet()) {
-        if (!e.getKey().startsWith("n.") || !(e.getValue() instanceof String)) continue;
-        try {
-          known.put(Long.parseLong(e.getKey().substring(2)), (String) e.getValue());
-        } catch (NumberFormatException ignored) {
-          // Чужой ключ: пропускаем.
-        }
-      }
       CalendarSyncPlan.Plan plan =
-          CalendarSyncPlan.plan(notes, events(resolver, calendar), known, System.currentTimeMillis());
+          CalendarSyncPlan.plan(
+              notes, events(resolver, calendar), remembered.getAll(), System.currentTimeMillis());
       SharedPreferences.Editor memory = remembered.edit();
       int added = 0, updated = 0, removed = 0, failed = 0;
       for (CalendarSyncPlan.Action action : plan.actions) {
@@ -127,10 +115,7 @@ public final class CalendarSync {
             removed++;
             continue;
           }
-          Note n = byId.get(action.noteId);
-          CalendarLink link = n == null ? null : CalendarLink.of(n.title, n.body, n.reminder, n.repeat);
-          if (link == null) continue;
-          ContentValues values = eventValues(calendar, action, link);
+          ContentValues values = eventValues(calendar, action);
           if (action.kind == CalendarSyncPlan.Kind.INSERT) {
             if (resolver.insert(asAdapter(c, Events.CONTENT_URI), values) == null) {
               failed++;
@@ -138,19 +123,24 @@ public final class CalendarSync {
             }
             added++;
           } else {
-            resolver.update(
+            int changed = resolver.update(
                 ContentUris.withAppendedId(asAdapter(c, Events.CONTENT_URI), action.eventId),
                 values,
                 null,
                 null);
+            if (changed == 0) {
+              failed++;
+              continue;
+            }
             updated++;
           }
-          memory.putString("n." + action.noteId, action.signature);
+          memory.putString(CalendarSyncPlan.memoryKey(action.syncId), action.signature);
         } catch (RuntimeException e) {
           failed++;
         }
       }
-      for (Long id : plan.forget) memory.remove("n." + id);
+      plan.remember.forEach(memory::putString);
+      for (String key : plan.forget) memory.remove(key);
       memory.apply();
       if (added + updated + removed + failed > 0 || status(c).isEmpty() || !status(c).startsWith("Синхронизировано")) {
         String time = new SimpleDateFormat("d MMM, HH:mm", new Locale("ru")).format(new Date());
@@ -168,8 +158,8 @@ public final class CalendarSync {
     }
   }
 
-  private static ContentValues eventValues(
-      long calendar, CalendarSyncPlan.Action action, CalendarLink link) {
+  private static ContentValues eventValues(long calendar, CalendarSyncPlan.Action action) {
+    CalendarLink link = action.link;
     ContentValues v = new ContentValues();
     v.put(Events.CALENDAR_ID, calendar);
     v.put(Events.TITLE, link.title);
@@ -188,7 +178,7 @@ public final class CalendarSync {
       v.putNull(Events.RRULE);
       v.putNull(Events.DURATION);
     }
-    v.put(Events._SYNC_ID, CalendarSyncPlan.syncId(action.noteId));
+    v.put(Events._SYNC_ID, action.syncId);
     v.put(Events.SYNC_DATA1, action.signature);
     return v;
   }
@@ -227,16 +217,15 @@ public final class CalendarSync {
     try (Cursor cursor =
         resolver.query(
             Events.CONTENT_URI,
-            new String[] {Events._ID, Events._SYNC_ID, Events.SYNC_DATA1},
+            new String[] {Events._ID, Events._SYNC_ID, Events.SYNC_DATA1, Events.DTSTART},
             Events.CALENDAR_ID + "=? AND " + Events.DELETED + "=0",
             new String[] {String.valueOf(calendar)},
             null)) {
-      while (cursor != null && cursor.moveToNext())
-        out.add(
-            new CalendarSyncPlan.Event(
-                cursor.getLong(0),
-                CalendarSyncPlan.noteIdOf(cursor.getString(1)),
-                cursor.getString(2)));
+      if (cursor == null) throw new IllegalStateException("Calendar query returned no cursor");
+      while (cursor.moveToNext()) {
+        out.add(new CalendarSyncPlan.Event(
+            cursor.getLong(0), cursor.getString(1), cursor.getString(2), cursor.getLong(3)));
+      }
     }
     return out;
   }

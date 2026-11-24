@@ -2,6 +2,13 @@ const fs = require('node:fs');
 const { DatabaseSync } = require('node:sqlite');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('app/src/main/java/app/fastnotes/ManagerStore.java','utf8');
+const literalSql = body => [...body.matchAll(/"(?:\\.|[^"\\])*"/g)].map(s => JSON.parse(s[0])).join('');
+const queryOf = (src, prefix) => {
+  const found = [...src.matchAll(/(?:rawQuery|execSQL)\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+)[,)]/g)]
+    .map(x => literalSql(x[1])).find(sql => sql.startsWith(prefix));
+  if (!found) throw Error('SQL missing: ' + prefix);
+  return found;
+};
 const ddl = [...source.matchAll(/db\.execSQL\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+)\);/g)]
   .map(x=>[...x[1].matchAll(/"(?:\\.|[^"\\])*"/g)].map(s=>JSON.parse(s[0])).join(''))
   .filter(sql=>sql.startsWith('CREATE TABLE'));
@@ -51,22 +58,33 @@ db.exec('ROLLBACK');
 check(!db.prepare('SELECT id FROM notes WHERE id=99').get(),'Rolled-back acceptance leaves no summary');
 check(db.prepare('SELECT count(*) n FROM note_groups').get().n===0,'Rolled-back acceptance leaves no group');
 const storeSource=fs.readFileSync('app/src/main/java/app/fastnotes/Store.java','utf8');
-const pendingSql=[...storeSource.matchAll(/\.rawQuery\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+),/g)]
-  .map(x=>[...x[1].matchAll(/"(?:\\.|[^"\\])*"/g)].map(s=>JSON.parse(s[0])).join(''))
-  .find(sql=>sql.startsWith('SELECT * FROM notes WHERE ai_checked<>updated'));
-check(!!pendingSql,'Production pending analysis SQL extracted');
+const pendingMethod = storeSource
+  .slice(storeSource.indexOf('public List<Note> pendingAnalysis()'), storeSource.indexOf('public boolean claimAnalysis('))
+  .replace(/^[ \t]*\/\/[^\r\n]*/gm, '');
+const attentionBranch = /\(attentionEnabled\(\)\s*\?\s*("(?:\\.|[^"\\])*")\s*:\s*("(?:\\.|[^"\\])*")\s*\)/;
+const pendingSql = enabled => queryOf(
+  pendingMethod.replace(attentionBranch, enabled ? '$1' : '$2'),
+  'SELECT * FROM notes WHERE ai_checked<>updated');
 db.exec('ALTER TABLE notes ADD COLUMN ai_checked INTEGER DEFAULT 0');
 db.exec('ALTER TABLE notes ADD COLUMN updated INTEGER DEFAULT 1');
 db.exec('ALTER TABLE notes ADD COLUMN created INTEGER DEFAULT 1');
 db.exec('ALTER TABLE notes ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0');
+db.exec(queryOf(storeSource, 'ALTER TABLE notes ADD COLUMN attention '));
+const pending = db.prepare(pendingSql(false));
+const pendingWithAttention = db.prepare(pendingSql(true));
 for(let id=45;id<=48;id++) db.prepare('INSERT INTO notes(id,title,body,created) VALUES(?,?,?,100)').run(id,'Авто','Текст');
 db.exec('INSERT INTO note_groups(top) VALUES(47)');
 db.exec('INSERT INTO note_members(note,top) VALUES(45,47),(46,47)');
-let candidates=db.prepare(pendingSql).all().map(n=>n.id);
+let candidates=pending.all().map(n=>n.id);
 check(candidates.includes(48) && !candidates.some(id=>[45,46,47].includes(id)),'Standalone note eligible, whole stack excluded');
 db.exec('UPDATE notes SET trashed=5 WHERE id=48');
-check(!db.prepare(pendingSql).all().some(n=>n.id===48),'Note in trash is not analysed');
+check(!pending.all().some(n=>n.id===48),'Note in trash is not analysed');
 db.exec('UPDATE notes SET trashed=0 WHERE id=48');
+db.exec('UPDATE notes SET attention=0 WHERE id=48');
+check(pending.all().some(n=>n.id===48), 'A zero score is eligible when attention is disabled');
+check(!pendingWithAttention.all().some(n=>n.id===48), 'A zero score is excluded when attention is enabled');
+db.exec('UPDATE notes SET attention=2 WHERE id=48');
+check(pendingWithAttention.all().some(n=>n.id===48), 'A positive score is eligible when attention is enabled');
 // ManagerStore.topMap/membersMap (список читает стопки одним проходом) совпадают с top()/members() по заметке.
 const topOne=id=>{const r=db.prepare('SELECT top FROM note_groups WHERE top=? UNION SELECT top FROM note_members WHERE note=?').get(id,id);return r?r.top:0;};
 const topMap=new Map();
@@ -78,10 +96,10 @@ for(const r of db.prepare('SELECT top, note FROM note_members ORDER BY top, note
 check(JSON.stringify(membersMap.get(47))===JSON.stringify(db.prepare('SELECT note FROM note_members WHERE top=? ORDER BY note').all(47).map(r=>r.note)) && !membersMap.has(48),'membersMap matches per-top members()');
 db.exec('UPDATE note_groups SET expanded=1 WHERE top=47');
 db.exec('UPDATE notes SET updated=2 WHERE id IN (45,47)');
-candidates=db.prepare(pendingSql).all().map(n=>n.id);
+candidates=pending.all().map(n=>n.id);
 check(!candidates.some(id=>[45,46,47].includes(id)),'Expanded and edited stack remains excluded');
 db.exec('DELETE FROM notes WHERE id=47');
-candidates=db.prepare(pendingSql).all().map(n=>n.id);
+candidates=pending.all().map(n=>n.id);
 check(candidates.includes(45) && candidates.includes(46),'Deleting top makes released standalone notes eligible');
 // Экран корзины (Store.trashed): исходные колоды, удалённой целиком, не показываются отдельно.
 const trashSql=[...storeSource.matchAll(/\.rawQuery\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+),/g)]
@@ -96,13 +114,6 @@ db.exec('UPDATE notes SET trashed=0 WHERE id=60');
 check(db.prepare(trashSql).all().map(n=>n.id).sort().join()==='61,62','Member of a restored top is listed on its own');
 // Этап 5 (SQLite 17): класс заметки в manager_review, чаты помощника и чат по заметке.
 {
-  const literalSql = body => [...body.matchAll(/"(?:\\.|[^"\\])*"/g)].map(s => JSON.parse(s[0])).join('');
-  const queryOf = (src, prefix) => {
-    const found = [...src.matchAll(/(?:rawQuery|execSQL)\(\s*((?:"(?:\\.|[^"\\])*"\s*\+?\s*)+)[,)]/g)]
-      .map(x => literalSql(x[1])).find(sql => sql.startsWith(prefix));
-    if (!found) throw Error('SQL missing: ' + prefix);
-    return found;
-  };
   const alter = queryOf(storeSource, 'ALTER TABLE manager_review ADD COLUMN kind');
   db.exec(alter);
   db.exec("INSERT INTO notes(id,title,body) VALUES(70,'Выезд','x'),(71,'Код','1234')");
@@ -122,7 +133,8 @@ check(db.prepare(trashSql).all().map(n=>n.id).sort().join()==='61,62','Member of
   check(!db.prepare(queryOf(storeSource, 'SELECT id FROM chats WHERE note=?')).get(70), 'Progress chat is never the note chat');
   const today = queryOf(storeSource, "SELECT count(*) FROM chats WHERE origin='agent'");
   check(db.prepare(today).get(1500)['count(*)'] === 1 && db.prepare(today).get(0)['count(*)'] === 2, 'Agent chats counted since day start');
-  check(/oldV < 17\)\s*addTaskKinds\(db\)/.test(storeSource) && /addTaskKinds\(db\);\s*addSemanticIndex\(db\);\s*\}/.test(storeSource), 'Upgrade 16 -> 17 and fresh install add kinds');
+  const onCreate = storeSource.slice(storeSource.indexOf('public void onCreate('), storeSource.indexOf('public void onUpgrade('));
+  check(/oldV < 17\)\s*addTaskKinds\(db\)/.test(storeSource) && onCreate.includes('addTaskKinds(db);'), 'Upgrade 16 -> 17 and fresh install add kinds');
 }
 db.close();
 console.log(`PASS: ${checks} manager SQLite checks (production migration SQL)`);
