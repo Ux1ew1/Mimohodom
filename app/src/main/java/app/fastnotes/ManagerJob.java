@@ -68,6 +68,9 @@ final class ManagerJob {
             ? ReviewAnalysis.payload(
                 batch, model, System.currentTimeMillis(), ZoneId.systemDefault())
             : ManagerAnalysis.payload(batch, model);
+    Set<Long> planned = new HashSet<>();
+    for (Note n : batch) if (!store.plan(n.id).isEmpty()) planned.add(n.id);
+    ManagerAnalysis.withPlanPresence(payload, planned);
     // Модель видит состав колод: что уже сгруппировано, туда можно добавлять по теме (extend).
     List<Long> stackIds = new ArrayList<>();
     for (Note top : stacks) stackIds.add(top.id);
@@ -110,20 +113,22 @@ final class ManagerJob {
     // Класс каждой записи (info/simple/event/complex) приходит в том же ответе, без запроса.
     Set<Long> batchIds = new HashSet<>();
     for (Note n : batch) batchIds.add(n.id);
-    Map<Long, String> kinds =
-        TaskKind.parse(
-            response
-                .getJSONArray("choices")
-                .getJSONObject(0)
-                .getJSONObject("message")
-                .optString("content", ""),
-            batchIds);
+    String raw = response.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+        .optString("content", "");
+    Map<Long, String> kinds = TaskKind.parse(raw, batchIds);
+    JSONObject planning;
+    try {
+      planning = new JSONObject(AgentPlan.unwrap(raw)).optJSONObject("planning");
+    } catch (org.json.JSONException e) {
+      planning = null;
+    }
+    if (planning == null) planning = new JSONObject();
     proposals = TopicSelection.proposals(batch, proposals);
     for (JSONObject p : proposals) ManagerStore.attachGroups(p, groupSnapshot);
     synchronized (lock) {
       if (!enabled.getAsBoolean()) return;
       ManagerStore.ReviewOutcome outcome =
-          manager.finishReview(runId, batch, proposals, results, kinds);
+          manager.finishReview(runId, batch, proposals, results, kinds, planning);
       int merges = 0;
       for (JSONObject p : manager.pending()) if (p.optString("type").equals("merge")) merges++;
       int failed = manager.failedCount();

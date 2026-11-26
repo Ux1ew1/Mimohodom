@@ -56,6 +56,7 @@ pub struct Folder {
     pub key: String,
     pub created: i64,
     pub auto: bool,
+    pub incognito: bool,
     pub notes: i64,
     pub sync_ts: i64,
     pub sync_seq: i64,
@@ -179,7 +180,7 @@ fn read_note(r: &Row) -> rusqlite::Result<Note> {
     })
 }
 
-const FOLDER_COLS: &str = "f.id,f.uid,f.name,f.key,f.created,f.auto,(SELECT count(*) FROM notes n WHERE n.folder=f.id),f.sync_ts,f.sync_seq";
+const FOLDER_COLS: &str = "f.id,f.uid,f.name,f.key,f.created,f.auto,(SELECT count(*) FROM notes n WHERE n.folder=f.id),f.sync_ts,f.sync_seq,f.incognito";
 
 fn read_folder(r: &Row) -> rusqlite::Result<Folder> {
     Ok(Folder {
@@ -192,6 +193,7 @@ fn read_folder(r: &Row) -> rusqlite::Result<Folder> {
         notes: r.get(6)?,
         sync_ts: r.get(7)?,
         sync_seq: r.get(8)?,
+        incognito: r.get::<_, i64>(9)? != 0,
     })
 }
 
@@ -330,6 +332,15 @@ impl Store {
             )?;
             self.conn.execute_batch(CHAT_TRIGGERS)?;
             self.conn.execute_batch("PRAGMA user_version=4;")?;
+            tx.commit()?;
+        }
+        if version < 5 {
+            let tx = self.conn.unchecked_transaction()?;
+            self.conn.execute_batch(
+                "ALTER TABLE folders ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE chats ADD COLUMN linked_note_uid TEXT NOT NULL DEFAULT '';
+                 PRAGMA user_version=5;",
+            )?;
             tx.commit()?;
         }
         Ok(())
@@ -640,10 +651,12 @@ impl Store {
     /// Заметки-кандидаты для ответа ИИ (порт `Store.candidates`).
     pub fn candidates(&self, query: &str, now: i64) -> Result<Vec<Note>> {
         let mut result = self.notes(query, None)?;
+        let incognito = self.incognito_folders()?;
+        result.retain(|n| !incognito.contains(&n.folder));
         let mut ids: std::collections::HashSet<i64> = result.iter().map(|n| n.id).collect();
         let q = policy::normalize(query);
         if q.contains("ближайш") || q.contains("напомин") || q.contains("сегодня") || q.contains("завтра") {
-            let mut st = self.conn.prepare(&format!("SELECT {} FROM notes WHERE reminder>=?1 ORDER BY reminder LIMIT 16", NOTE_COLS))?;
+            let mut st = self.conn.prepare(&format!("SELECT {} FROM notes WHERE reminder>=?1 AND folder NOT IN (SELECT id FROM folders WHERE incognito=1) ORDER BY reminder LIMIT 16", NOTE_COLS))?;
             for n in st.query_map(params![now], read_note)? {
                 let n = n?;
                 if ids.insert(n.id) {
@@ -652,7 +665,7 @@ impl Store {
             }
         }
         if result.is_empty() {
-            let mut st = self.conn.prepare(&format!("SELECT {} FROM notes ORDER BY updated DESC LIMIT 24", NOTE_COLS))?;
+            let mut st = self.conn.prepare(&format!("SELECT {} FROM notes WHERE folder NOT IN (SELECT id FROM folders WHERE incognito=1) ORDER BY updated DESC LIMIT 24", NOTE_COLS))?;
             for n in st.query_map([], read_note)? {
                 result.push(n?);
             }
@@ -660,14 +673,30 @@ impl Store {
         Ok(result)
     }
 
+    fn incognito_folders(&self) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM folders WHERE incognito=1")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn ai_allowed(&self, note: i64) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM notes n LEFT JOIN folders f ON n.folder=f.id
+               WHERE n.id=?1 AND coalesce(f.incognito,0)=0)",
+            params![note], |row| row.get(0),
+        )?)
+    }
+
     /// Отпечаток всех заметок для ключа кеша ответов: любая правка делает старый ответ негодным.
     pub fn revision(&self) -> Result<String> {
         let mut h = Sha256::new();
-        let mut st = self.conn.prepare("SELECT id,updated,metadata FROM notes ORDER BY id")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        let mut st = self.conn.prepare("SELECT n.id,n.updated,n.metadata,n.folder,coalesce(f.incognito,0)
+            FROM notes n LEFT JOIN folders f ON f.id=n.folder ORDER BY n.id")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?,
+            r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?)))?;
         for r in rows {
-            let (id, updated, meta) = r?;
-            h.update(format!("{}:{}:{};", id, updated, meta).as_bytes());
+            let (id, updated, meta, folder, incognito) = r?;
+            h.update(format!("{}:{}:{}:{}:{};", id, updated, meta, folder, incognito).as_bytes());
         }
         Ok(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
     }
@@ -1145,6 +1174,8 @@ mod tests {
                  DROP INDEX chats_seq; DROP INDEX messages_seq; DROP TABLE stack_sync;
                  ALTER TABLE chats DROP COLUMN uid; ALTER TABLE chats DROP COLUMN sync_ts;
                  ALTER TABLE chats DROP COLUMN sync_seq; ALTER TABLE chats DROP COLUMN sync_from;
+                 ALTER TABLE chats DROP COLUMN linked_note_uid;
+                 ALTER TABLE folders DROP COLUMN incognito;
                  ALTER TABLE messages DROP COLUMN uid; ALTER TABLE messages DROP COLUMN sync_ts;
                  ALTER TABLE messages DROP COLUMN sync_seq; ALTER TABLE messages DROP COLUMN sync_from;
                  PRAGMA user_version=3;
@@ -1168,7 +1199,7 @@ mod tests {
         assert!(seqs.iter().all(|q| *q > seq_before));
         assert_eq!(s.current_seq().unwrap(), *seqs.iter().max().unwrap());
         let version: i64 = s.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         // новая строка после миграции нумеруется триггером
         let c = s.new_chat("Новый").unwrap();
         let (uid, seq): (String, i64) = s.conn.query_row("SELECT uid,sync_seq FROM chats WHERE id=?1", params![c], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();

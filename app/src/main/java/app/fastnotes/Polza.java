@@ -411,14 +411,14 @@ public final class Polza {
     }
     Answer answer = new Answer();
     answer.cached = cached != null;
-    answer.text =
+    Object content =
         response
             .getJSONArray("choices")
             .getJSONObject(0)
             .getJSONObject("message")
-            .optString("content", "")
-            .trim();
-    if (answer.text.isEmpty())
+            .opt("content");
+    answer.text = content instanceof String value ? value.trim() : "";
+    if (answer.text.isEmpty() || "null".equalsIgnoreCase(answer.text))
       throw new IOException("Модель вернула пустой ответ. Попробуйте другую модель.");
     answer.draft = noteDraft(answer.text);
     ReminderBatch.Result batch =

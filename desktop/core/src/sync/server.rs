@@ -185,6 +185,7 @@ fn handle(app: Arc<App>, mut req: tiny_http::Request) {
         *app.sync.pending.lock().unwrap() = None;
     }
     let out: Result<Vec<u8>> = match url.as_str() {
+        "/v1/incognito" => Ok(b"{}".to_vec()),
         "/v1/sync" => handle_sync(&app, &device, &v),
         "/v1/blob/get" => handle_blob_get(&app, &v),
         "/v1/blob/put" => handle_blob_put(&app, &v),

@@ -32,6 +32,7 @@ public final class SyncRecord {
   // папка
   public String name = "", key = "";
   public boolean auto;
+  public Boolean incognito;
   // чат (title и created общие с заметкой) и сообщение (body и created общие)
   public boolean checkin;
   /**
@@ -79,7 +80,8 @@ public final class SyncRecord {
       if (deleted) return o.put("deleted", true);
       o.put("deleted", false);
       if (isFolder())
-        return o.put("name", name).put("key", key).put("created", created).put("auto", auto);
+        return o.put("name", name).put("key", key).put("created", created).put("auto", auto)
+            .put("incognito", incognito);
       if (isChat())
         return o.put("title", title)
             .put("created", created)
@@ -143,6 +145,7 @@ public final class SyncRecord {
     r.name = o.optString("name", "");
     r.key = o.optString("key", "");
     r.auto = o.optBoolean("auto", false);
+    if (!o.isNull("incognito")) r.incognito = o.optBoolean("incognito");
     r.checkin = o.optBoolean("checkin", false);
     if ("chat".equals(r.kind)) {
       r.origin = o.has("origin") ? o.optString("origin", "") : null;

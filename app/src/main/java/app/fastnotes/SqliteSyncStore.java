@@ -236,7 +236,7 @@ public final class SqliteSyncStore implements SyncStore {
         allFolders ? "" : " WHERE sync_seq>? AND sync_seq<=? AND sync_from<>?";
     String[] args = allFolders ? null : new String[] {"" + since, "" + snapshot, exclude};
     try (Cursor c =
-        db().rawQuery("SELECT uid,name,key,created,auto,sync_ts FROM folders" + where, args)) {
+        db().rawQuery("SELECT uid,name,key,created,auto,sync_ts,incognito FROM folders" + where, args)) {
       while (c.moveToNext()) {
         SyncRecord r = new SyncRecord();
         r.kind = "folder";
@@ -246,6 +246,7 @@ public final class SqliteSyncStore implements SyncStore {
         r.created = c.getLong(3);
         r.auto = c.getInt(4) == 1;
         r.ts = c.getLong(5);
+        r.incognito = c.getInt(6) != 0;
         batch.records.add(r);
       }
     }
@@ -356,8 +357,10 @@ public final class SqliteSyncStore implements SyncStore {
     if (localId >= 0) {
       if (r.ts <= localTs) return false;
       db.execSQL(
-          "UPDATE folders SET name=?,key=?,auto=?,sync_ts=?,sync_seq=?,sync_from=? WHERE id=?",
-          new Object[] {name, key, r.auto ? 1 : 0, r.ts, seq, peer, localId});
+          "UPDATE folders SET name=?,key=?,auto=?,incognito=coalesce(?,incognito),"
+              + "sync_ts=?,sync_seq=?,sync_from=? WHERE id=?",
+          new Object[] {name, key, r.auto ? 1 : 0, r.incognito == null ? null
+              : Boolean.TRUE.equals(r.incognito) ? 1 : 0, r.ts, seq, peer, localId});
     } else {
       ContentValues v = new ContentValues();
       v.put("uid", r.uid);
@@ -365,6 +368,7 @@ public final class SqliteSyncStore implements SyncStore {
       v.put("key", key);
       v.put("created", r.created);
       v.put("auto", r.auto ? 1 : 0);
+      v.put("incognito", Boolean.TRUE.equals(r.incognito) ? 1 : 0);
       v.put("sync_ts", r.ts);
       v.put("sync_seq", seq);
       v.put("sync_from", peer);
@@ -517,7 +521,8 @@ public final class SqliteSyncStore implements SyncStore {
       for (int i = 0; i < list.length(); i++) {
         JSONObject s = list.getJSONObject(i);
         String uid = noteUid("" + s.optLong("id", 0));
-        if (!uid.isEmpty()) out.put(new JSONObject().put("uid", uid).put("title", s.optString("title")));
+        if (!uid.isEmpty()) out.put(new JSONObject().put("uid", uid)
+            .put("title", s.optString("title")).put("contextOnly", s.optBoolean("contextOnly")));
       }
     } catch (JSONException ignored) {
     }
@@ -531,7 +536,8 @@ public final class SqliteSyncStore implements SyncStore {
         JSONObject s = list.optJSONObject(i);
         if (s == null) continue;
         long id = noteId(s.optString("uid"));
-        if (id != 0) out.put(new JSONObject().put("id", id).put("title", s.optString("title")));
+        if (id != 0) out.put(new JSONObject().put("id", id)
+            .put("title", s.optString("title")).put("contextOnly", s.optBoolean("contextOnly")));
       }
     } catch (JSONException ignored) {
     }

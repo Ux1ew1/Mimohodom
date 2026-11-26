@@ -62,17 +62,25 @@ const pendingMethod = storeSource
   .slice(storeSource.indexOf('public List<Note> pendingAnalysis()'), storeSource.indexOf('public boolean claimAnalysis('))
   .replace(/^[ \t]*\/\/[^\r\n]*/gm, '');
 const attentionBranch = /\(attentionEnabled\(\)\s*\?\s*("(?:\\.|[^"\\])*")\s*:\s*("(?:\\.|[^"\\])*")\s*\)/;
+const folderFilter = storeSource.match(/AI_FOLDER_FILTER\s*=\s*("(?:\\.|[^"\\])*")/)?.[1];
+check(!!folderFilter, 'Production incognito filter extracted');
 const pendingSql = enabled => queryOf(
-  pendingMethod.replace(attentionBranch, enabled ? '$1' : '$2'),
+  pendingMethod.replace('AI_FOLDER_FILTER', folderFilter).replace(attentionBranch, enabled ? '$1' : '$2'),
   'SELECT * FROM notes WHERE ai_checked<>updated');
 db.exec('ALTER TABLE notes ADD COLUMN ai_checked INTEGER DEFAULT 0');
 db.exec('ALTER TABLE notes ADD COLUMN updated INTEGER DEFAULT 1');
 db.exec('ALTER TABLE notes ADD COLUMN created INTEGER DEFAULT 1');
 db.exec('ALTER TABLE notes ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0');
 db.exec(queryOf(storeSource, 'ALTER TABLE notes ADD COLUMN attention '));
+db.exec(queryOf(storeSource, 'ALTER TABLE notes ADD COLUMN folder '));
+db.exec(queryOf(storeSource, 'CREATE TABLE IF NOT EXISTS folders('));
+db.exec(queryOf(storeSource, 'ALTER TABLE folders ADD COLUMN incognito '));
 const pending = db.prepare(pendingSql(false));
 const pendingWithAttention = db.prepare(pendingSql(true));
 for(let id=45;id<=48;id++) db.prepare('INSERT INTO notes(id,title,body,created) VALUES(?,?,?,100)').run(id,'Авто','Текст');
+db.exec("INSERT INTO folders(id,name,key,created,incognito) VALUES(1,'Личное','личное',100,1)");
+db.exec("INSERT INTO notes(id,title,created,folder) VALUES(49,'Личное',100,1)");
+check(!pending.all().some(n=>n.id===49), 'Incognito folder is excluded from background analysis');
 db.exec('INSERT INTO note_groups(top) VALUES(47)');
 db.exec('INSERT INTO note_members(note,top) VALUES(45,47),(46,47)');
 let candidates=pending.all().map(n=>n.id);

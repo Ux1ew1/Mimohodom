@@ -8,22 +8,26 @@ import org.json.JSONArray;
 
 /** Run on a disposable emulator: creates and removes its own records only. */
 public final class SmokeInstrumentation extends Instrumentation {
-  private boolean importOnly, commandOnly;
+  private boolean importOnly, commandOnly, globalSortOnly;
 
   @Override
   public void onCreate(Bundle args) {
     super.onCreate(args);
     importOnly = "true".equals(args.getString("importOnly"));
     commandOnly = "true".equals(args.getString("commandOnly"));
+    globalSortOnly = "true".equals(args.getString("globalSortOnly"));
     start();
   }
 
   @Override
   public void onStart() {
     Bundle result = new Bundle();
-    if (importOnly || commandOnly) {
+    if (importOnly || commandOnly || globalSortOnly) {
       try {
-        if (commandOnly) {
+        if (globalSortOnly) {
+          GlobalSortStorageTest.run(getTargetContext());
+          result.putString("stream", "PASS: global sort scopes, archive, trash and rollback\n");
+        } else if (commandOnly) {
           int checks = CommandStorageTest.run(getTargetContext());
           result.putString("stream", "PASS: " + checks + " command Android SQLite checks\n");
         } else {
@@ -40,6 +44,7 @@ public final class SmokeInstrumentation extends Instrumentation {
     }
     long id = 0, chat = 0;
     try (Store db = new Store(getTargetContext())) {
+      GlobalSortStorageTest.run(getTargetContext());
       ManagerStorageTest.run(getTargetContext());
       ImportStorageTest.run(getTargetContext());
       checkToday(db);

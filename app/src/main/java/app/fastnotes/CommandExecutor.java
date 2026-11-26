@@ -39,7 +39,9 @@ public final class CommandExecutor {
       }
       CommandDraft draft;
       try {
-        draft = CommandDraft.fromJson(new JSONObject(stored));
+        JSONObject value = new JSONObject(stored);
+        if (!store.ownsDraft(value)) throw new IllegalStateException("Откройте черновик на исходном устройстве.");
+        draft = CommandDraft.fromJson(value);
       } catch (JSONException e) {
         throw new IllegalStateException("Черновик команды повреждён");
       }
@@ -52,7 +54,7 @@ public final class CommandExecutor {
       for (CommandDraft.NoteState expected : draft.notes.values()) {
         if (!draft.required(expected.id)) continue;
         Note current = store.note(expected.id);
-        if (current == null || current.trashed != 0)
+        if (current == null || !store.aiAllowed(expected.id))
           throw new IllegalStateException("Исходная заметка удалена или попала в корзину");
         if (current.updated != expected.updated)
           throw new IllegalStateException("Заметка «" + expected.title + "» изменилась после предпросмотра");
@@ -62,7 +64,11 @@ public final class CommandExecutor {
         for (AgentAction action : actions)
           if (!action.folder.isEmpty()
               && FolderPolicy.key(action.folder).equals(FolderPolicy.key(expected.name))) needed = true;
-        if (needed) resolveFolder(db, expected, false);
+        if (needed) {
+          resolveFolder(db, expected, false);
+          if (store.isIncognitoFolder(expected.id))
+            throw new IllegalStateException("Папка недоступна для команд ИИ.");
+        }
       }
       for (AgentAction action : actions)
         if (action.kind == AgentAction.Kind.REMIND) {

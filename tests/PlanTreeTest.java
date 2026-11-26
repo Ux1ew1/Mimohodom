@@ -27,7 +27,8 @@ public final class PlanTreeTest {
         "```json\n{\"say\":\"Вот план выезда.\",\"options\":[\"лишнее\"],\"plan\":{\"nodes\":["
             + "{\"kind\":\"time\",\"text\":\"Выезд\",\"at\":\"2026-06-12 10:00\"},"
             + "{\"kind\":\"time\",\"text\":\"Срок оплаты\",\"at\":\"2026-06-01\"},"
-            + "{\"kind\":\"step\",\"text\":\"Забронировать базу\",\"who\":\"Аня\",\"children\":["
+            + "{\"kind\":\"step\",\"text\":\"Забронировать базу\",\"who\":\"Аня\","
+            + "\"at\":\"2026-06-02 18:00\",\"children\":["
             + "  {\"kind\":\"step\",\"text\":\"Сравнить три базы\",\"children\":["
             + "    {\"kind\":\"step\",\"text\":\"Позвонить\",\"children\":["
             + "      {\"kind\":\"step\",\"text\":\"Слишком глубоко\"}]}]}]},"
@@ -46,6 +47,8 @@ public final class PlanTreeTest {
     check(t.nodes.get(1).at == at(zone, 2026, 6, 1, 9, 0), "date-only is 09:00");
     PlanTree.Node book = t.nodes.get(2);
     check(book.who.equals("Аня"), "who");
+    long due = at(zone, 2026, 6, 2, 18, 0);
+    check(book.at == due, "checkable step retains its own deadline");
     check(book.children.size() == 1, "child kept");
     PlanTree.Node compare = book.children.get(0);
     check(compare.children.size() == 2, "too deep flattened to level 3: " + compare.children.size());
@@ -60,6 +63,8 @@ public final class PlanTreeTest {
     String stored = t.toJson();
     PlanTree back = PlanTree.parse(stored);
     check(back.toJson().equals(stored), "round trip");
+    check(back.scheduledSteps(due, due + 1).equals(List.of(back.find(book.id))),
+        "Stored deadline lists the step itself without scheduling its children");
     check(back.all().size() == all.size(), "same size");
     check(PlanTree.parse("не json").isEmpty(), "broken stored is empty");
     check(PlanTree.parse("").toJson().isEmpty(), "empty stays empty");
@@ -135,7 +140,9 @@ public final class PlanTreeTest {
 
     // Строка для показа
     check(PlanTree.line(back.nodes.get(0), zone).startsWith("12 июн"), "line time: " + PlanTree.line(back.nodes.get(0), zone));
-    check(back.outline(zone).get(2).startsWith("☑ Забронировать базу (Аня)"), "outline: " + back.outline(zone).get(2));
+    check(back.outline(zone).get(2).startsWith("☑ 2 июн")
+        && back.outline(zone).get(2).endsWith("Забронировать базу (Аня)"),
+        "outline: " + back.outline(zone).get(2));
 
     // «Выполнено»: все шаги и «что взять» отмечены, остальные виды не трогаются
     PlanTree finished = PlanTree.parse(t.toJson());

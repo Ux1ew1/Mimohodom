@@ -137,6 +137,7 @@ public final class SyncClient {
     report.peer = peer.name;
 
     SyncStore.Batch first = store.collect(peer.sentSeq, peer.device, BATCH, true);
+    boolean needsIncognito = first.records.stream().anyMatch(r -> Boolean.TRUE.equals(r.incognito));
     Link link = null;
     byte[] firstReply = null;
     String lastError = "Устройство не найдено в сети";
@@ -147,6 +148,8 @@ public final class SyncClient {
       for (String host : candidates) {
         Link l = new Link(host, own, key, connectMs, readMs);
         try {
+          if (needsIncognito && l.post("/v1/incognito", new JSONObject()).length == 0)
+            throw new SyncException("Обновите Мимоходом на компьютере: эта версия не поддерживает инкогнито.", false);
           firstReply = l.post("/v1/sync", request(own, ownName, peer.gotSeq, true, first.records));
           link = l;
           report.host = host;

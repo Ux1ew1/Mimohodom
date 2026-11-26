@@ -76,7 +76,7 @@ public final class CheckInJob extends JobService {
         while (rows.moveToNext()) muted.add(rows.getLong(0));
       }
     List<ProgressCheck.Candidate> all = new ArrayList<>();
-    for (Note n : store.notes()) {
+    for (Note n : store.aiNotes()) {
       if (muted.contains(n.id)) continue;
       Long top = tops.get(n.id);
       if (top != null && top != n.id) continue;
@@ -377,7 +377,7 @@ public final class CheckInJob extends JobService {
   }
 
   private static String prompt(Context c, Store store, long now, ZoneId zone) {
-    List<Note> notes = store.notes();
+    List<Note> notes = store.aiNotes();
     List<Note> upcoming = new ArrayList<>();
     for (Note n : notes)
       if (n.reminder > now && n.reminder < now + 14L * 24 * 3_600_000) upcoming.add(n);

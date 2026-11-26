@@ -522,10 +522,12 @@ function bubble(m) {
     const memo = /\[\[memo]]([\s\S]*?)(\[\[\/memo]]|$)/.exec(m.body);
     if (memo) for (const line of memo[1].split("\n").map((x) => x.trim()).filter(Boolean)) b.append(el("div", { class: "memo", text: "✓ Запомнил: " + line }));
     for (const s of m.sources || []) {
+      if (s.contextOnly) continue;
       b.append(el("button", { class: "src", title: "Открыть заметку", onclick: () => goNote(s.id) },
         el("span", { "aria-hidden": "true", text: "▤" }), el("span", { class: "n", text: s.title }), el("span", { class: "arrow", text: "›" })));
     }
-    if (m.draft && m.draft.kind === "reminders") b.append(remindersOffer(m));
+    if (m.draft?.device) b.append(el("div", { class: "muted" }, "Черновик доступен на исходном устройстве."));
+    else if (m.draft && m.draft.kind === "reminders") b.append(remindersOffer(m));
     else if (m.draft && m.draft.title) b.append(draftOffer(m));
   }
   return b;

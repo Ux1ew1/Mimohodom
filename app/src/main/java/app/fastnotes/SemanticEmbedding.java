@@ -16,6 +16,13 @@ public final class SemanticEmbedding {
   public static final double MIN_SCORE = 0.16;
   private static final int CONCEPTS = 32;
 
+  private static final String[] TOPIC_NAMES = {
+    "Путешествия", "Ремонт", "Здоровье", "Покупки", "Рецепты", "Работа", "Финансы", "Семья",
+    "Праздники", "Учёба", "Автомобиль", "Документы", "Технологии", "Спорт", "Питомцы", "Сад",
+    "Жильё", "Домашние дела", "Культура", "Книги", "Переезд", "Право", "Сон", "Звонки",
+    "Планы", "Фото и видео", "Одежда", "Банк", "Погода", "Транспорт", "Доставка", "Хобби"
+  };
+
   private static final String[][] AXES = {
     {"отпуск", "поездк", "путешеств", "море", "морю", "моря", "морск", "билет", "отел", "гостиниц", "аэропорт", "рейс", "виза", "чемодан", "экскурс", "санатор", "каникул", "туризм", "пляж"},
     {"ремонт", "строй", "сверл", "плитк", "обои", "ламинат", "краск", "сантехн", "электрик", "шпакл", "потолок"},
@@ -110,6 +117,17 @@ public final class SemanticEmbedding {
     double out = 0;
     for (int i = 0; i < DIMENSIONS; i++) out += a[i] * b[i];
     return Math.max(0, out);
+  }
+
+  static String primaryTopic(float[] vector) {
+    int best = -1;
+    float weight = 0.15f;
+    for (int i = 0; i < CONCEPTS; i++) {
+      if (vector[i] <= weight) continue;
+      best = i;
+      weight = vector[i];
+    }
+    return best < 0 ? "" : TOPIC_NAMES[best];
   }
 
   public static byte[] encode(float[] vector) {

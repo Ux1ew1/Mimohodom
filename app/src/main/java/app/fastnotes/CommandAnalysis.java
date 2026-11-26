@@ -124,17 +124,46 @@ public final class CommandAnalysis {
   }
 
   public static final class Reply {
+    final JSONObject structured;
     public String say = "", question = "";
     public final List<AgentAction> actions = new ArrayList<>();
     public int rejected;
+
+    private Reply(JSONObject structured) {
+      this.structured = structured;
+    }
   }
 
-  /** Неподдержанный ответ становится обычным текстом/вопросом, а не ошибкой всего чата. */
   public static Reply parse(String raw, AgentAction.Scope scope) throws JSONException {
-    JSONObject root = new JSONObject(AgentPlan.unwrap(raw));
-    Reply out = new Reply();
-    out.say = clip(root.optString("say", "").trim(), MAX_SAY);
-    out.question = clip(root.optString("question", "").trim(), MAX_QUESTION);
+    Reply out = parseStructured(new JSONObject(AgentPlan.unwrap(raw)), scope);
+    out.say = clip(out.say, MAX_SAY);
+    if (out.say.isEmpty() && out.question.isEmpty() && out.actions.isEmpty())
+      out.say = "Не удалось определить безопасное действие. Уточните команду.";
+    return out;
+  }
+
+  /** Обычный текст годится для ответа в чате, но только JSON может предложить изменения. */
+  static Reply parseChat(String text, AgentAction.Scope scope) throws JSONException {
+    String unwrapped = AgentPlan.unwrap(text);
+    boolean explicitJson = text.startsWith("{") || text.startsWith("```json");
+    JSONObject root = null;
+    if (explicitJson || unwrapped.startsWith("{")) {
+      try {
+        root = new JSONObject(unwrapped);
+      } catch (JSONException e) {
+        if (explicitJson) throw e;
+      }
+    }
+    if (root != null) return parseStructured(root, scope);
+    Reply out = new Reply(new JSONObject());
+    out.say = text;
+    return out;
+  }
+
+  private static Reply parseStructured(JSONObject root, AgentAction.Scope scope) throws JSONException {
+    Reply out = new Reply(root);
+    out.say = textValue(root.opt("say"));
+    out.question = clip(textValue(root.opt("question")), MAX_QUESTION);
     JSONArray rows = normalizedActions(root);
     for (int i = 0; rows != null && i < rows.length(); i++) {
       JSONObject row = rows.optJSONObject(i);
@@ -159,8 +188,6 @@ public final class CommandAnalysis {
       out.rejected += out.actions.size();
       out.actions.clear();
     }
-    if (out.say.isEmpty() && out.question.isEmpty() && out.actions.isEmpty())
-      out.say = "Не удалось определить безопасное действие. Уточните команду.";
     return out;
   }
 
@@ -168,6 +195,7 @@ public final class CommandAnalysis {
   private static JSONArray normalizedActions(JSONObject root) throws JSONException {
     Object wire = root.opt("actions");
     JSONArray rows;
+    if (wire == JSONObject.NULL) return null;
     if (wire == null) {
       if (!root.has("action") && !root.has("type")) return null;
       JSONObject single = new JSONObject(root.toString());
@@ -200,12 +228,24 @@ public final class CommandAnalysis {
   }
 
   public static String responseText(JSONObject response) throws JSONException {
+    String text = chatResponseText(response);
     JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
-    String text = choice.getJSONObject("message").optString("content", "").trim();
-    if (text.isEmpty()) throw new JSONException("Модель вернула пустой ответ");
     if ("length".equals(choice.optString("finish_reason")) && !text.endsWith("}"))
       throw new JSONException("Ответ команды оборвался по лимиту длины");
     return text;
+  }
+
+  static String chatResponseText(JSONObject response) throws JSONException {
+    JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
+    String text = textValue(choice.getJSONObject("message").opt("content"));
+    if (text.isEmpty()) throw new JSONException("Модель вернула пустой ответ");
+    return text;
+  }
+
+  private static String textValue(Object value) {
+    if (!(value instanceof String raw)) return "";
+    String text = raw.trim();
+    return "null".equalsIgnoreCase(text) ? "" : text;
   }
 
   private static String date(long at, ZoneId zone) {

@@ -161,6 +161,7 @@ final class AgentLog {
     if (n == null || n.trashed > 0) throw new IllegalStateException("Колоды уже нет");
     ManagerStore manager = new ManagerStore(store);
     if (manager.top(top) != top) throw new IllegalStateException("Колоду уже разобрали");
+    checkCollection(store, manager, n, data);
     // Ушедшие в корзину по галочке возвращаются обычными заметками (если их не удалили насовсем).
     for (long gone : AgentJournal.ids(data, "trashed")) {
       Note g = store.note(gone);
@@ -195,13 +196,25 @@ final class AgentLog {
       throw new IllegalStateException("Колоды уже нет");
     if (!n.title.equals(data.optString("title")) || !n.body.equals(data.optString("body")))
       throw new IllegalStateException("Сводку колоды уже изменили");
-    store.save(top, data.optString("was_title"), data.optString("was_body"), n.reminder, n.repeat, n.lead);
+    checkCollection(store, new ManagerStore(store), n, data);
+    store.save(top, data.optString("was_title"), data.optString("was_body"), n.reminder, n.repeat,
+        n.lead, n.reminderTimes);
+    if (data.has("previous_plan")) store.savePlan(top, data.optString("previous_plan"));
     for (long added : AgentJournal.ids(data, "added"))
       db.execSQL(
           "DELETE FROM note_members WHERE note=? AND top=?", new Object[] {added, top});
     new ManagerStore(store).cleanup();
     closeProposal(db, data.optLong("proposal"));
     return "Сводка колоды возвращена, добавленные заметки — в списке";
+  }
+
+  private static void checkCollection(Store store, ManagerStore manager, Note n, JSONObject data) {
+    if (data.has("collection_revision")
+        && (n.updated != data.optLong("collection_revision")
+            || !store.plan(n.id).equals(data.optString("collection_plan"))
+            || !new JSONArray(manager.members(n.id)).toString()
+                .equals(data.optString("collection_members"))))
+      throw new IllegalStateException("Сводка или состав колоды изменились");
   }
 
   private static String undoAnswer(SQLiteDatabase db, JSONObject data) throws JSONException {

@@ -394,6 +394,14 @@ fn run(app: &Arc<App>, chat: i64, query: &str, images: &[String], cfg: &Settings
     let fresh = !images.is_empty();
     let (history, current) = {
         let st = app.store.lock().unwrap();
+        let linked: String = st.conn.query_row("SELECT linked_note_uid FROM chats WHERE id=?1",
+            [chat], |r| r.get(0))?;
+        if !linked.is_empty() {
+            let note = st.note_by_uid(&linked)?;
+            if !note.map(|n| st.ai_allowed(n.id).unwrap_or(false)).unwrap_or(false) {
+                anyhow::bail!("Заметка недоступна для обсуждения с ИИ.");
+            }
+        }
         let mut history: Vec<Message> = st.messages(chat)?;
         let mut current = stored.clone();
         let retry = history.last().map(|last| {
@@ -404,6 +412,9 @@ fn run(app: &Arc<App>, chat: i64, query: &str, images: &[String], cfg: &Settings
         } else {
             st.add_message(chat, "user", &stored, &[], None)?;
         }
+        history.retain(|turn| turn.sources.as_array().map(|sources|
+            sources.iter().all(|source| st.ai_allowed(source["id"].as_i64().unwrap_or(0))
+                .unwrap_or(false))).unwrap_or(true));
         (history, current)
     };
     let mut contents: Vec<&str> = history.iter().map(|m| m.body.as_str()).collect();
@@ -484,6 +495,22 @@ fn run(app: &Arc<App>, chat: i64, query: &str, images: &[String], cfg: &Settings
     }
     if !st.chat_exists(chat)? {
         return Ok((answer.usage, 0));
+    }
+    let mut known: HashSet<i64> = answer.sources.iter().filter_map(|s| s["id"].as_i64()).collect();
+    for n in &prepared.selected {
+        if !st.ai_allowed(n.id)? {
+            anyhow::bail!("Доступ к источникам изменился. Повторите запрос.");
+        }
+        if known.insert(n.id) {
+            answer.sources.push(json!({"id":n.id,"title":n.title,"contextOnly":true}));
+        }
+    }
+    for source in history.iter().rev().take(6).filter_map(|turn| turn.sources.as_array()).flatten() {
+        if let Some(id) = source["id"].as_i64() {
+            if known.insert(id) && st.ai_allowed(id)? {
+                answer.sources.push(json!({"id":id,"title":source["title"],"contextOnly":true}));
+            }
+        }
     }
     for (id, revision, meta) in &answer.metadata_updates {
         st.apply_metadata(*id, *revision, meta)?;

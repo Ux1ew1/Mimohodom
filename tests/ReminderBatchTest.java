@@ -20,6 +20,19 @@ public final class ReminderBatchTest {
   public static void main(String[] args) {
     ZoneId zone = ZoneId.of("Europe/Moscow");
     long now = at(zone, 2026, 11, 5, 12, 0);
+    String schedule = "• 25.11.2026 ср 17:00 — Пирог и пицца\n"
+        + "• 28.11.2026 сб 15:00 — Забрать пиццу\n• 29.11.2026 вс 15:00 — Забрать пиццу";
+    long[] expected = {at(zone, 2026, 11, 25, 17, 0), at(zone, 2026, 11, 28, 15, 0),
+        at(zone, 2026, 11, 29, 15, 0)};
+    String query = ReminderBatch.requestFor("Буфет", schedule);
+    check(java.util.Arrays.equals(expected,
+        ReminderBatch.times(ReminderBatch.requestSchedule(query, zone, now).items)), "all three source dates");
+    check(java.util.Arrays.equals(expected, ReminderBatch.offeredTimes(schedule, expected[0], "", zone, now)),
+        "complete previously saved single suggestion");
+    check(ReminderBatch.offeredTimes(schedule, expected[0] + 1, "", zone, now).length == 0,
+        "keep unrelated suggestion");
+    check(ReminderBatch.requestSchedule(query + "\nИ ещё завтра утром", zone, now).items.isEmpty(),
+        "never silently drop unparsed instructions");
 
     String raw =
         "Нашёл три дня. Создать напоминания?\n"

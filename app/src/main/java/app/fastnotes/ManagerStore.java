@@ -53,7 +53,7 @@ public final class ManagerStore {
             new String[] {store.attentionEnabled() ? "1" : "0"})) {
       while (c.moveToNext()) {
         Note n = store.note(c.getLong(0));
-        if (n != null
+        if (n != null && !store.isIncognitoFolder(n.folder)
             && (manual
                 || c.isNull(1)
                 || !ManagerAnalysis.fingerprint(n).equals(c.getString(1))
@@ -415,6 +415,12 @@ public final class ManagerStore {
       Map<Long, Analysis.Result> analysis,
       Map<Long, String> kinds)
       throws Exception {
+    return finishReview(run, notes, proposals, analysis, kinds, null);
+  }
+
+  public ReviewOutcome finishReview(
+      long run, List<Note> notes, List<JSONObject> proposals, Map<Long, Analysis.Result> analysis,
+      Map<Long, String> kinds, JSONObject planning) throws Exception {
     db.beginTransaction();
     try {
       ReviewOutcome outcome = new ReviewOutcome();
@@ -423,7 +429,7 @@ public final class ManagerStore {
       List<Note> unchanged = new ArrayList<>();
       for (Note snapshot : notes) {
         Note current = store.note(snapshot.id);
-        if (current == null
+        if (current == null || !store.aiAllowed(snapshot.id)
             || !ManagerAnalysis.fingerprint(current).equals(ManagerAnalysis.fingerprint(snapshot)))
           continue;
         Analysis.Result result = analysis.get(snapshot.id);
@@ -456,11 +462,12 @@ public final class ManagerStore {
       }
       for (Note n : unchanged) {
         String kind = TaskKind.clean(kinds.get(n.id));
-        if (!TaskKind.COMPLEX.equals(kind) || !store.plan(n.id).isEmpty()) continue;
+        String reason = ManagerAnalysis.planReason(planning, kind, n.id);
+        if (reason.isEmpty() || !store.plan(n.id).isEmpty()) continue;
         valid.add(
             new JSONObject()
                 .put("type", "plan")
-                .put("reason", "Большая задача — агент поможет разобрать её в план по шагам.")
+                .put("reason", reason)
                 .put("title", n.title)
                 .put("body", "")
                 .put("options", new JSONArray())
@@ -495,7 +502,7 @@ public final class ManagerStore {
 
   public int failedCount() {
     int count = 0;
-    for (Note n : store.notes()) if (top(n.id) == 0 && failedUnchanged(n)) count++;
+    for (Note n : store.aiNotes()) if (top(n.id) == 0 && failedUnchanged(n)) count++;
     return count;
   }
 
@@ -505,7 +512,7 @@ public final class ManagerStore {
       JSONObject source = sources.getJSONObject(i);
       Note n = store.note(source.getLong("id"));
       if (n == null
-          || n.trashed > 0
+          || !store.aiAllowed(n.id)
           || !ManagerAnalysis.fingerprint(n).equals(source.getString("revision")))
         return false;
     }
@@ -627,11 +634,7 @@ public final class ManagerStore {
           }
           for (long member : members)
             db.delete("note_groups", "top=?", new String[] {"" + member});
-          db.execSQL("INSERT INTO note_groups(top) VALUES(?)", new Object[] {result});
-          for (long member : members)
-            db.execSQL(
-                "INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)",
-                new Object[] {member, result});
+          attachDeck(result, members);
           // Галочка «Пустые и дубли — в корзину»: только в корзину, вернуть можно 30 дней.
           for (long extra : extras.keySet())
             if (members.contains(extra) && !store.trash(extra, false).isEmpty())
@@ -732,7 +735,7 @@ public final class ManagerStore {
             "SELECT g.top FROM note_groups g JOIN notes n ON n.id=g.top WHERE n.trashed=0", null)) {
       while (c.moveToNext()) {
         Note top = store.note(c.getLong(0));
-        if (top == null) continue;
+        if (top == null || store.isIncognitoFolder(top.folder)) continue;
         double best = 0;
         for (Note n : batch) best = Math.max(best, TopicSelection.similarity(top, n));
         if (best >= 0.18) {
@@ -760,14 +763,20 @@ public final class ManagerStore {
       List<String> titles = new ArrayList<>();
       for (long id : ids) {
         Note n = store.note(id);
-        if (n != null && n.trashed == 0) titles.add(n.title);
+        if (n != null && n.trashed == 0 && !store.isIncognitoFolder(n.folder)) titles.add(n.title);
         if (titles.size() == 8) break;
       }
-      if (ids.size() > titles.size() && !titles.isEmpty())
-        titles.set(titles.size() - 1, titles.get(titles.size() - 1) + " (и ещё " + (ids.size() - 7) + ")");
       out.put(top, titles);
     }
     return out;
+  }
+
+  /** Добавляет верхнюю заметку и состав колоды в транзакции вызывающего кода. */
+  void attachDeck(long top, Collection<Long> members) {
+    db.execSQL("INSERT INTO note_groups(top) VALUES(?)", new Object[] {top});
+    for (long member : members)
+      db.execSQL(
+          "INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)", new Object[] {member, top});
   }
 
   /** «Разобрать колоду»: исходные возвращаются в список, сводка остаётся обычной заметкой. */

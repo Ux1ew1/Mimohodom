@@ -144,7 +144,7 @@ public final class ManagerTest {
                 + sent.getJSONObject(1).getString("text").length()
             == 12000,
         "Combined text budget");
-    check(!sent.getJSONObject(0).getBoolean("complete"), "Truncation disclosed");
+    check(!sent.getJSONObject(0).getBoolean("text_complete"), "Text truncation disclosed");
     a.body = "Мука";
     row.put("type", "task").put("sources", new JSONArray("[1]"));
     check(parse(row, notes).size() == 1, "Task accepted");

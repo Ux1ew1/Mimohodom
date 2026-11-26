@@ -65,7 +65,8 @@ fn sources_out(store: &Store, raw: &str) -> Vec<Value> {
     list.iter()
         .filter_map(|s| {
             let uid = uid_of_note(store, &s["id"].as_i64().unwrap_or(0).to_string());
-            if uid.is_empty() { None } else { Some(json!({"uid": uid, "title": s["title"].as_str().unwrap_or("")})) }
+            if uid.is_empty() { None } else { Some(json!({"uid": uid, "title": s["title"].as_str().unwrap_or(""),
+                "contextOnly":s["contextOnly"].as_bool().unwrap_or(false)})) }
         })
         .collect()
 }
@@ -75,7 +76,8 @@ fn sources_in(store: &Store, list: &[Value]) -> String {
         .iter()
         .filter_map(|s| {
             let id = id_of_note(store, s["uid"].as_str().unwrap_or(""));
-            if id == 0 { None } else { Some(json!({"id": id, "title": s["title"].as_str().unwrap_or("")})) }
+            if id == 0 { None } else { Some(json!({"id": id, "title": s["title"].as_str().unwrap_or(""),
+                "contextOnly":s["contextOnly"].as_bool().unwrap_or(false)})) }
         })
         .collect();
     Value::Array(local).to_string()
@@ -148,7 +150,7 @@ pub fn collect_items(store: &Store, since: i64, snapshot: i64, exclude: &str, li
     let lim = limit as i64 + 1;
     {
         let mut st = store.conn.prepare(
-            "SELECT uid,title,created,kind,sync_ts,sync_seq FROM chats
+            "SELECT uid,title,created,kind,sync_ts,sync_seq,linked_note_uid FROM chats
              WHERE sync_seq>?1 AND sync_seq<=?2 AND sync_from<>?3 AND uid<>'' ORDER BY sync_seq LIMIT ?4",
         )?;
         let rows = st.query_map(params![since, snapshot, exclude, lim], |r| {
@@ -161,6 +163,7 @@ pub fn collect_items(store: &Store, since: i64, snapshot: i64, exclude: &str, li
                     created: r.get(2)?,
                     checkin: r.get::<_, i64>(3)? == 1,
                     ts: r.get(4)?,
+                    note: Some(r.get(6)?),
                     lead: -1,
                     ..Default::default()
                 },
@@ -311,15 +314,18 @@ fn apply_chat(store: &Store, peer: &str, r: &Record) -> Result<bool> {
             }
             let seq = store.stamp_remote(r.ts)?;
             store.conn.execute(
-                "UPDATE chats SET title=?2,created=?3,kind=CASE WHEN ?4=1 THEN 1 ELSE kind END,sync_ts=?5,sync_seq=?6,sync_from=?7 WHERE id=?1",
-                params![id, title, r.created, r.checkin as i64, r.ts, seq, peer],
+                "UPDATE chats SET title=?2,created=?3,kind=CASE WHEN ?4=1 THEN 1 ELSE kind END,
+                 sync_ts=?5,sync_seq=?6,sync_from=?7,linked_note_uid=coalesce(?8,linked_note_uid) WHERE id=?1",
+                params![id, title, r.created, r.checkin as i64, r.ts, seq, peer, r.note],
             )?;
         }
         None => {
             let seq = store.stamp_remote(r.ts)?;
             store.conn.execute(
-                "INSERT INTO chats(title,created,kind,uid,sync_ts,sync_seq,sync_from) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-                params![title, r.created, r.checkin as i64, r.uid, r.ts, seq, peer],
+                "INSERT INTO chats(title,created,kind,uid,sync_ts,sync_seq,sync_from,linked_note_uid)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![title, r.created, r.checkin as i64, r.uid, r.ts, seq, peer,
+                    r.note.as_deref().unwrap_or("")],
             )?;
         }
     }

@@ -218,6 +218,25 @@ public final class CommandAnalysisTest {
         .put("message", new JSONObject().put("content", "{\"say\":\"x\",\"actions\":[]}"))
         .put("finish_reason", "stop")));
     check(CommandAnalysis.responseText(response).contains("actions"), "response content extracted");
+    JSONObject message = response.getJSONArray("choices").getJSONObject(0).getJSONObject("message");
+    for (Object emptyContent : List.of(JSONObject.NULL, " null ", " ", new JSONArray())) {
+      message.put("content", emptyContent);
+      boolean rejected = false;
+      try { CommandAnalysis.chatResponseText(response); } catch (JSONException e) { rejected = true; }
+      check(rejected, "empty response content rejected: " + emptyContent);
+    }
+    String prose = "По приложению есть заметка [[note:1]] с идеями для интерфейса.";
+    message.put("content", prose);
+    CommandAnalysis.Reply textReply = CommandAnalysis.parseChat(CommandAnalysis.chatResponseText(response), scope());
+    check(textReply.say.equals(prose) && textReply.actions.isEmpty(), "ordinary prose is a read-only answer");
+    CommandAnalysis.Reply nullable = CommandAnalysis.parseChat(
+        "{\"say\":\"Вот заметки\",\"question\":null,\"actions\":null}", scope());
+    check(nullable.say.equals("Вот заметки") && nullable.question.isEmpty() && nullable.actions.isEmpty(),
+        "nullable fields do not appear in chat");
+    CommandAnalysis.Reply followUp = CommandAnalysis.parseChat(
+        "{\"say\":\"Есть заметки\",\"question\":\"Собрать сводку?\",\"actions\":[]}", scope());
+    check(followUp.say.equals("Есть заметки") && followUp.question.equals("Собрать сводку?"),
+        "answer text is preserved alongside a follow-up question");
     response.getJSONArray("choices").getJSONObject(0).getJSONObject("message").put("content", " ");
     boolean empty = false;
     try { CommandAnalysis.responseText(response); } catch (JSONException e) { empty = true; }

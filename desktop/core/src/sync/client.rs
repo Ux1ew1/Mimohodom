@@ -130,10 +130,20 @@ pub fn sync_peer(app: &Arc<App>, device: &str) -> Result<Report> {
         engine::collect(&s, peer.sent_seq, &peer.device, BATCH, true, true)?
     };
     let wire0: Vec<Value> = batch0.iter().map(|r| r.to_wire()).collect();
+    let needs_incognito = batch0.iter().any(|r| r.incognito == Some(true));
     let mut last_error = String::from("Устройство не найдено в сети");
     loop {
         while let Some(host) = candidates.pop() {
             let l = Link { agent: agent(), base: host.clone(), own_device: own_device.clone(), key };
+            if needs_incognito {
+                match l.post("/v1/incognito", json!({})) {
+                    Ok(reply) if !reply.is_empty() => {},
+                    _ => {
+                        last_error = format!("{}: обновите Мимоходом для обмена папками инкогнито", host);
+                        continue;
+                    }
+                }
+            }
             match l.post("/v1/sync", first_req(wire0.clone(), peer.got_seq)) {
                 Ok(reply) => {
                     report.host = host;
