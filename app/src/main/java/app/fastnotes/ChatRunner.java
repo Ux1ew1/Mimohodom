@@ -464,14 +464,14 @@ public final class ChatRunner {
     String text = choice.getJSONObject("message").optString("content", "");
     if (text.trim().isEmpty())
       throw new java.io.IOException("Модель вернула пустой ответ. Попробуйте ещё раз.");
-    if ("length".equals(choice.optString("finish_reason")) && !text.trim().endsWith("}"))
+    if ("length".equals(choice.optString("finish_reason")))
       throw new java.io.IOException(
           "Ответ модели оборвался. Попросите план короче или выберите другую модель.");
     PlanChat.Reply reply = PlanChat.parse(text, zone, System.currentTimeMillis());
     JSONObject draft = null;
     // План и правка заметки не применяются сами: они ложатся в черновик, применяет пользователь.
     if (reply.plan != null || reply.edit != null) {
-      draft = new JSONObject().put("note", noteId);
+      draft = new JSONObject().put("note", noteId).put("revision", note.updated);
       if (reply.plan != null) {
         reply.plan.keepDone(current);
         draft.put("plan", reply.plan.toJson());

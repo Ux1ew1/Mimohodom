@@ -92,7 +92,7 @@ public final class PlanTree {
       n.text = clip(o.optString("t", ""), MAX_TEXT);
       n.who = clip(o.optString("w", ""), MAX_WHO);
       n.done = o.optBoolean("d", false);
-      n.at = TIME.equals(n.kind) ? Math.max(0, o.optLong("at", 0)) : 0;
+      if (n.checkable() || TIME.equals(n.kind)) n.at = Math.max(0, o.optLong("at", 0));
       if (n.text.isEmpty()) continue;
       budget[0]--;
       into.add(n);
@@ -159,7 +159,7 @@ public final class PlanTree {
       n.text = clip(o.optString("text", ""), MAX_TEXT);
       n.who = clip(o.optString("who", ""), MAX_WHO);
       n.done = o.optBoolean("done", false) && n.checkable();
-      if (TIME.equals(n.kind)) n.at = time(o.optString("at", ""), zone);
+      if (n.checkable() || TIME.equals(n.kind)) n.at = time(o.optString("at", ""), zone);
       if (n.text.isEmpty()) continue;
       budget[0]--;
       into.add(n);
@@ -241,7 +241,7 @@ public final class PlanTree {
     return null;
   }
 
-  /** Дата шага задаётся вложенным пунктом «Время» или ближайшим родительским временем. */
+  /** Шаг может иметь свою дату, даты во вложенных пунктах или ближайшее родительское время. */
   public List<Node> scheduledSteps(long start, long end) {
     List<Node> result = new ArrayList<>();
     scheduledSteps(nodes, 0, start, end, result);
@@ -253,7 +253,8 @@ public final class PlanTree {
     for (Node n : nodes) {
       long at = TIME.equals(n.kind) && n.at > 0 ? n.at : inherited;
       if (n.checkable()) {
-        boolean dated = false, matches = false;
+        boolean dated = n.at > 0;
+        boolean matches = dated && n.at >= start && n.at < end;
         for (Node child : n.children) {
           if (!TIME.equals(child.kind) || child.at <= 0) continue;
           dated = true;

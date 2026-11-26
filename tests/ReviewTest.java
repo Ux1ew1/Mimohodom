@@ -48,6 +48,16 @@ public final class ReviewTest {
         data.getJSONObject(0).has("created") && data.getJSONObject(0).has("has_reminder"),
         "Reminder context supplied");
     check(payload.getInt("max_tokens") == 1600, "Shared response budget retained");
+    ManagerAnalysis.withPlanPresence(payload, Set.of(2L));
+    JSONArray planned = new JSONArray(payload.getJSONArray("messages").getJSONObject(1)
+        .getString("content"));
+    check(!planned.getJSONObject(0).getBoolean("has_plan")
+        && planned.getJSONObject(1).getBoolean("has_plan"), "Plan presence follows note ID");
+    check(!ManagerAnalysis.planReason(new JSONObject(), TaskKind.COMPLEX, 1).isEmpty()
+        && ManagerAnalysis.planReason(new JSONObject(), TaskKind.INFO, 2).isEmpty(),
+        "An empty planning map falls back to complex tasks only");
+    check(ManagerAnalysis.planReason(new JSONObject().put("1", "Собрать чек-лист"),
+        TaskKind.COMPLEX, 2).isEmpty(), "A nonempty planning map controls note selection");
     String instruction = payload.getJSONArray("messages").getJSONObject(0).getString("content");
     check(
         instruction.contains("ОБЕ проверки")

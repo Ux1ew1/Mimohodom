@@ -4240,6 +4240,10 @@ public final class MainActivity extends Activity
             "Разобрать",
             true,
             () -> {
+              if (ChatRunner.running != 0) {
+                toast("Дождитесь текущего ответа помощника");
+                return;
+              }
               manager.state(p.optLong("id"), "accepted");
               if (suggestionsPopup != null) suggestionsPopup.dismiss();
               openPlanChat(noteId, true);
@@ -6419,7 +6423,7 @@ public final class MainActivity extends Activity
     page = "chat";
     tab = 2;
     render();
-    if (fresh && startPlan && chatInput != null) {
+    if (startPlan && chatInput != null && ChatRunner.running == 0) {
       chatInput.setText(PlanChat.START);
       send();
     }
@@ -6503,6 +6507,11 @@ public final class MainActivity extends Activity
     if (n.checkable()) {
       labels.add("Назначить срок");
       actions.add(() -> whenPicker(System.currentTimeMillis(), 18, "Срок пункта плана", at -> {
+        if (n.at > 0) {
+          n.at = at;
+          savePlan(noteId, plan, refresh);
+          return;
+        }
         PlanTree.Node due = null;
         for (PlanTree.Node child : n.children)
           if (PlanTree.TIME.equals(child.kind) && "Срок".equals(child.text)) { due = child; break; }
@@ -6512,7 +6521,7 @@ public final class MainActivity extends Activity
         savePlan(noteId, plan, refresh);
       }));
     }
-    if (PlanTree.TIME.equals(n.kind) && n.at > 0) {
+    if (n.at > 0) {
       labels.add("Напомнить в это время");
       actions.add(() -> remindFromPlan(n));
     }

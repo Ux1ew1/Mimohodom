@@ -415,6 +415,12 @@ public final class ManagerStore {
       Map<Long, Analysis.Result> analysis,
       Map<Long, String> kinds)
       throws Exception {
+    return finishReview(run, notes, proposals, analysis, kinds, null);
+  }
+
+  public ReviewOutcome finishReview(
+      long run, List<Note> notes, List<JSONObject> proposals, Map<Long, Analysis.Result> analysis,
+      Map<Long, String> kinds, JSONObject planning) throws Exception {
     db.beginTransaction();
     try {
       ReviewOutcome outcome = new ReviewOutcome();
@@ -456,11 +462,12 @@ public final class ManagerStore {
       }
       for (Note n : unchanged) {
         String kind = TaskKind.clean(kinds.get(n.id));
-        if (!TaskKind.COMPLEX.equals(kind) || !store.plan(n.id).isEmpty()) continue;
+        String reason = ManagerAnalysis.planReason(planning, kind, n.id);
+        if (reason.isEmpty() || !store.plan(n.id).isEmpty()) continue;
         valid.add(
             new JSONObject()
                 .put("type", "plan")
-                .put("reason", "Большая задача — агент поможет разобрать её в план по шагам.")
+                .put("reason", reason)
                 .put("title", n.title)
                 .put("body", "")
                 .put("options", new JSONArray())
