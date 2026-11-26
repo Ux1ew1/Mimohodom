@@ -634,11 +634,7 @@ public final class ManagerStore {
           }
           for (long member : members)
             db.delete("note_groups", "top=?", new String[] {"" + member});
-          db.execSQL("INSERT INTO note_groups(top) VALUES(?)", new Object[] {result});
-          for (long member : members)
-            db.execSQL(
-                "INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)",
-                new Object[] {member, result});
+          attachDeck(result, members);
           // Галочка «Пустые и дубли — в корзину»: только в корзину, вернуть можно 30 дней.
           for (long extra : extras.keySet())
             if (members.contains(extra) && !store.trash(extra, false).isEmpty())
@@ -775,6 +771,14 @@ public final class ManagerStore {
       out.put(top, titles);
     }
     return out;
+  }
+
+  /** Добавляет верхнюю заметку и состав колоды в транзакции вызывающего кода. */
+  void attachDeck(long top, Collection<Long> members) {
+    db.execSQL("INSERT INTO note_groups(top) VALUES(?)", new Object[] {top});
+    for (long member : members)
+      db.execSQL(
+          "INSERT OR REPLACE INTO note_members(note,top) VALUES(?,?)", new Object[] {member, top});
   }
 
   /** «Разобрать колоду»: исходные возвращаются в список, сводка остаётся обычной заметкой. */

@@ -8177,6 +8177,9 @@ public final class MainActivity extends Activity
 
   // ---- Хаб ----
 
+  private static final java.util.concurrent.atomic.AtomicBoolean globalSortRunning =
+      new java.util.concurrent.atomic.AtomicBoolean();
+
   private void settings() {
     content.addView(topBar(true, false), new LinearLayout.LayoutParams(-1, dp(44)));
     gap(content, 10);
@@ -8185,11 +8188,92 @@ public final class MainActivity extends Activity
     settingsRow("ИИ", aiSummary(), "settings.ai");
     settingsRow("Напоминания и уведомления", reminderSummary(), "settings.reminders");
     settingsRow("Помощник заметок", assistantSummary(), "settings.assistant");
+    content.addView(button("Глобальная сортировка", false, this::showGlobalSort));
+    gap(content, 10);
     settingsRow("Синхронизация", PeerSync.summary(this), "settings.sync");
     settingsRow(
         "Приложение",
         "Внешний вид, данные · версия " + appVersion(),
         "settings.app");
+  }
+
+  private void showGlobalSort() {
+    if (globalSortRunning.get()) {
+      toast("Сортировка уже выполняется");
+      return;
+    }
+    GlobalSort.Scope[] scopes = GlobalSort.Scope.values();
+    int[] selected = {0};
+    new Ask(this)
+        .setTitle("Глобальная сортировка")
+        .setMessage("Агент соберёт похожие заметки в новые колоды. При сортировке папок он заново"
+            + " распределит заметки по темам, а неподходящие оставит в «Все». Папки инкогнито"
+            + " и архив сводок защищены. Сортировка выполняется на устройстве.")
+        .setSingleChoiceItems(new String[] {
+            "Только заметки · в пределах своих папок",
+            "Заметки и папки · существующие колоды сохранятся",
+            "Всё · заметки, папки и существующие колоды"
+        }, selected[0], (d, which) -> selected[0] = which)
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton("Продолжить", (d, w) -> {
+          GlobalSort.Scope scope = scopes[selected[0]];
+          if (scope == GlobalSort.Scope.ALL) confirmGlobalSort();
+          else runGlobalSort(scope, GlobalSort.Summaries.ARCHIVE);
+        })
+        .show();
+  }
+
+  private void confirmGlobalSort() {
+    int[] selected = {0};
+    new Ask(this)
+        .setTitle("Куда убрать старые сводки?")
+        .setMessage("Агент разберёт старые колоды и снова распределит исходные заметки. Все их"
+            + " верхние заметки со сводками уйдут в отдельную папку или в корзину. Сводки из"
+            + " корзины можно восстановить в течение 30 дней.")
+        .setSingleChoiceItems(new String[] {"В архив сводок колод", "В корзину"}, selected[0],
+            (d, which) -> selected[0] = which)
+        .setNegativeButton("Отмена", null)
+        .setPositiveButton("Начать сортировку", (d, w) -> runGlobalSort(GlobalSort.Scope.ALL,
+            selected[0] == 0 ? GlobalSort.Summaries.ARCHIVE : GlobalSort.Summaries.TRASH))
+        .show();
+  }
+
+  private void runGlobalSort(GlobalSort.Scope scope, GlobalSort.Summaries summaries) {
+    if (!globalSortRunning.compareAndSet(false, true)) {
+      toast("Сортировка уже выполняется");
+      return;
+    }
+    Context app = getApplicationContext();
+    toast("Агент сортирует заметки…");
+    heavy.execute(() -> {
+      String message;
+      try (Store sortingStore = new Store(app)) {
+        GlobalSort.Result result = GlobalSort.run(sortingStore, scope, summaries);
+        for (long id : result.trashed) Reminders.cancel(app, id);
+        if (!result.trashed.isEmpty()) CalendarSync.runAsync(app);
+        if (result.decks == 0 && result.moved == 0 && result.dissolved == 0) {
+          message = "Сортировка завершена. Изменений нет";
+        } else {
+          List<String> changes = new ArrayList<>();
+          if (result.decks > 0) changes.add("новых колод: " + result.decks);
+          if (result.moved > 0) changes.add("перенесено заметок: " + result.moved);
+          if (result.archived > 0) changes.add("сводок в архиве: " + result.archived);
+          if (!result.trashed.isEmpty()) changes.add("сводок в корзине: " + result.trashed.size());
+          message = "Сортировка завершена — " + String.join(", ", changes);
+        }
+      } catch (Exception e) {
+        android.util.Log.e("FastNotes", "Global sort failed", e);
+        message = "Не удалось завершить сортировку";
+      } finally {
+        globalSortRunning.set(false);
+      }
+      String result = message;
+      runOnUiThread(() -> {
+        if (isDestroyed() || isFinishing()) return;
+        if ("notes".equals(page) || "manager".equals(page) || "trash".equals(page)) render();
+        toast(result);
+      });
+    });
   }
 
   // ---- ИИ ----

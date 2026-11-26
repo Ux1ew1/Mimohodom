@@ -59,6 +59,10 @@ public final class FolderStore {
 
   /** Создаёт папку и возвращает её номер; если такая уже есть, возвращает существующую. 0 — имя недопустимо. */
   public long create(String name, boolean auto) {
+    return create(name, auto, null);
+  }
+
+  long create(String name, boolean auto, String uid) {
     if (!FolderPolicy.valid(name)) return 0;
     String key = FolderPolicy.key(name);
     try (Cursor c =
@@ -68,7 +72,7 @@ public final class FolderStore {
     ContentValues v = new ContentValues();
     v.put("name", FolderPolicy.clean(name));
     v.put("key", key);
-    v.put("uid", FolderPolicy.uid(key));
+    v.put("uid", uid == null ? FolderPolicy.uid(key) : uid);
     v.put("created", System.currentTimeMillis());
     v.put("auto", auto ? 1 : 0);
     return db.insertOrThrow("folders", null, v);
