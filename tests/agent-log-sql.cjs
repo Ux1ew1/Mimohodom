@@ -93,6 +93,7 @@ check(db.prepare('SELECT count(*) n FROM notes').get().n === 5, 'dissolve keeps 
 // Миграция в Store: свежая установка и обновление 13 → 14.
 check(method(store, 'void onCreate(SQLiteDatabase db)').includes('AgentLog.create(db)'), 'fresh install gets the journal');
 check(/oldV < 14\)\s*AgentLog\.create\(db\)/.test(method(store, 'void onUpgrade(SQLiteDatabase db, int oldV, int newV)')), 'upgrade 13 -> 14 adds the journal');
-check(/super\(context, name, null, 1[4-9]\)/.test(store), 'database version is at least 14');
+const dbVersion = Number(store.match(/super\(context,\s*name,\s*null,\s*(\d+)\)/)?.[1]);
+check(dbVersion >= 14, 'database version is at least 14');
 db.close();
 console.log(`PASS: ${count} agent log SQL checks (production SQL)`);
