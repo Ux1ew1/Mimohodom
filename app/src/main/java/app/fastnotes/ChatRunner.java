@@ -100,7 +100,14 @@ public final class ChatRunner {
               settings.edit().remove("chatImage." + chat).apply();
             changed();
             long planNote = store.chatNote(chat);
-            if (planNote > 0) {
+            if (planNote > 0 && !store.aiAllowed(planNote))
+              throw new java.io.IOException("Заметка недоступна для обсуждения с ИИ.");
+            long reminderSource = settings.getLong("reminderSource", 0);
+            if (query.startsWith(ReminderBatch.REQUEST) && reminderSource > 0
+                && !store.aiAllowed(reminderSource))
+              throw new java.io.IOException("Заметка недоступна для ИИ.");
+            history = store.aiHistory(history);
+            if (planNote > 0 && local) {
               planReply(store, chat, planNote, key, model, query, history);
               return;
             }
@@ -115,6 +122,10 @@ public final class ChatRunner {
             String visionModel = imageModel.trim().isEmpty() ? model : imageModel.trim();
             Polza.Answer answer;
             long created = 0;
+            boolean batchRequest = !checkin && chatImages.isEmpty() && query.startsWith(ReminderBatch.REQUEST);
+            ReminderBatch.Result schedule = batchRequest
+                ? ReminderBatch.requestSchedule(query, java.time.ZoneId.systemDefault(), System.currentTimeMillis())
+                : null;
             if (noteFlow) {
               Vision.Result result =
                   ImageFiles.analyze(app, key, visionModel, ImageList.join(current), query);
@@ -138,15 +149,24 @@ public final class ChatRunner {
                 store.getWritableDatabase().endTransaction();
               }
               answer.usage = "Изображения проанализированы. Заметка сохранена.";
-            } else if (!checkin && chatImages.isEmpty() && CommandAnalysis.wantsDuplicates(query)) {
+            } else if (batchRequest && !schedule.items.isEmpty()) {
+              answer = new Polza.Answer();
+              answer.text = "Проверьте даты напоминаний.";
+              answer.reminders = ReminderBatch.toJson(schedule);
+              answer.sources = new JSONArray();
+              answer.usage = "Даты распознаны на устройстве";
+            } else if (!batchRequest && !checkin && chatImages.isEmpty() && CommandAnalysis.wantsDuplicates(query)) {
               // Дубли ищем на устройстве: ни модель, ни облако, ни удаление записей.
-              answer = commandReply(store, key, model, query);
-            } else if (!local && !checkin && chatImages.isEmpty() && CommandAnalysis.wants(query)) {
-              // Команда получает отдельный строгий контракт. Даже валидный ответ — только черновик.
-              answer = commandReply(store, key, model, query);
+              answer = duplicatesReply(store, query, System.currentTimeMillis());
+            } else if (!batchRequest && !local && current.isEmpty()
+                && (chatImages.isEmpty() || planNote > 0)) {
+              answer = agentReply(store, model, query, history, planNote, maxTokens,
+                  payload -> store.complete(key, payload));
             } else {
               // Диалог, начатый помощником: он продолжает расспрашивать по ситуации.
               String guidance = checkin ? CheckIn.followUp(local) : "";
+              if (batchRequest) guidance = "Предложи напоминания по всем будущим датам из текста "
+                  + "в блоке [[reminders]]. Каждую дату запиши отдельной строкой.";
               // Чат помнит картинки: последние из них идут в запрос, даже если их прислали давно.
               List<String> picked =
                   local
@@ -210,6 +230,9 @@ public final class ChatRunner {
                         + chatImages.size();
             }
             if (!noteFlow && store.chatExists(chat)) {
+              if (!local && answer.draft != null && current.isEmpty()
+                  && (chatImages.isEmpty() || planNote > 0))
+                answer.draft.put("device", new SqliteSyncStore(store).deviceId());
               long memoNote = 0;
               boolean memoUpdated = false;
               String memoBody = "", memoTitle = "", memoRef = "";
@@ -223,6 +246,8 @@ public final class ChatRunner {
                       update.getJSONObject("metadata"));
                 }
                 if (answer.draft != null
+                    && !batchRequest
+                    && (local || !chatImages.isEmpty() && planNote == 0)
                     && !CommandDraft.isDraft(answer.draft)
                     && Polza.wantsNote(query)) {
                   long id =
@@ -235,7 +260,7 @@ public final class ChatRunner {
                       new JSONObject().put("id", id).put("title", answer.draft.getString("title")));
                   answer.text += "\n\nЗаметка создана [[note:" + id + "]].";
                   answer.draft = null;
-                } else if (checkin && answer.draft != null) {
+                } else if (checkin && answer.draft != null && local) {
                   // Диалог помощника: заметку записываем сами. Свою прежнюю запись из этого чата
                   // обновляем, пока пользователь её не правил; если правил, оставляем предложение.
                   var prefs = app.getSharedPreferences("settings", 0);
@@ -330,25 +355,56 @@ public final class ChatRunner {
         });
   }
 
-  /** Изменяющая команда: один запрос, строгий разбор и только сериализация предпросмотра. */
-  private static Polza.Answer commandReply(Store store, String key, String model, String query)
-      throws Exception {
+  interface AgentCompletion {
+    JSONObject send(JSONObject payload) throws Exception;
+  }
+
+  static Polza.Answer agentReply(Store store, String model, String query, JSONArray history,
+      long linked, int maxTokens, AgentCompletion completion) throws Exception {
     long now = System.currentTimeMillis();
     java.time.ZoneId zone = java.time.ZoneId.systemDefault();
     if (CommandAnalysis.wantsDuplicates(query)) return duplicatesReply(store, query, now);
-    List<Note> ranked = Retrieval.select(store.candidates(query), query, now, 24);
+    StringBuilder topic = new StringBuilder();
+    for (int i = Math.max(0, history.length() - 10); i < history.length(); i++) {
+      JSONObject turn = history.getJSONObject(i);
+      if ("user".equals(turn.optString("role")))
+        topic.append(ChatImages.split(turn.optString("content")).text).append('\n');
+    }
+    topic.append(query);
+    List<Long> requested = CollectionDraft.requestedSources(query);
+    List<Note> candidates = store.candidates(topic.toString());
+    List<Note> ranked = Retrieval.select(candidates, topic.toString(), now, 24);
     List<Note> selected = new ArrayList<>();
     java.util.Set<Long> picked = new java.util.HashSet<>();
-    if (CommandAnalysis.clearsCompleted(query)) {
+    if (requested.isEmpty() && linked > 0 && store.aiAllowed(linked)) {
+      selected.add(store.note(linked));
+      picked.add(linked);
+    }
+    if (requested.isEmpty() && CommandAnalysis.clearsCompleted(query)) {
       // Выполненные дела не должны потеряться из-за текстового рейтинга или старого срока.
-      for (Note note : store.notes())
+      for (Note note : store.aiNotes())
         if (selected.size() < 24 && (note.reminder > 0 || !note.reminderTimes.isEmpty())
             && PlanTree.parse(store.plan(note.id)).completed() && picked.add(note.id)) selected.add(note);
     }
-    for (Note note : ranked) if (selected.size() < 24 && picked.add(note.id)) selected.add(note);
+    if (requested.isEmpty()) {
+      for (Note note : ranked) if (selected.size() < 24 && picked.add(note.id)) selected.add(note);
+    } else {
+      for (long id : requested) {
+        if (!store.aiAllowed(id)) throw new java.io.IOException("Выбранная заметка недоступна для ИИ.");
+        if (picked.add(id)) selected.add(store.note(id));
+      }
+    }
+    ManagerStore groups = new ManagerStore(store);
+    // Include the existing summary so the model can extend it using the original wording.
+    for (Note note : new ArrayList<>(selected)) {
+      long top = groups.top(note.id);
+      if (selected.size() < 24 && top > 0 && store.aiAllowed(top) && picked.add(top))
+        selected.add(store.note(top));
+    }
     List<CommandAnalysis.FolderInfo> folders = new ArrayList<>();
     for (FolderStore.Folder folder : new FolderStore(store).list())
-      folders.add(new CommandAnalysis.FolderInfo(folder.id, folder.name));
+      if (!store.isIncognitoFolder(folder.id))
+        folders.add(new CommandAnalysis.FolderInfo(folder.id, folder.name));
     AgentAction.Scope scope = new AgentAction.Scope(now, zone);
     java.util.Set<Long> completed = new java.util.HashSet<>();
     for (Note note : selected) {
@@ -358,20 +414,74 @@ public final class ChatRunner {
         scope.completed(note.id);
       }
     }
-    JSONObject response = store.complete(key,
-        CommandAnalysis.payload(model, query, selected, folders, now, zone, completed));
+    JSONObject payload =
+        CommandAnalysis.payload(model, query, selected, folders, now, zone, completed);
+    JSONObject data = AgentChatPrompt.context(payload);
+    data.put("linked_note", linked);
+    JSONArray rows = data.getJSONArray("notes");
+    for (int i = 0; i < rows.length(); i++) {
+      JSONObject row = rows.getJSONObject(i);
+      long id = row.getLong("id"), top = groups.top(id);
+      if (top > 0 && picked.contains(top)) row.put("deck", top);
+      if (id == linked) {
+        row.put("text", Retrieval.excerpt(store.note(id).body, query, 5000));
+        row.put("plan", PlanTree.parse(store.plan(id)).forModel(zone));
+        List<String> answers = groups.noteAnswers(id);
+        if (!answers.isEmpty()) row.put("answers", new JSONArray(answers));
+      }
+    }
+    if (!requested.isEmpty()) data.put("selected_sources", new JSONArray(requested));
+    JSONArray turns = new JSONArray();
+    for (int i = Math.max(0, history.length() - 10); i < history.length(); i++) {
+      JSONObject turn = history.getJSONObject(i);
+      String text = PlanChat.split(ChatMemo.split(ChatImages.split(turn.optString("content")).text).text).text;
+      String role = turn.getString("role");
+      if ("assistant".equals(role) && "null".equalsIgnoreCase(text.trim())) continue;
+      turns.put(new JSONObject().put("role", role)
+          .put("content", Retrieval.excerpt(text, "", 1800)));
+    }
+    AgentChatPrompt.payload(payload, query, turns, data, maxTokens);
+    JSONObject response = completion.send(payload);
     CommandAnalysis.Reply reply;
+    String raw;
     try {
-      reply = CommandAnalysis.parse(CommandAnalysis.responseText(response), scope);
+      raw = CommandAnalysis.chatResponseText(response);
     } catch (JSONException e) {
-      String detail = e.getMessage() == null ? "неизвестная ошибка JSON" : e.getMessage();
+      throw new java.io.IOException("Модель не вернула текст ответа. Повторите запрос или выберите другую модель.", e);
+    }
+    boolean truncated = "length".equals(
+        response.getJSONArray("choices").getJSONObject(0).optString("finish_reason"));
+    try {
+      reply = CommandAnalysis.parseChat(raw, scope);
+    } catch (JSONException e) {
       throw new java.io.IOException(
-          "Модель вернула неверный формат команды. Ничего не изменено."
-              + " Повторите запрос вручную или выберите другую модель.\n\nПричина: " + detail,
+          truncated
+              ? "Ответ модели оборвался. Увеличьте длину ответа в настройках и повторите запрос."
+              : "Модель вернула ответ в неверном формате. Повторите запрос или выберите другую модель.",
           e);
     }
+    JSONObject structured = reply.structured;
     Polza.Answer answer = new Polza.Answer();
     answer.sources = new JSONArray();
+    java.util.Set<Long> provenance = new java.util.HashSet<>();
+    for (Note note : selected) {
+      if (!store.aiAllowed(note.id))
+        throw new java.io.IOException("Доступ к источникам изменился. Повторите запрос.");
+      answer.sources.put(new JSONObject().put("id", note.id).put("title", note.title)
+          .put("contextOnly", !(reply.say.contains("[[note:" + note.id + "]]")
+              || reply.question.contains("[[note:" + note.id + "]]"))));
+      provenance.add(note.id);
+    }
+    for (int i = Math.max(0, history.length() - 10); i < history.length(); i++) {
+      JSONArray sources = history.getJSONObject(i).optJSONArray("sources");
+      for (int j = 0; sources != null && j < sources.length(); j++) {
+        JSONObject source = sources.getJSONObject(j);
+        long id = source.optLong("id");
+        if (store.aiAllowed(id) && provenance.add(id))
+          answer.sources.put(new JSONObject().put("id", id).put("title", source.optString("title"))
+              .put("contextOnly", true));
+      }
+    }
     String say = reply.say, question = reply.question;
     answer.text =
         question.isEmpty()
@@ -379,18 +489,49 @@ public final class ChatRunner {
             : say.isEmpty() ? question : say + "\n\n" + question;
     CommandDraft draft =
         CommandDraft.create(query, reply.actions, selected, folders, now, zone, reply.rejected);
-    if (!draft.actions.isEmpty()) {
+    JSONObject proposedCollection = structured.optJSONObject("collection");
+    JSONObject proposedPlan = structured.optJSONObject("plan");
+    if (truncated && (proposedCollection != null || proposedPlan != null))
+      throw new java.io.IOException(
+          "Ответ модели оборвался. Увеличьте длину ответа в настройках и повторите запрос.");
+    PlanTree plan = proposedPlan == null ? null : PlanTree.fromModel(proposedPlan, zone);
+    if (plan != null && plan.isEmpty())
+      throw new java.io.IOException("Модель не вернула ни одного пункта плана. Повторите запрос.");
+    if (question.isEmpty() && proposedCollection != null) {
+      if (!requested.isEmpty()) proposedCollection.put("sources", new JSONArray(requested));
+      JSONObject collection = CollectionDraft.create(store, proposedCollection, selected, plan,
+          requested.isEmpty() && (candidates.size() > ranked.size() || selected.size() >= 24));
+      if (collection.has("question")) answer.text = collection.getString("question");
+      else answer.draft = collection.put("query", query);
+    } else if (question.isEmpty() && (plan != null || structured.optJSONObject("edit") != null)) {
+      long target = structured.optLong("note", linked);
+      if (target <= 0 || !picked.contains(target) || !store.aiAllowed(target))
+        throw new java.io.IOException("Укажите, в какой заметке сохранить изменения.");
+      PlanChat.Reply parsed = PlanChat.parse(structured.toString(), zone, now);
+      Note source = selected.stream().filter(note -> note.id == target).findFirst().orElseThrow();
+      answer.draft = new JSONObject().put("note", target).put("revision", source.updated);
+      if (plan != null) {
+        plan.keepDone(PlanTree.parse(store.plan(target)));
+        answer.draft.put("plan", plan.toJson());
+      }
+      if (target == linked && parsed.edit != null) answer.draft.put("edit", parsed.edit.toJson());
+      if (!answer.draft.has("plan") && !answer.draft.has("edit")) answer.draft = null;
+    } else if (question.isEmpty() && !draft.actions.isEmpty()) {
       answer.draft = draft.toJson();
       if (answer.text.isEmpty()) answer.text = "Проверьте предложенные изменения.";
-    } else if (question.isEmpty()) {
+    } else if (question.isEmpty() && reply.rejected > 0) {
       // Не показываем «Создаю»/«Перемещаю», если проверка не нашла действия для предпросмотра.
-      answer.text = reply.rejected > 0
-          ? "Модель предложила только недопустимые действия (" + reply.rejected
-              + "). Ничего не изменено. Повторите команду или выберите другую модель."
-          : "Модель не подготовила действия для предпросмотра. Ничего не изменено."
-              + " Повторите команду или уточните её.";
+      answer.text = "Модель предложила только недопустимые действия (" + reply.rejected
+          + "). Уточните команду или выберите другую модель.";
     }
-    StringBuilder used = new StringBuilder("Команда · предпросмотр без изменений");
+    if (answer.text.isEmpty()) {
+      if (answer.draft == null)
+        throw new java.io.IOException("Модель не вернула текст ответа. Повторите запрос или выберите другую модель.");
+      answer.text = "Проверьте предложенные изменения.";
+    }
+    if (truncated)
+      answer.text += "\n\nОтвет сокращён по лимиту. Можно увеличить длину ответа в настройках.";
+    StringBuilder used = new StringBuilder(model);
     JSONObject tokens = response.optJSONObject("usage");
     if (tokens != null && tokens.has("total_tokens"))
       used.append(" · ").append(tokens.optInt("total_tokens")).append(" токенов");
@@ -402,7 +543,7 @@ public final class ChatRunner {
 
   private static Polza.Answer duplicatesReply(Store store, String query, long now) throws JSONException {
     int days = CommandAnalysis.duplicateDays(query);
-    DuplicateFinder.Report report = DuplicateFinder.find(store.notes(), now, days);
+    DuplicateFinder.Report report = DuplicateFinder.find(store.aiNotes(), now, days);
     Polza.Answer answer = new Polza.Answer();
     answer.sources = new JSONArray();
     StringBuilder text = new StringBuilder();

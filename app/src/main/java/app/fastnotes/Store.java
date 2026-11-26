@@ -23,7 +23,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   private Store(Context context, String name, boolean local) {
-    super(context, name, null, 21);
+    super(context, name, null, 22);
     appContext = context.getApplicationContext();
     this.local = local;
     setWriteAheadLoggingEnabled(true);
@@ -88,6 +88,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     addSemanticIndex(db);
     addSuggestionTimes(db);
     addAttention(db);
+    addIncognito(db);
   }
 
   @Override
@@ -123,6 +124,14 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
       addSuggestionTimes(db);
       addAttention(db);
     }
+    if (oldV < 22) {
+      addIncognito(db);
+      // Re-send links to existing note chats to desktops that previously ignored them.
+      db.execSQL("UPDATE chats SET sync_seq=(SELECT seq FROM sync_meta WHERE id=1)+id,"
+          + " sync_ts=(SELECT hlc FROM sync_meta WHERE id=1)+id,sync_from='' WHERE note>0");
+      db.execSQL("UPDATE sync_meta SET seq=max(seq,(SELECT coalesce(max(sync_seq),0) FROM chats)),"
+          + " hlc=max(hlc,(SELECT coalesce(max(sync_ts),0) FROM chats)) WHERE id=1");
+    }
   }
 
   /**
@@ -132,6 +141,16 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
    * чаще раза в 20 часов»). Как {@code suggestion_times}: в обмен не идёт, триггеров нет, изменение
    * баллов не помечает заметку для компьютера. Безопасно вызывается повторно.
    */
+  private void addIncognito(SQLiteDatabase db) {
+    if (!hasColumn(db, "folders", "incognito"))
+      db.execSQL("ALTER TABLE folders ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0");
+    db.execSQL("CREATE TRIGGER IF NOT EXISTS folders_sync_incognito AFTER UPDATE OF incognito ON folders"
+        + " WHEN new.sync_seq=old.sync_seq AND new.incognito<>old.incognito BEGIN"
+        + " UPDATE sync_meta SET seq=seq+1,hlc=max(hlc+1,CAST(strftime('%s','now') AS INTEGER)*1000) WHERE id=1;"
+        + " UPDATE folders SET sync_ts=(SELECT hlc FROM sync_meta WHERE id=1),"
+        + " sync_seq=(SELECT seq FROM sync_meta WHERE id=1),sync_from='' WHERE id=new.id; END");
+  }
+
   private void addAttention(SQLiteDatabase db) {
     if (!hasColumn(db, "attention"))
       db.execSQL("ALTER TABLE notes ADD COLUMN attention INTEGER NOT NULL DEFAULT -1");
@@ -606,9 +625,10 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   @Override
   public List<Note> candidates(String query) {
     List<Note> result = searchNotes(query);
+    result.removeIf(n -> isIncognitoFolder(n.folder));
     Set<Long> ids = new HashSet<>();
     // Этот путь используется фоновым запросом чата: индекс не считается на потоке интерфейса.
-    SemanticIndex.Ranked semantic = SemanticIndex.rank(this, query, notes());
+    SemanticIndex.Ranked semantic = SemanticIndex.rank(this, query, aiNotes());
     for (Note n : result) {
       ids.add(n.id);
       n.semanticScore = semantic.scores.getOrDefault(n.id, 0.0);
@@ -626,7 +646,8 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
       try (Cursor c =
           getReadableDatabase()
               .rawQuery(
-                  "SELECT * FROM notes WHERE reminder>=? AND trashed=0 ORDER BY reminder LIMIT 16",
+                  "SELECT * FROM notes WHERE reminder>=? AND trashed=0" + AI_FOLDER_FILTER
+                      + " ORDER BY reminder LIMIT 16",
                   new String[] {"" + System.currentTimeMillis()})) {
         while (c.moveToNext()) {
           Note n = read(c);
@@ -637,10 +658,52 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (result.isEmpty())
       try (Cursor c =
           getReadableDatabase()
-              .rawQuery("SELECT * FROM notes WHERE trashed=0 ORDER BY updated DESC LIMIT 24", null)) {
+              .rawQuery("SELECT * FROM notes WHERE trashed=0" + AI_FOLDER_FILTER
+                  + " ORDER BY updated DESC LIMIT 24", null)) {
         while (c.moveToNext()) result.add(read(c));
       }
     return result;
+  }
+
+  private static final String AI_FOLDER_FILTER =
+      " AND folder NOT IN (SELECT id FROM folders WHERE incognito=1)";
+
+  public List<Note> aiNotes() {
+    List<Note> notes = notes();
+    notes.removeIf(n -> isIncognitoFolder(n.folder));
+    return notes;
+  }
+
+  public boolean isIncognitoFolder(long folder) {
+    if (folder <= 0) return false;
+    try (Cursor c = getReadableDatabase().rawQuery(
+        "SELECT incognito FROM folders WHERE id=?", new String[] {Long.toString(folder)})) {
+      return c.moveToFirst() && c.getInt(0) != 0;
+    }
+  }
+
+  public boolean aiAllowed(long id) {
+    Note n = note(id);
+    return n != null && n.trashed == 0 && !isIncognitoFolder(n.folder);
+  }
+
+  public JSONArray aiHistory(JSONArray history) {
+    JSONArray allowed = new JSONArray();
+    for (int i = 0; i < history.length(); i++) {
+      JSONObject message = history.optJSONObject(i);
+      if (message == null) continue;
+      JSONArray sources = message.optJSONArray("sources");
+      boolean blocked = false;
+      for (int j = 0; sources != null && j < sources.length(); j++) {
+        JSONObject source = sources.optJSONObject(j);
+        if (source != null && !aiAllowed(source.optLong("id"))) {
+          blocked = true;
+          break;
+        }
+      }
+      if (!blocked) allowed.put(message);
+    }
+    return allowed;
   }
 
   public Note note(long id) {
@@ -1075,6 +1138,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
         getReadableDatabase()
             .rawQuery(
                 "SELECT * FROM notes WHERE ai_checked<>updated AND trashed=0"
+                    + AI_FOLDER_FILTER
                     // Эксперимент: заметка без баллов внимания помощника не проверяется.
                     + (attentionEnabled() ? " AND attention<>0" : "")
                     + " AND id NOT IN (SELECT top FROM note_groups)"
@@ -1087,7 +1151,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   public boolean claimAnalysis(Note note) {
-    if (new ManagerStore(this).top(note.id) != 0) return false;
+    if (!aiAllowed(note.id) || new ManagerStore(this).top(note.id) != 0) return false;
     ContentValues v = new ContentValues();
     v.put("ai_checked", note.updated);
     v.put("ai_failed", 1);
@@ -1115,6 +1179,7 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   private boolean applyAnalysisLocked(Note snapshot, Analysis.Result result) {
     Note note = note(snapshot.id);
     if (note == null
+        || isIncognitoFolder(note.folder)
         || note.updated != snapshot.updated
         || new ManagerStore(this).top(note.id) != 0) return false;
     ContentValues v = new ContentValues();
@@ -1448,7 +1513,19 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     db.beginTransaction();
     try {
       Note old = note(noteId);
-      if (old == null || old.trashed > 0) throw new IllegalStateException("Заметку удалили");
+      if (old == null || !aiAllowed(noteId))
+        throw new IllegalStateException("Заметка недоступна для ИИ");
+      try (Cursor cursor = db.rawQuery("SELECT draft FROM messages WHERE id=?",
+          new String[] {Long.toString(message)})) {
+        if (!cursor.moveToFirst() || cursor.getString(0).isEmpty())
+          throw new IllegalStateException("Предпросмотр уже закрыт");
+        JSONObject draft = new JSONObject(cursor.getString(0));
+        if (!ownsDraft(draft) || draft.optLong("note") != noteId
+            || draft.optLong("revision", old.updated) != old.updated)
+          throw new IllegalStateException("Заметка изменилась. Подготовьте новый черновик.");
+      } catch (JSONException e) {
+        throw new IllegalStateException("Черновик повреждён", e);
+      }
       if (edit != null) {
         NoteEdit.Result r =
             edit.apply(
@@ -1822,6 +1899,11 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
     if (getWritableDatabase().update("messages", v,
         "id=? AND role='assistant' AND draft<>''", new String[] {"" + message}) != 1)
       throw new IllegalStateException("Черновик уже применён или закрыт");
+  }
+
+  public boolean ownsDraft(JSONObject draft) {
+    String device = draft.optString("device");
+    return device.isEmpty() || device.equals(new SqliteSyncStore(this).deviceId());
   }
 
   public void dismissDraft(long message) {

@@ -30,7 +30,7 @@ check(db.prepare('SELECT fingerprint FROM note_embeddings WHERE note_id=1').get(
 check(db.prepare('SELECT count(*) n FROM note_embeddings').get().n === 1, 'unchanged notes are not duplicated');
 db.prepare('DELETE FROM notes WHERE id=1').run();
 check(db.prepare('SELECT count(*) n FROM note_embeddings').get().n === 0, 'deleting note cascades to vector');
-check(store.includes('super(context, name, null, 21)') && store.includes('if (oldV < 18) addSemanticIndex(db)'), 'SQLite 21 carries the 18 upgrade');
+check(store.includes('super(context, name, null, 22)') && store.includes('if (oldV < 18) addSemanticIndex(db)'), 'SQLite 22 carries the 18 upgrade');
 check(index.includes('!old.fingerprint.equals(fingerprint)'), 'index recomputes changed content');
 check(index.indexOf('if (!changed.isEmpty())') < index.indexOf('db.beginTransaction()'), 'unchanged archive opens no write transaction');
 check(index.includes('insertWithOnConflict'), 'only stale vectors upserted');

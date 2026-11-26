@@ -6,7 +6,7 @@ use super::review::{self, AnalysisResult};
 use super::text;
 use crate::policy;
 use crate::store::{now_ms, Note, SaveInput, Store};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -116,6 +116,7 @@ impl Store {
         let mut st = self.conn.prepare(
             "SELECT n.id,r.revision FROM notes n LEFT JOIN manager_review r ON r.note=n.id
              WHERE n.id NOT IN (SELECT top FROM note_groups) AND n.id NOT IN (SELECT note FROM note_members)
+             AND n.folder NOT IN (SELECT id FROM folders WHERE incognito=1)
              ORDER BY CASE WHEN r.note IS NULL THEN 0 ELSE 1 END, COALESCE(r.attempted,0), n.id",
         )?;
         let rows: Vec<(i64, Option<String>)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -276,7 +277,8 @@ impl Store {
         sources.iter().all(|s| {
             let (Some(id), Some(rev)) = (s["id"].as_i64(), s["revision"].as_str()) else { return false };
             match self.note(id) {
-                Ok(Some(n)) => review::fingerprint(&n) == rev && self.top_of(id) == 0,
+                Ok(Some(n)) => self.ai_allowed(id).unwrap_or(false)
+                    && review::fingerprint(&n) == rev && self.top_of(id) == 0,
                 _ => false,
             }
         })
@@ -329,7 +331,10 @@ impl Store {
         let mut ids: Vec<i64> = p["sources"].as_array().map(|a| a.iter().filter_map(|s| s["id"].as_i64()).collect()).unwrap_or_default();
         ids.sort_unstable();
         ids.dedup();
-        ids.into_iter().map(|id| self.note(id)?.ok_or_else(|| anyhow!("Исходники изменились. Запустите новую проверку."))).collect()
+        ids.into_iter().map(|id| {
+            if !self.ai_allowed(id)? { bail!("Исходники изменились. Запустите новую проверку."); }
+            self.note(id)?.ok_or_else(|| anyhow!("Исходники изменились. Запустите новую проверку."))
+        }).collect()
     }
 
     /// Принимает предложение: создаёт заметку (с правками пользователя), а для объединения и связи
@@ -457,14 +462,16 @@ impl Store {
 
     /// Ближайшие заметки с напоминаниями: (время, название).
     pub fn upcoming(&self, now: i64, limit: i64) -> Result<Vec<(i64, String)>> {
-        let mut st = self.conn.prepare("SELECT reminder,title FROM notes WHERE reminder>=?1 ORDER BY reminder LIMIT ?2")?;
+        let mut st = self.conn.prepare("SELECT reminder,title FROM notes WHERE reminder>=?1
+            AND folder NOT IN (SELECT id FROM folders WHERE incognito=1) ORDER BY reminder LIMIT ?2")?;
         let rows = st.query_map(params![now, limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Свежие заметки: (название, текст).
     pub fn recent_notes(&self, limit: i64) -> Result<Vec<(String, String)>> {
-        let mut st = self.conn.prepare("SELECT title,body FROM notes ORDER BY updated DESC LIMIT ?1")?;
+        let mut st = self.conn.prepare("SELECT title,body FROM notes
+            WHERE folder NOT IN (SELECT id FROM folders WHERE incognito=1) ORDER BY updated DESC LIMIT ?1")?;
         let rows = st.query_map(params![limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -503,7 +510,9 @@ impl Store {
     /// Номер самой ранней заметки, в тексте которой есть эта строка, или 0.
     pub fn note_id_containing(&self, text: &str) -> i64 {
         self.conn
-            .query_row("SELECT id FROM notes WHERE instr(body,?1)>0 ORDER BY id LIMIT 1", params![text], |r| r.get(0))
+            .query_row("SELECT id FROM notes WHERE instr(body,?1)>0
+                AND folder NOT IN (SELECT id FROM folders WHERE incognito=1) ORDER BY id LIMIT 1",
+                params![text], |r| r.get(0))
             .optional()
             .ok()
             .flatten()
@@ -514,6 +523,7 @@ impl Store {
     pub fn video_notes(&self) -> Result<Vec<Note>> {
         let mut st = self.conn.prepare(
             "SELECT id FROM notes WHERE instr(body,?1)>0
+             AND folder NOT IN (SELECT id FROM folders WHERE incognito=1)
              AND id NOT IN (SELECT top FROM note_groups) AND id NOT IN (SELECT note FROM note_members)
              ORDER BY updated DESC LIMIT 100",
         )?;

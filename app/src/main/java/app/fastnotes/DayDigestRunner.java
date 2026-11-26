@@ -51,6 +51,9 @@ public final class DayDigestRunner {
     worker.execute(
         () -> {
           try (Store store = new Store(app, false)) {
+            for (DayDigest.Entry entry : snapshot.entries)
+              if (!store.aiAllowed(entry.id))
+                throw new java.io.IOException("Доступ к заметкам изменился. Откройте сводку заново.");
             JSONObject response = store.complete(key, DayDigest.payload(model, snapshot));
             DayDigest.Result parsed = DayDigest.parse(DayDigest.responseText(response), snapshot);
             if (day == snapshot.start) result = parsed;

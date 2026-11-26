@@ -1441,8 +1441,12 @@ public final class MainActivity extends Activity
     content.addView(text(Character.toUpperCase(dayName.charAt(0)) + dayName.substring(1), 14, MUTED));
     DayDigest.Input digestInput;
     try {
+      List<Note> reminders = store.dayReminders(start, end);
+      reminders.removeIf(n -> store.isIncognitoFolder(n.folder));
+      List<DayDigest.PlanSource> plans = store.dayPlanSources(start, end);
+      plans.removeIf(p -> !store.aiAllowed(p.id));
       digestInput = DayDigest.collect(
-          store.dayReminders(start, end), store.dayPlanSources(start, end), start, end, zone);
+          reminders, plans, start, end, zone);
     } catch (JSONException e) {
       digestInput = new DayDigest.Input(start, end, zone);
     }
@@ -2260,7 +2264,8 @@ public final class MainActivity extends Activity
       }
     }
     if (note != null && note.suggestion > 0) {
-      long[] offered = ReminderPolicy.parseTimes(note.suggestionTimes);
+      long[] offered = ReminderBatch.offeredTimes(note.body, note.suggestion, note.suggestionTimes,
+          ZoneId.systemDefault(), System.currentTimeMillis());
       gap(content, 12);
       LinearLayout proposal = column();
       pad(proposal, 14);
@@ -2847,6 +2852,10 @@ public final class MainActivity extends Activity
    * датам», на который ИИ ответит пачкой напоминаний. Запрос виден и правится перед отправкой.
    */
   private void remindersFromText() {
+    if (editing > 0 && (store.isIncognitoFolder(editFolder) || !store.aiAllowed(editing))) {
+      toast("Заметка исключена из сценариев ИИ");
+      return;
+    }
     String text = bodyField == null ? "" : bodyField.getText().toString().trim();
     String name = titleField == null ? "" : titleField.getText().toString().trim();
     if (text.isEmpty()) return;
@@ -3684,6 +3693,22 @@ public final class MainActivity extends Activity
       chip.setOnLongClickListener(
           v -> {
             Pop popup = new Pop(chip);
+            boolean incognito = store.isIncognitoFolder(f.id);
+            popup.getMenu().add(incognito ? "Выключить инкогнито" : "Включить инкогнито")
+                .setOnMenuItemClickListener(item -> {
+                  Runnable toggle = () -> {
+                    new FolderStore(store).setIncognito(f.id, !incognito);
+                    render();
+                  };
+                  if (!incognito && !new SqliteSyncStore(store).peers().isEmpty())
+                    new Ask(this).setTitle("Включить инкогнито?")
+                        .setMessage("Обновите Мимоходом на всех подключённых компьютерах и выполните "
+                            + "обмен. До обмена компьютер использует прежнее состояние папки.")
+                        .setNegativeButton("Отмена", null)
+                        .setPositiveButton("Включить", (d, w) -> toggle.run()).show();
+                  else toggle.run();
+                  return true;
+                });
             popup
                 .getMenu()
                 .add("Переименовать")
@@ -5485,6 +5510,11 @@ public final class MainActivity extends Activity
     }
     content.addView(actions);
     long planNote = chat > 0 ? store.chatNote(chat) : 0;
+    if (!LocalLlm.enabled(this)) {
+      String model = ChatModels.active(prefs, chat);
+      content.addView(compactButton(model.isEmpty() ? "Выбрать модель" : model,
+          false, () -> chooseChatModel(false)));
+    }
     Note planOf = planNote > 0 ? store.note(planNote) : null;
     if (planOf != null) {
       // Чат по заметке: ссылка на неё под заголовком.
@@ -5510,8 +5540,7 @@ public final class MainActivity extends Activity
       gap(messages, 12);
       chatNote(
           messages,
-          "Агент задаст несколько вопросов по задаче и соберёт план. Можно попросить переименовать"
-              + " заметку, дописать в неё или напомнить о дате — изменения применяются кнопкой.");
+          "Обсудите заметку или попросите помощника подготовить изменения.");
       gap(messages, 6);
       messages.addView(
           compactButton(
@@ -5568,7 +5597,6 @@ public final class MainActivity extends Activity
         gap(bubble, 2);
         TextView body = text("", 14, INK);
         body.setLineSpacing(dp(2), 1);
-        body.setTextIsSelectable(true);
         String said = asked == null ? part.text : asked.text;
         String shown = part.recap ? said.replaceFirst("^Итог\\.?\\s*", "") : said;
         // Ответы помощника выводим с разметкой, свои сообщения — как есть.
@@ -5577,6 +5605,20 @@ public final class MainActivity extends Activity
                 ? linkedAnswer(shown, m.getJSONArray("sources"))
                 : styledAnswer(shown, m.getJSONArray("sources")));
         body.setMovementMethod(LinkMovementMethod.getInstance());
+        View.OnClickListener menu = v -> messageMenu(shown, user, pictures.images);
+        boolean[] linkTouch = {false};
+        body.setOnTouchListener((view, event) -> {
+          if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            int offset = body.getOffsetForPosition(event.getX(), event.getY());
+            linkTouch[0] = offset >= 0 && body.getText() instanceof android.text.Spanned spans
+                && spans.getSpans(offset, offset, ClickableSpan.class).length > 0;
+          }
+          return false;
+        });
+        body.setOnClickListener(v -> {
+          if (!linkTouch[0]) menu.onClick(v);
+        });
+        bubble.setOnClickListener(menu);
         if (!pictures.images.isEmpty()) {
           bubble.addView(messageImages(pictures.images));
           if (!shown.isEmpty()) gap(bubble, 4);
@@ -5609,7 +5651,12 @@ public final class MainActivity extends Activity
           }
         }
         String draftJson = m.optString("draft", "");
-        if (!user && !draftJson.isEmpty() && CommandDraft.isDraft(new JSONObject(draftJson))) {
+        if (!user && !draftJson.isEmpty() && !store.ownsDraft(new JSONObject(draftJson))) {
+          chatNote(bubble, "Черновик доступен на исходном устройстве.");
+        } else if (!user && !draftJson.isEmpty()
+            && CollectionDraft.KIND.equals(new JSONObject(draftJson).optString("kind"))) {
+          collectionDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
+        } else if (!user && !draftJson.isEmpty() && CommandDraft.isDraft(new JSONObject(draftJson))) {
           commandDraftView(bubble, m.getLong("id"), new JSONObject(draftJson));
         } else if (!user
             && !draftJson.isEmpty()
@@ -5655,6 +5702,7 @@ public final class MainActivity extends Activity
           gap(bubble, 6);
           for (int j = 0; j < sources.length(); j++) {
             JSONObject s = sources.getJSONObject(j);
+            if (s.optBoolean("contextOnly")) continue;
             long id = s.getLong("id");
             LinearLayout source = row();
             source.setMinimumHeight(dp(34));
@@ -5697,7 +5745,8 @@ public final class MainActivity extends Activity
       TextView error = text(ChatRunner.error, 12, RED);
       messages.addView(error);
       gap(messages, 5);
-      if (history.length() > 0) {
+      if (history.length() > 0
+          && "user".equals(history.optJSONObject(history.length() - 1).optString("role"))) {
         String last = history.optJSONObject(history.length() - 1).optString("content");
         messages.addView(
             compactButton(
@@ -5708,6 +5757,16 @@ public final class MainActivity extends Activity
                   send();
                 }));
         gap(messages, 5);
+        String reserve = prefs.getString("reserveModel", "");
+        if (!LocalLlm.enabled(this) && !reserve.isEmpty()
+            && !reserve.equals(ChatModels.active(prefs, chat))) {
+          messages.addView(compactButton("Повторить на резервной", false, () -> {
+            ChatModels.select(prefs, "chatModel." + chat, reserve);
+            chatInput.setText(ChatImages.split(last).text);
+            send();
+          }));
+          gap(messages, 5);
+        }
       }
     }
     if (ChatRunner.usageChat == chat && !ChatRunner.usage.isEmpty() && history.length() > 0) {
@@ -5938,6 +5997,60 @@ public final class MainActivity extends Activity
   }
 
   /** Карточка команды и выбор заметок восстанавливаются из messages.draft после render(). */
+  private void collectionDraftView(LinearLayout bubble, long message, JSONObject draft)
+      throws JSONException {
+    gap(bubble, 8);
+    bubble.addView(text(draft.has("head") ? "Дополнить колоду «" + draft.getString("head") + "»"
+        : "Новая колода", 13, GREEN));
+    if (draft.optBoolean("limited"))
+      chatNote(bubble, "Показана сводка по заметкам, вошедшим в контекст запроса.");
+    bubble.addView(text(draft.getString("title"), 16, INK));
+    bubble.addView(text(draft.getString("body"), 14, INK));
+    if (draft.has("plan"))
+      for (String line : PlanTree.parse(draft.getString("plan")).outline(java.time.ZoneId.systemDefault()))
+        chatNote(bubble, line);
+    JSONArray sources = draft.getJSONArray("sources");
+    List<CheckBox> choices = new ArrayList<>();
+    for (int i = 0; i < sources.length(); i++) {
+      JSONObject source = sources.getJSONObject(i);
+      CheckBox choice = new CheckBox(this);
+      choice.setText(source.getString("title"));
+      choice.setChecked(true);
+      choices.add(choice);
+      bubble.addView(choice);
+    }
+    TextView apply = compactButton("Применить", true, () -> {
+      try {
+        long result = CollectionDraft.apply(store, message);
+        stash();
+        openNote(result);
+      } catch (Exception e) {
+        toast(e.getMessage() == null ? "Не удалось сохранить сводку" : e.getMessage());
+      }
+    });
+    TextView rebuild = compactButton("Пересобрать по выбранным", false, () -> {
+      List<String> ids = new ArrayList<>();
+      for (int i = 0; i < choices.size(); i++)
+        if (choices.get(i).isChecked()) ids.add(Long.toString(sources.optJSONObject(i).optLong("id")));
+      if (ids.isEmpty()) return;
+      chatInput.setText(CollectionDraft.rebuildQuery(ids, draft.optString("query")));
+      send();
+    });
+    rebuild.setVisibility(View.GONE);
+    for (CheckBox choice : choices) choice.setOnCheckedChangeListener((view, checked) -> {
+      long count = choices.stream().filter(CheckBox::isChecked).count();
+      apply.setEnabled(count == choices.size());
+      rebuild.setVisibility(count > 0 && count < choices.size() ? View.VISIBLE : View.GONE);
+    });
+    bubble.addView(apply);
+    bubble.addView(rebuild);
+    bubble.addView(compactButton("Отмена", false, () -> {
+      store.dismissDraft(message);
+      stash();
+      render();
+    }));
+  }
+
   private void commandDraftView(LinearLayout bubble, long message, JSONObject json) {
     CommandDraft draft;
     try {
@@ -6058,7 +6171,9 @@ public final class MainActivity extends Activity
         box.setOnCheckedChangeListener((v, checked) -> {
           draft.setSelected(note.id, checked);
           try {
-            store.updateDraft(message, draft.toJson());
+            JSONObject value = draft.toJson();
+            if (json.has("device")) value.put("device", json.getString("device"));
+            store.updateDraft(message, value);
             refresh.run();
           } catch (Exception e) {
             toast(e.getMessage() == null ? "Не удалось сохранить выбор" : e.getMessage());
@@ -6410,12 +6525,16 @@ public final class MainActivity extends Activity
     bubble.addView(row);
   }
 
-  /** Открывает чат по заметке; новый чат сразу просит агента начать разбор. */
+  /** Открывает чат по заметке и при запуске из предложения сразу просит разобрать план. */
   private void openPlanChat(long noteId, boolean startPlan) {
     stash();
     if ("edit".equals(page) && !persistEditedNote()) return;
     Note n = store.note(noteId);
     if (n == null) return;
+    if (!store.aiAllowed(noteId)) {
+      toast("Заметка исключена из сценариев ИИ");
+      return;
+    }
     long id = store.noteChat(noteId);
     boolean fresh = id == 0;
     if (fresh) id = store.newNoteChat(noteId, "План: " + n.title);
@@ -6702,10 +6821,65 @@ public final class MainActivity extends Activity
     bubble.addView(row);
   }
 
+  private void messageMenu(String message, boolean user, List<String> images) {
+    String[] actions = user ? new String[] {"Копировать", "Редактировать"}
+        : new String[] {"Копировать"};
+    new Ask(this).setItems(actions, (d, index) -> {
+      if (index == 0) {
+        android.content.ClipboardManager clipboard =
+            getSystemService(android.content.ClipboardManager.class);
+        if (clipboard != null)
+          clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Сообщение", message));
+      } else {
+        prefs.edit().putString("chatImage." + chat, ImageList.join(images)).apply();
+        chatInput.setText(message);
+        stash();
+        render();
+        chatInput.requestFocus();
+      }
+    }).show();
+  }
+
+  private void chooseChatModel(boolean reserveSetting) {
+    hideKeyboard();
+    String setting = reserveSetting ? "reserveModel" : "chatModel." + chat;
+    List<String> models = ChatModels.saved(prefs);
+    List<String> labels = new ArrayList<>(models);
+    String reserve = prefs.getString("reserveModel", "");
+    for (int i = 0; i < models.size(); i++)
+      if (models.get(i).equals(reserve)) labels.set(i, "Резервная · " + reserve);
+    labels.add(reserveSetting ? "Без резервной модели" : "Основная модель из настроек");
+    labels.add("Добавить по ID");
+    new Ask(this).setTitle(reserveSetting ? "Резервная модель" : "Модель чата")
+        .setItems(labels.toArray(new String[0]), (d, index) -> {
+          if (index <= models.size()) {
+            ChatModels.select(prefs, setting, index == models.size() ? "" : models.get(index));
+            stash();
+            render();
+          } else {
+            EditText field = input("ID модели Polza.AI", false);
+            new Ask(this).setTitle("Добавить модель").setView(field)
+                .setNegativeButton("Отмена", null)
+                .setPositiveButton("Выбрать", (dialog, which) -> {
+                  String id = field.getText().toString().trim();
+                  if (id.isEmpty()) return;
+                  ChatModels.select(prefs, setting, id);
+                  stash();
+                  render();
+                }).show();
+          }
+        }).show();
+  }
+
   private void send() {
     String query = chatInput.getText().toString().trim();
     String image = prefs.getString("chatImage." + chat, "");
     if (ChatRunner.running != 0 || (query.isEmpty() && image.isEmpty())) return;
+    long linked = chat == 0 ? 0 : store.chatNote(chat);
+    if (linked > 0 && !store.aiAllowed(linked)) {
+      toast("Заметка исключена из сценариев ИИ");
+      return;
+    }
     if (image.isEmpty() && answerProgress(query)) return;
     if (query.isEmpty()) query = ChatRunner.NOTE_QUERY;
     boolean local = LocalLlm.enabled(this);
@@ -6726,7 +6900,8 @@ public final class MainActivity extends Activity
       toast("Не удалось прочитать ключ. Сохраните его заново в настройках.");
       return;
     }
-    if (!local && (key.isEmpty() || prefs.getString("model", "").isEmpty())) {
+    String model = ChatModels.active(prefs, chat);
+    if (!local && (key.isEmpty() || model.isEmpty())) {
       new Ask(this)
           .setTitle("Подключите Polza.AI")
           .setMessage(
@@ -6741,7 +6916,7 @@ public final class MainActivity extends Activity
       new Ask(this)
           .setTitle("Отправить заметки в Polza.AI?")
           .setMessage(
-              "Ваш вопрос, последние сообщения чата и до 8 найденных фрагментов заметок будут"
+              "Ваш вопрос, последние сообщения чата и до 24 найденных фрагментов заметок будут"
                   + " отправлены в Polza.AI и выбранной модели. Запросы оплачиваются с вашего"
                   + " баланса Polza.AI. Картинки, которые вы присылаете в чат, тоже уходят"
                   + " модели и остаются в чате: ИИ видит последние из них при каждом ответе.")
@@ -6785,6 +6960,10 @@ public final class MainActivity extends Activity
     sendPlain = false;
     if (chat == 0) {
       chat = store.newChat(Note.autoTitle("", query));
+      if (prefs.contains("chatModel.0")) {
+        ChatModels.select(prefs, "chatModel." + chat, model);
+        prefs.edit().remove("chatModel.0").apply();
+      }
       if (!image.isEmpty())
         prefs.edit().putString("chatImage." + chat, image).remove("chatImage.0").apply();
       prefs.edit().remove("chatDraft.0").apply();
@@ -6796,7 +6975,7 @@ public final class MainActivity extends Activity
         this,
         chat,
         key,
-        local ? LocalLlm.modelId(this) : prefs.getString("model", ""),
+        local ? LocalLlm.modelId(this) : model,
         query,
         ManagerAnalysis.answerTokens(prefs.getInt("maxTokens", 0)),
         image,
@@ -7686,6 +7865,10 @@ public final class MainActivity extends Activity
   }
 
   private void analyzeNoteImage() {
+    if (store.isIncognitoFolder(editFolder) || editing > 0 && !store.aiAllowed(editing)) {
+      toast("Заметка исключена из сценариев ИИ");
+      return;
+    }
     if (LocalLlm.enabled(this)) {
       toast("Картинки пока доступны только через Polza.AI. Переключите режим в настройках.");
       return;
@@ -7724,6 +7907,10 @@ public final class MainActivity extends Activity
 
   /** Описывает выбранную картинку и дописывает текст в конец этой заметки, ничего не сохраняя. */
   private void describeNoteImage() {
+    if (store.isIncognitoFolder(editFolder) || editing > 0 && !store.aiAllowed(editing)) {
+      toast("Заметка исключена из сценариев ИИ");
+      return;
+    }
     if (LocalLlm.enabled(this)) {
       toast("Картинки пока доступны только через Polza.AI. Переключите режим в настройках.");
       return;
@@ -7949,7 +8136,7 @@ public final class MainActivity extends Activity
     credentialsDirty = false;
     try {
       Secrets.save(this, keyField.getText().toString().trim());
-      prefs.edit().putString("model", modelField.getText().toString().trim()).apply();
+      ChatModels.select(prefs, "model", modelField.getText().toString());
     } catch (Exception e) {
       toast("Не удалось безопасно сохранить ключ");
     }
@@ -8468,6 +8655,7 @@ public final class MainActivity extends Activity
     modelField = model;
     watch(model, this::scheduleCredentials);
     content.addView(model);
+    content.addView(compactButton("Резервная модель", false, () -> chooseChatModel(true)));
     gap(content, 10);
     TextView load =
         button(
@@ -9304,6 +9492,7 @@ public final class MainActivity extends Activity
       toast("Сначала введите API-ключ");
       return;
     }
+    hideKeyboard();
     toast("Загружаю каталог…");
     io.execute(
         () -> {
@@ -9313,6 +9502,7 @@ public final class MainActivity extends Activity
                 () -> {
                   if (isDestroyed() || !isSettings()) return;
                   LinearLayout dialog = column();
+                  dialog.setFocusableInTouchMode(true);
                   EditText filter = input("Поиск модели", false);
                   dialog.addView(filter);
                   gap(dialog, 8);
@@ -9336,7 +9526,9 @@ public final class MainActivity extends Activity
                         }
                       };
                   list.setAdapter(adapter);
-                  dialog.addView(list, new LinearLayout.LayoutParams(-1, dp(350)));
+                  // Keep the filter and buttons visible while the list uses the space above the IME.
+                  dialog.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
+                  dialog.requestFocus();
                   Popup picker =
                       new Ask(this)
                           .asSheet()

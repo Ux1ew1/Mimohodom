@@ -53,7 +53,7 @@ public final class ManagerStore {
             new String[] {store.attentionEnabled() ? "1" : "0"})) {
       while (c.moveToNext()) {
         Note n = store.note(c.getLong(0));
-        if (n != null
+        if (n != null && !store.isIncognitoFolder(n.folder)
             && (manual
                 || c.isNull(1)
                 || !ManagerAnalysis.fingerprint(n).equals(c.getString(1))
@@ -429,7 +429,7 @@ public final class ManagerStore {
       List<Note> unchanged = new ArrayList<>();
       for (Note snapshot : notes) {
         Note current = store.note(snapshot.id);
-        if (current == null
+        if (current == null || !store.aiAllowed(snapshot.id)
             || !ManagerAnalysis.fingerprint(current).equals(ManagerAnalysis.fingerprint(snapshot)))
           continue;
         Analysis.Result result = analysis.get(snapshot.id);
@@ -502,7 +502,7 @@ public final class ManagerStore {
 
   public int failedCount() {
     int count = 0;
-    for (Note n : store.notes()) if (top(n.id) == 0 && failedUnchanged(n)) count++;
+    for (Note n : store.aiNotes()) if (top(n.id) == 0 && failedUnchanged(n)) count++;
     return count;
   }
 
@@ -512,7 +512,7 @@ public final class ManagerStore {
       JSONObject source = sources.getJSONObject(i);
       Note n = store.note(source.getLong("id"));
       if (n == null
-          || n.trashed > 0
+          || !store.aiAllowed(n.id)
           || !ManagerAnalysis.fingerprint(n).equals(source.getString("revision")))
         return false;
     }
@@ -735,7 +735,7 @@ public final class ManagerStore {
             "SELECT g.top FROM note_groups g JOIN notes n ON n.id=g.top WHERE n.trashed=0", null)) {
       while (c.moveToNext()) {
         Note top = store.note(c.getLong(0));
-        if (top == null) continue;
+        if (top == null || store.isIncognitoFolder(top.folder)) continue;
         double best = 0;
         for (Note n : batch) best = Math.max(best, TopicSelection.similarity(top, n));
         if (best >= 0.18) {
@@ -763,11 +763,9 @@ public final class ManagerStore {
       List<String> titles = new ArrayList<>();
       for (long id : ids) {
         Note n = store.note(id);
-        if (n != null && n.trashed == 0) titles.add(n.title);
+        if (n != null && n.trashed == 0 && !store.isIncognitoFolder(n.folder)) titles.add(n.title);
         if (titles.size() == 8) break;
       }
-      if (ids.size() > titles.size() && !titles.isEmpty())
-        titles.set(titles.size() - 1, titles.get(titles.size() - 1) + " (и ещё " + (ids.size() - 7) + ")");
       out.put(top, titles);
     }
     return out;

@@ -48,9 +48,13 @@ pub struct Record {
     pub key: String,
     #[serde(default)]
     pub auto: bool,
+    #[serde(default)]
+    pub incognito: Option<bool>,
     // чат (`title` и `created` общие с заметкой) и сообщение (`body`, `created` общие)
     #[serde(default)]
     pub checkin: bool,
+    #[serde(default)]
+    pub note: Option<String>,
     #[serde(default)]
     pub chat: String,
     #[serde(default)]
@@ -76,7 +80,7 @@ impl Record {
         }
         if self.kind == "chat" {
             return json!({"kind":"chat","uid":self.uid,"ts":self.ts,"deleted":false,
-                   "title":self.title,"created":self.created,"checkin":self.checkin});
+                   "title":self.title,"created":self.created,"checkin":self.checkin,"note":self.note});
         }
         if self.kind == "message" {
             return json!({"kind":"message","uid":self.uid,"ts":self.ts,"deleted":false,
@@ -88,7 +92,8 @@ impl Record {
         }
         if self.kind == "folder" {
             json!({"kind":"folder","uid":self.uid,"ts":self.ts,"deleted":false,
-                   "name":self.name,"key":self.key,"created":self.created,"auto":self.auto})
+                   "name":self.name,"key":self.key,"created":self.created,"auto":self.auto,
+                   "incognito":self.incognito})
         } else {
             json!({"kind":"note","uid":self.uid,"ts":self.ts,"deleted":false,
                    "title":self.title,"body":self.body,"created":self.created,"updated":self.updated,
@@ -216,9 +221,9 @@ pub fn collect(
     // Папки идут первыми, чтобы заметки находили свои папки.
     {
         let sql = if all_folders {
-            "SELECT uid,name,key,created,auto,sync_ts FROM folders".to_string()
+            "SELECT uid,name,key,created,auto,sync_ts,incognito FROM folders".to_string()
         } else {
-            "SELECT uid,name,key,created,auto,sync_ts FROM folders WHERE sync_seq>?1 AND sync_seq<=?2 AND sync_from<>?3".to_string()
+            "SELECT uid,name,key,created,auto,sync_ts,incognito FROM folders WHERE sync_seq>?1 AND sync_seq<=?2 AND sync_from<>?3".to_string()
         };
         let mut st = store.conn.prepare(&sql)?;
         let map = |r: &rusqlite::Row| -> rusqlite::Result<Record> {
@@ -230,6 +235,7 @@ pub fn collect(
                 created: r.get(3)?,
                 auto: r.get::<_, i64>(4)? == 1,
                 ts: r.get(5)?,
+                incognito: Some(r.get::<_, i64>(6)? != 0),
                 lead: -1,
                 ..Default::default()
             })
@@ -363,14 +369,16 @@ fn apply_folder(store: &Store, peer: &str, r: &Record) -> Result<bool> {
                 return Ok(false);
             }
             store.conn.execute(
-                "UPDATE folders SET name=?2,key=?3,auto=?4,sync_ts=?5,sync_seq=?6,sync_from=?7 WHERE id=?1",
-                params![f.id, name, key, r.auto as i64, r.ts, seq, peer],
+                "UPDATE folders SET name=?2,key=?3,auto=?4,sync_ts=?5,sync_seq=?6,sync_from=?7,
+                 incognito=coalesce(?8,incognito) WHERE id=?1",
+                params![f.id, name, key, r.auto as i64, r.ts, seq, peer, r.incognito],
             )?;
         }
         None => {
             store.conn.execute(
-                "INSERT INTO folders(uid,name,key,created,auto,sync_ts,sync_seq,sync_from) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-                params![r.uid, name, key, r.created, r.auto as i64, r.ts, seq, peer],
+                "INSERT INTO folders(uid,name,key,created,auto,sync_ts,sync_seq,sync_from,incognito)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![r.uid, name, key, r.created, r.auto as i64, r.ts, seq, peer, r.incognito.unwrap_or(false)],
             )?;
         }
     }
@@ -513,6 +521,26 @@ mod tests {
         let s = push(&a, &b, 0, "A", "B", 0);
         assert_eq!(s.conflicts, 0);
         assert_eq!(b.count_notes().unwrap(), 1);
+    }
+
+    #[test]
+    fn incognito_folder_survives_sync_and_filters_ai_context() {
+        let a = Store::open_memory().unwrap();
+        let b = Store::open_memory().unwrap();
+        let folder = a.create_folder("Личное", false).unwrap();
+        a.conn.execute("UPDATE folders SET incognito=1 WHERE id=?1", [folder]).unwrap();
+        let mut i = input("Инкогнито", "уникальная-строка");
+        i.folder = Some(folder);
+        let note = a.save_note(&i).unwrap();
+        push(&a, &b, 0, "A", "B", 0);
+        let received = b.note_by_uid(&note.uid).unwrap().unwrap();
+        assert!(b.folder(received.folder).unwrap().unwrap().incognito);
+        assert!(!b.ai_allowed(received.id).unwrap());
+        assert!(b.notes("уникальная", None).unwrap().iter().any(|n| n.id == received.id));
+        assert!(b.candidates("уникальная", 0).unwrap().iter().all(|n| n.id != received.id));
+        assert!(b.review_batch(true).unwrap().iter().all(|n| n.id != received.id));
+        push(&b, &a, 0, "B", "A", 0);
+        assert!(!a.ai_allowed(note.id).unwrap());
     }
 
     #[test]

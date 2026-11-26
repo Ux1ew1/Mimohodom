@@ -142,6 +142,6 @@ check(db.prepare("SELECT attention FROM notes WHERE id=1").get().attention === -
 check(method(store, "void onCreate(SQLiteDatabase db)").includes("addAttention(db)"), "Fresh install also gets attention columns");
 check(/oldV < 20\)\s*addAttention\(db\)/.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade 19 -> 20 adds attention columns");
 check(/oldV < 21\)\s*\{[^}]*addSuggestionTimes\(db\)[^}]*addAttention\(db\)/s.test(method(store, "void onUpgrade(SQLiteDatabase db, int oldV, int newV)")), "Upgrade -> 21 re-ensures suggestion_times and attention");
-check(/super\(context, name, null, 21\)/.test(store), "Database version is 21");
+check(/super\(context, name, null, 22\)/.test(store), "Database version is 22");
 db.close();
 console.log(`PASS: ${count} SQLite folder checks (production SQL)`);

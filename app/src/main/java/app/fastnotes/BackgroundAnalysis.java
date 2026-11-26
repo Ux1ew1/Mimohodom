@@ -171,6 +171,8 @@ public final class BackgroundAnalysis extends JobService {
         if (claimed.isEmpty()) return;
       }
       if (!enabled(run)) return;
+      claimed.removeIf(note -> !store.aiAllowed(note.id));
+      if (claimed.isEmpty()) return;
       JSONObject response =
           Polza.request(
               "chat/completions",

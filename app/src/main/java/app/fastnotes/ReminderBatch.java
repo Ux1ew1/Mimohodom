@@ -22,6 +22,10 @@ public final class ReminderBatch {
       Pattern.compile("\\[\\[reminders(\\s+separate)?\\s*]](.*?)\\[\\[/reminders]]", Pattern.DOTALL);
   /** Начало запроса «напоминания по датам из заметки»: по нему чат узнаёт заметку-источник. */
   public static final String REQUEST = "Создай напоминания по датам из заметки";
+  private static final String TIME_HINT = ". Время напоминания — время начала из текста.\n\n";
+  private static final Pattern SCHEDULE_ROW = Pattern.compile(
+      "^\\s*[-•*]?\\s*(\\d{1,2})\\.(\\d{1,2})\\.(\\d{4})\\s+"
+          + "(?:(?:пн|вт|ср|чт|пт|сб|вс)\\s+)?(\\d{1,2}):(\\d{2})\\s+[—–-]\\s+(.+)$");
   private static final Pattern LINE =
       Pattern.compile("^\\s*[-*•]?\\s*(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{1,2}):(\\d{2})\\s*\\|(.*)$");
 
@@ -71,8 +75,47 @@ public final class ReminderBatch {
     String text = body.length() > 4000 ? body.substring(0, 4000) : body;
     return REQUEST
         + (title.trim().isEmpty() ? "" : " «" + title.trim() + "»")
-        + ". Время напоминания — время начала из текста.\n\n"
+        + TIME_HINT
         + text;
+  }
+
+  /** Готовое расписание разбираем только целиком. Свободный текст остаётся модели. */
+  static Result schedule(String body, ZoneId zone, long now) {
+    Result result = new Result();
+    for (String line : body.split("\\R")) {
+      if (line.trim().isEmpty()) continue;
+      Matcher row = SCHEDULE_ROW.matcher(line);
+      if (!row.matches()) return new Result();
+      try {
+        long at = LocalDateTime.of(Integer.parseInt(row.group(3)), Integer.parseInt(row.group(2)),
+            Integer.parseInt(row.group(1)), Integer.parseInt(row.group(4)), Integer.parseInt(row.group(5)))
+            .atZone(zone).toInstant().toEpochMilli();
+        String title = row.group(6).trim();
+        if (title.isEmpty()) return new Result();
+        if (at <= now || duplicate(result, at, title)) result.skipped++;
+        else result.items.add(new Item(at, title, ""));
+        if (result.items.size() > MAX_ITEMS) return new Result();
+      } catch (java.time.DateTimeException e) {
+        return new Result();
+      }
+    }
+    result.items.sort((a, b) -> Long.compare(a.at, b.at));
+    return result;
+  }
+
+  static Result requestSchedule(String query, ZoneId zone, long now) {
+    int split = query.indexOf(TIME_HINT);
+    if (!query.startsWith(REQUEST) || split < REQUEST.length()) return new Result();
+    String title = query.substring(REQUEST.length(), split);
+    if (!title.isEmpty() && !title.matches(" «[^»\\r\\n]*»")) return new Result();
+    return schedule(query.substring(split + TIME_HINT.length()), zone, now);
+  }
+
+  static long[] offeredTimes(String body, long suggestion, String encoded, ZoneId zone, long now) {
+    long[] saved = ReminderPolicy.parseTimes(encoded);
+    if (saved.length > 1) return saved;
+    long[] explicit = times(schedule(body, zone, now).items);
+    return java.util.Arrays.binarySearch(explicit, suggestion) >= 0 ? explicit : saved;
   }
 
   /** Разбирает блок из сырого ответа модели; без блока или без годных строк список пуст. */

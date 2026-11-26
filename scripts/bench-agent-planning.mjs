@@ -8,6 +8,7 @@ const CANDIDATES = [
   'google/gemini-3.1-flash-lite',
   'google/gemini-3.8-flash',
   'qwen/qwen3.8-flash',
+  'xiaomi/mimo-v2.6-flash-mopd',
   'deepseek/deepseek-v4-flash',
   'deepseek/deepseek-chat',
 ];
