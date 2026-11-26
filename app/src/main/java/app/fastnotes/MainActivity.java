@@ -27,6 +27,7 @@ public final class MainActivity extends Activity
     implements ChatRunner.Listener, ImageRunner.Listener, VideoRunner.Listener, DayDigestRunner.Listener {
   /** Белый для текста и значков на цветной заливке: одинаковый в обеих темах. */
   private static final int WHITE = 0xFFFFFFFF;
+  private static final int NOTE_BODY_LIMIT = 100000;
   /**
    * Палитра текущей темы. Задаётся {@link #applyPalette} до построения экрана; GREEN — цвет
    * текста и значков акцента, FILL — заливка главных кнопок (на ней лежит белый), SURFACE —
@@ -807,7 +808,10 @@ public final class MainActivity extends Activity
   }
 
   private EditText input(String hint, boolean multiline) {
-    EditText e = new EditText(this);
+    return configureInput(new EditText(this), hint, multiline);
+  }
+
+  private EditText configureInput(EditText e, String hint, boolean multiline) {
     e.setTextColor(INK);
     e.setHintTextColor(MUTED);
     e.setTextSize(prefs.getBoolean("large", false) ? 20 : 17);
@@ -2065,13 +2069,13 @@ public final class MainActivity extends Activity
       chipScroll.addView(meta);
       sheet.addView(chipScroll);
     }
-    bodyField = input("Что хочется запомнить?", true);
+    bodyField = configureInput(new NoteBodyEditText(this, GREEN), "Что хочется запомнить?", true);
     bodyField.setBackground(null);
     bodyField.setPadding(0, dp(newNote ? 4 : 12), 0, dp(12));
     bodyField.setLineSpacing(dp(3), 1f);
     bodyField.setMinHeight(dp(newNote ? 160 : 44));
     bodyField.setText(prefs.getString(p + "body", note == null ? "" : note.body));
-    bodyField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(100000)});
+    bodyField.setFilters(new InputFilter[] {new InputFilter.LengthFilter(NOTE_BODY_LIMIT)});
     // Новая заметка: текст занимает всё свободное место, касание в любом месте ставит курсор.
     sheet.addView(bodyField, new LinearLayout.LayoutParams(-1, newNote ? 0 : -2, newNote ? 1 : 0));
     List<String> images = ImageList.parse(noteImage);
@@ -10598,76 +10602,113 @@ public final class MainActivity extends Activity
     FrameLayout.LayoutParams handleParams =
         new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.END | Gravity.CENTER_VERTICAL);
     handle.setTranslationX(dp(9)); // кругляж наполовину за краем, тексту не мешает
-    // Край экрана у жестовой навигации — системный «Назад»: исключаем зону ручки, чтобы
-    // свайп от неё доставался панели (API 29+, на кнопочной навигации конфликта нет).
+    // Ручка у системного края должна получать свайп при жестовой навигации.
     if (Build.VERSION.SDK_INT >= 29)
       handle.addOnLayoutChangeListener(
           (v, l, t, r, b, ol, ot, or, ob) ->
               handle.setSystemGestureExclusionRects(
-                  java.util.List.of(new Rect(0, -dp(48), r - l, b - t + dp(48)))));
+                  Collections.singletonList(new Rect(0, 0, r - l, b - t))));
     frame.addView(handle, handleParams);
 
+    handle.setOnLongClickListener(
+        v -> {
+          fan.close(false, () -> overlay.setVisibility(View.GONE));
+          String[] labels = {
+            "Маркированный список", "Нумерованный список", "Чекбоксы",
+            "Жирный", "Курсив", "Зачёркнутый"
+          };
+          new Ask(this)
+              .setTitle("Форматирование")
+              .setItems(labels, (d, which) -> applyFormat(fan.actions[which]))
+              .show();
+          return true;
+        });
+    GestureDetector hold = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+      @Override public boolean onDown(MotionEvent event) {
+        return true;
+      }
+
+      @Override public void onLongPress(MotionEvent event) {
+        if (fan.tracking) {
+          fan.tracking = false;
+          handle.performLongClick();
+        }
+      }
+    });
+    hold.setOnDoubleTapListener(null);
     int[] frameXY = new int[2];
     handle.setOnTouchListener(
         (v, event) -> {
+          hold.onTouchEvent(event);
           frame.getLocationOnScreen(frameXY);
           float x = event.getRawX() - frameXY[0], y = event.getRawY() - frameXY[1];
           switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+              swipeAllowed = false;
+              fan.tracking = true;
               overlay.setVisibility(View.VISIBLE);
-              fan.open(x, y);
+              fan.open(y, frame.getHeight());
               return true;
             case MotionEvent.ACTION_MOVE:
-              fan.track(x, y);
+              if (fan.tracking) fan.track(x, y);
               return true;
             case MotionEvent.ACTION_UP:
+              if (!fan.tracking) return true;
+              fan.tracking = false;
+              fan.track(x, y);
               String action = fan.selectedAction();
               fan.close(action != null, () -> overlay.setVisibility(View.GONE));
-              if (action != null) {
-                buzz(0);
-                applyFormat(action);
-              }
+              if (action != null) applyFormat(action);
               v.performClick();
               return true;
+            case MotionEvent.ACTION_POINTER_DOWN:
             case MotionEvent.ACTION_CANCEL:
-              fan.close(false, () -> overlay.setVisibility(View.GONE));
+              if (fan.tracking) {
+                fan.tracking = false;
+                fan.close(false, () -> overlay.setVisibility(View.GONE));
+              }
               return true;
             default:
               return true;
           }
         });
-    handle.setOnLongClickListener(
-        v -> {
-          String[] labels = {
-            "Маркированный список", "Нумерованный список", "Чекбоксы",
-            "Жирный", "Курсив", "Зачёркнутый"
-          };
-          String[] actions = {"bullet", "number", "check", "bold", "italic", "strike"};
-          new Ask(this)
-              .setTitle("Форматирование")
-              .setItems(labels, (d, which) -> applyFormat(actions[which]))
-              .show();
-          return true;
-        });
   }
 
-  /** Применяет функцию панели к тексту заметки: обёртка вокруг выделения или префикс строк. */
+  /** Применяет форматирование с сохранением позиции курсора и текущего поля ввода. */
   private void applyFormat(String action) {
     EditText f = bodyField;
     if (f == null) return;
-    String text = f.getText().toString();
-    int start = Math.max(0, f.getSelectionStart()), end = Math.max(0, f.getSelectionEnd());
+    Editable value = f.getText();
+    String text = value.toString();
+    int start = f.getSelectionStart(), end = f.getSelectionEnd();
+    if (start < 0 || end < 0) start = end = text.length();
     TextFormat.Result r =
         switch (action) {
-          case "bold" -> TextFormat.wrap(text, start, end, "**");
-          case "italic" -> TextFormat.wrap(text, start, end, "*");
-          case "strike" -> TextFormat.wrap(text, start, end, "~~");
-          case "bullet" -> TextFormat.prefix(text, start, end, "bullet");
-          case "number" -> TextFormat.prefix(text, start, end, "number");
-          default -> TextFormat.prefix(text, start, end, "check");
+          case "bold" -> TextFormat.wrap(text, start, end, TextFormat.BOLD);
+          case "italic" -> TextFormat.wrap(text, start, end, TextFormat.ITALIC);
+          case "strike" -> TextFormat.wrap(text, start, end, TextFormat.STRIKE);
+          default -> TextFormat.prefix(text, start, end, action);
         };
-    f.setText(r.text);
-    f.setSelection(r.start, r.end);
+    String formatted = r.text();
+    if (formatted.equals(text)) return;
+    if (formatted.length() > NOTE_BODY_LIMIT) {
+      toast("Достигнут предел длины заметки");
+      return;
+    }
+    int from = 0, oldEnd = text.length(), newEnd = formatted.length();
+    while (from < oldEnd && from < newEnd && text.charAt(from) == formatted.charAt(from)) from++;
+    while (from < oldEnd && from < newEnd
+        && text.charAt(oldEnd - 1) == formatted.charAt(newEnd - 1)) {
+      oldEnd--;
+      newEnd--;
+    }
+    f.beginBatchEdit();
+    try {
+      value.replace(from, oldEnd, formatted, from, newEnd);
+      f.setSelection(Math.min(r.start(), value.length()), Math.min(r.end(), value.length()));
+    } finally {
+      f.endBatchEdit();
+    }
   }
 
   /**
@@ -10682,6 +10723,7 @@ public final class MainActivity extends Activity
     final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     float anchorY, fraction, slide;
     int selected = -1;
+    boolean tracking;
     android.animation.ValueAnimator running;
 
     RadialFan() {
@@ -10703,12 +10745,9 @@ public final class MainActivity extends Activity
       return anchorY;
     }
 
-    void open(float x, float y) {
-      // Панель прижата к правому краю; высота центра — по якорю касания, в пределах экрана.
-      // Размеров ещё может не быть (панель только показана) — берём метрики экрана.
-      float h = getHeight() > 0 ? getHeight() : getResources().getDisplayMetrics().heightPixels;
-      float margin = radius() + dp(36);
-      anchorY = Math.max(margin, Math.min(h - margin, y));
+    void open(float y, float height) {
+      float margin = Math.min(height / 2, radius() + dp(36));
+      anchorY = Math.max(margin, Math.min(height - margin, y));
       selected = -1;
       slide = 0;
       animateTo(1, 170, null);
@@ -10733,6 +10772,7 @@ public final class MainActivity extends Activity
       }
       if (next != selected) {
         selected = next;
+        if (next >= 0) buzz(0);
         invalidate();
       }
     }
@@ -10754,7 +10794,9 @@ public final class MainActivity extends Activity
     }
 
     void animateTo(float target, long ms, Runnable done) {
-      if (running != null) running.cancel();
+      android.animation.ValueAnimator previous = running;
+      running = null;
+      if (previous != null) previous.cancel();
       if (!android.animation.ValueAnimator.areAnimatorsEnabled()) {
         fraction = target;
         invalidate();
@@ -10776,6 +10818,8 @@ public final class MainActivity extends Activity
           new android.animation.AnimatorListenerAdapter() {
             @Override
             public void onAnimationEnd(android.animation.Animator a) {
+              if (running != a) return;
+              running = null;
               fraction = target;
               invalidate();
               if (done != null) done.run();
