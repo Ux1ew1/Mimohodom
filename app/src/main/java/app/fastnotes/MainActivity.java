@@ -562,7 +562,7 @@ public final class MainActivity extends Activity
     } else if (page.startsWith("settings.")) {
       flushCredentials();
       hideKeyboard();
-      page = "settings";
+      page = "settings.changelog".equals(page) ? "settings.app" : "settings";
       render();
     } else if ("manager".equals(page) || "trash".equals(page)) {
       page = "notes";
@@ -988,6 +988,7 @@ public final class MainActivity extends Activity
       case "settings.assistant" -> settingsAssistant();
       case "settings.sync" -> settingsSync();
       case "settings.app" -> settingsApp();
+      case "settings.changelog" -> settingsChangelog();
     }
     if ("edit".equals(page)) {
       dock = null;
@@ -9137,6 +9138,7 @@ public final class MainActivity extends Activity
 
   private void settingsApp() {
     subHeader("Приложение");
+    settingsRow("Что нового", "История изменений · версия " + appVersion(), "settings.changelog");
     section("Внешний вид", false);
     secondary(content, "Тема");
     gap(content, 6);
@@ -9244,6 +9246,33 @@ public final class MainActivity extends Activity
             + "Заметки и чаты хранятся на устройстве. API-ключ зашифрован Android Keystore."
             + " Удаление приложения удалит локальные данные; предварительно экспортируйте"
             + " заметки.");
+  }
+
+  private void settingsChangelog() {
+    subHeader("История изменений");
+    android.content.res.TypedArray releases = getResources().obtainTypedArray(R.array.changelog);
+    try {
+      for (int i = 0; i < releases.length(); i++) {
+        String[] release = getResources().getStringArray(releases.getResourceId(i, 0));
+        section(release[0], i > 0);
+        for (int j = 1; j < release.length; j++) {
+          LinearLayout item = row();
+          item.setGravity(Gravity.TOP);
+          TextView bullet = text("•", 15, GREEN);
+          bullet.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+          item.addView(bullet);
+          TextView detail = text(release[j], 15, INK);
+          detail.setLineSpacing(dp(2), 1f);
+          LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
+          params.setMarginStart(dp(8));
+          item.addView(detail, params);
+          content.addView(item);
+          gap(content, 6);
+        }
+      }
+    } finally {
+      releases.recycle();
+    }
   }
 
   /** Заголовок раздела настроек; у всех, кроме первого, сверху тонкая линия. */
