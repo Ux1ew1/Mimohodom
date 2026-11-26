@@ -16,6 +16,7 @@ import android.view.*;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
+import androidx.core.view.OneShotPreDrawListener;
 import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.*;
@@ -198,6 +199,7 @@ public final class MainActivity extends Activity
   private String helperReply = "";
   /** Открытая папка в списке заметок (0 — «Все заметки») и папка заметки в редакторе. */
   private long folder = 0, editFolder = 0;
+  private int folderScrollX;
   private final List<Note> visibleNotes = new ArrayList<>();
   private float swipeX, swipeY;
   private boolean swipeAllowed, swipeConsumed;
@@ -3486,6 +3488,11 @@ public final class MainActivity extends Activity
       chips.addView(trashChip, trashParams);
     }
     scroller.addView(chips);
+    OneShotPreDrawListener.add(scroller, () -> {
+      scroller.scrollTo(folderScrollX, 0);
+      folderScrollX = scroller.getScrollX();
+      scroller.setOnScrollChangeListener((v, x, y, oldX, oldY) -> folderScrollX = x);
+    });
     return scroller;
   }
 
