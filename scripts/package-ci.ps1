@@ -25,6 +25,20 @@ $packageLine = $badging | Where-Object { $_ -match '^package:' }
 if ($packageLine -notmatch "name='$([regex]::Escape($metadata.applicationId))'" -or
     $packageLine -notmatch "versionName='$([regex]::Escape($version))'" -or
     $packageLine -notmatch "versionCode='$($element.versionCode)'") { throw 'APK version differs from build metadata' }
+$updateManifest = Join-Path $destination 'mimohodom-update.json'
+if ($env:EXPECT_EXISTING_SIGNATURE -eq 'true' -and $metadata.applicationId -eq 'app.fastnotes' -and
+    $version -match '^\d+\.\d+\.\d+$') {
+    $manifestJson = [ordered]@{
+        packageName = $metadata.applicationId
+        versionCode = [int]$element.versionCode
+        versionName = $version
+        size = (Get-Item -LiteralPath $apk).Length
+        sha256 = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant()
+    } | ConvertTo-Json
+    [IO.File]::WriteAllText($updateManifest, $manifestJson)
+} elseif (Test-Path -LiteralPath $updateManifest) {
+    Remove-Item -LiteralPath $updateManifest
+}
 $report = @("Commit: $env:GITHUB_SHA", "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID", $packageLine)
 $report += $signature
 $report += 'Android instrumentation APK built; device tests NOT executed. No real AI requests made.'

@@ -78,7 +78,8 @@ public final class ChatRunner {
         () -> {
           try (Store store = new Store(app, local)) {
             // Чат начат помощником (вопрос «как дела»): помнит факты из ответов.
-            boolean checkin = ChatOrigin.AGENT.equals(store.chatOrigin(chat));
+            String origin = store.chatOrigin(chat);
+            boolean checkin = ChatOrigin.AGENT.equals(origin);
             JSONArray history = store.messages(chat);
             String stored = ChatImages.attach(query, ImageList.parse(image));
             String currentContent = stored;
@@ -107,8 +108,11 @@ public final class ChatRunner {
                 && !store.aiAllowed(reminderSource))
               throw new java.io.IOException("Заметка недоступна для ИИ.");
             history = store.aiHistory(history);
-            if (planNote > 0 && local) {
-              planReply(store, chat, planNote, key, model, query, history);
+            if (ChatOrigin.PLAN.equals(origin) && planNote <= 0)
+              throw new java.io.IOException("Заметка этого чата недоступна.");
+            if (planNote > 0 && (local || ChatOrigin.PLAN.equals(origin))) {
+              planReply(store, chat, planNote, model, query, history,
+                  local ? PlanChat.MAX_TOKENS : maxTokens, payload -> store.complete(key, payload));
               return;
             }
             List<String> contents = new ArrayList<>();
@@ -574,8 +578,9 @@ public final class ChatRunner {
    * план, задаёт вопрос с вариантами или присылает план. План не записывается сам — он ложится в
    * черновик сообщения, сохраняет его пользователь кнопкой.
    */
-  private static void planReply(
-      Store store, long chat, long noteId, String key, String model, String query, JSONArray history)
+  static void planReply(
+      Store store, long chat, long noteId, String model, String query, JSONArray history,
+      int maxTokens, AgentCompletion completion)
       throws Exception {
     Note note = store.note(noteId);
     if (note == null) throw new java.io.IOException("Заметка этого чата удалена.");
@@ -600,7 +605,8 @@ public final class ChatRunner {
             query,
             System.currentTimeMillis(),
             zone);
-    JSONObject response = store.complete(key, payload);
+    JSONObject response =
+        completion.send(ManagerAnalysis.limit(payload, maxTokens));
     JSONObject choice = response.getJSONArray("choices").getJSONObject(0);
     String text = choice.getJSONObject("message").optString("content", "");
     if (text.trim().isEmpty())
@@ -620,6 +626,8 @@ public final class ChatRunner {
       if (reply.edit != null) draft.put("edit", reply.edit.toJson());
     }
     if (!store.chatExists(chat)) return;
+    if (!store.aiAllowed(noteId))
+      throw new java.io.IOException("Заметка недоступна для обсуждения с ИИ.");
     store.message(chat, "assistant", PlanChat.store(reply), new JSONArray(), draft);
     StringBuilder used = new StringBuilder(store.localMode() ? "Локальная модель" : "Чат по заметке");
     JSONObject tokens = response.optJSONObject("usage");

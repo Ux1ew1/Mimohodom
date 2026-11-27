@@ -17,6 +17,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
 import androidx.core.view.OneShotPreDrawListener;
+import java.io.File;
 import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.*;
@@ -133,6 +134,9 @@ public final class MainActivity extends Activity
   private final ExecutorService io = Executors.newSingleThreadExecutor();
   /** Долгое копирование GGUF идёт отдельно, чтобы не задерживать «Поделиться», картинки и экспорт. */
   private final ExecutorService heavy = Executors.newSingleThreadExecutor();
+  private static final int UPDATE_INSTALL_PERMISSION = 92;
+  private boolean updateBusy;
+  private String pendingUpdateApk = "";
   private Store store;
   private SharedPreferences prefs;
   private LinearLayout root, content;
@@ -300,6 +304,7 @@ public final class MainActivity extends Activity
 
   @Override
   public void onCreate(Bundle state) {
+    if (state != null) pendingUpdateApk = state.getString("pendingUpdateApk", "");
     // Тема и палитра выбираются до построения экрана; при смене системной темы активность
     // пересоздаётся и попадает сюда снова.
     dark = wantsDark();
@@ -515,6 +520,7 @@ public final class MainActivity extends Activity
   protected void onSaveInstanceState(Bundle out) {
     stash();
     out.putString("pickerPage", pickerPage);
+    out.putString("pendingUpdateApk", pendingUpdateApk);
     out.putLong("pickerTarget", pickerTarget);
     out.putInt("tab", tab);
     out.putString("page", page);
@@ -1044,8 +1050,9 @@ public final class MainActivity extends Activity
             .setTitle("Проверить заметки через Polza.AI?")
             .setMessage(
                 "Один платный запрос проверит автоматические названия, даты для напоминаний и"
-                    + " возможность объединения записей. До 8 заметок и 12 000 символов; включает"
-                    + " записи после прежних ошибок. Дневной лимит можно изменить на экране"
+                    + " возможность объединения записей. До 8 заметок и 12 000 символов. В проверку"
+                    + " попадают новые правки, ответы и ближайшие сроки. Подходящие записи после"
+                    + " ошибки можно повторить вручную. Дневной лимит можно изменить на экране"
                     + " помощника. Авторские названия сохраняются. Напоминания и объединения —"
                     + " после подтверждения. Фоновая работа от этого не включается.")
             .setNegativeButton("Отмена", null)
@@ -1761,7 +1768,7 @@ public final class MainActivity extends Activity
       top.addView(mark, new LinearLayout.LayoutParams(dp(36), dp(36)));
       LinearLayout words = column();
       words.setPadding(dp(12), 0, 0, 0);
-      TextView name = text(proposalLabel(type), 14, INK);
+      TextView name = text(proposalLabel(p), 14, INK);
       name.setTypeface(null, Typeface.BOLD);
       words.addView(name);
       TextView reason = text(proposalReason(p), 12, MUTED);
@@ -4261,9 +4268,10 @@ public final class MainActivity extends Activity
   private void planOfferActions(
       LinearLayout parent, JSONObject p, ManagerStore manager, Runnable after) {
     long noteId = ManagerStore.firstSource(p);
+    boolean checklist = "checklist".equals(p.optString("planMode"));
     parent.addView(
         button(
-            "Разобрать",
+            checklist ? "Собрать чек-лист" : "Разобрать",
             true,
             () -> {
               if (ChatRunner.running != 0) {
@@ -4272,7 +4280,7 @@ public final class MainActivity extends Activity
               }
               manager.state(p.optLong("id"), "accepted");
               if (suggestionsPopup != null) suggestionsPopup.dismiss();
-              openPlanChat(noteId, true);
+              openPlanChat(noteId, checklist ? PlanChat.CHECKLIST : PlanChat.START);
             }));
     gap(parent, 6);
     parent.addView(
@@ -4428,13 +4436,14 @@ public final class MainActivity extends Activity
     return TopicSelection.deck(type) || type.equals("extend");
   }
 
-  private String proposalLabel(String type) {
-    return switch (type) {
+  private String proposalLabel(JSONObject proposal) {
+    return switch (proposal.optString("type")) {
       case "group", "merge", "link" -> "Собрать в колоду";
       case "extend" -> "Добавить в колоду";
       case "task" -> "Идея для дела";
       case "clarify" -> "Вопрос помощника";
-      case "plan" -> "Разобрать план";
+      case "plan" -> "checklist".equals(proposal.optString("planMode"))
+          ? "Собрать чек-лист" : "Разобрать план";
       default -> "Стоит уточнить";
     };
   }
@@ -4549,7 +4558,7 @@ public final class MainActivity extends Activity
       pad(card, 16);
       card.setBackground(shape(SURFACE, 12));
       String type = p.optString("type");
-      TextView label = text(proposalLabel(type), 18, INK);
+      TextView label = text(proposalLabel(p), 18, INK);
       label.setTypeface(null, Typeface.BOLD);
       card.addView(label);
       gap(card, 6);
@@ -5510,6 +5519,7 @@ public final class MainActivity extends Activity
     }
     content.addView(actions);
     long planNote = chat > 0 ? store.chatNote(chat) : 0;
+    boolean planning = chat > 0 && ChatOrigin.PLAN.equals(store.chatOrigin(chat));
     if (!LocalLlm.enabled(this)) {
       String model = ChatModels.active(prefs, chat);
       content.addView(compactButton(model.isEmpty() ? "Выбрать модель" : model,
@@ -5546,10 +5556,7 @@ public final class MainActivity extends Activity
           compactButton(
               "Разобрать план",
               true,
-              () -> {
-                chatInput.setText(PlanChat.START);
-                send();
-              }));
+              () -> openPlanChat(planNote, true)));
     } else if (history.length() == 0) {
       gap(messages, 12);
       TextView title = text("Память, с которой\nможно поговорить.", 20, INK);
@@ -5780,7 +5787,9 @@ public final class MainActivity extends Activity
             ? (LocalLlm.aicore(this)
                 ? "Локально · Gemini Nano (Google AICore) отвечает на телефоне"
                 : "Локально · GGUF отвечает на телефоне")
-            : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
+            : planning
+                ? "Polza.AI получает выбранную заметку и переписку по её плану."
+                : "ИИ получает выбранные фрагменты через Polza.AI. Поиск может найти не всё.");
     gap(content, 4);
     List<String> attachedList = ImageList.parse(prefs.getString("chatImage." + chat, ""));
     List<String> historyBodies = new ArrayList<>();
@@ -5809,7 +5818,7 @@ public final class MainActivity extends Activity
     }
     gap(content, 4);
     // Одна строка ввода: изображение, поле и отправка.
-    chatInput = input("Сообщение или просьба создать заметку…", true);
+    chatInput = input(planning ? "Сообщение по плану…" : "Сообщение или просьба создать заметку…", true);
     chatInput.setTextSize(15);
     chatInput.setPadding(dp(12), dp(9), dp(12), dp(9));
     chatInput.setMinLines(1);
@@ -5829,7 +5838,7 @@ public final class MainActivity extends Activity
           buzz(0);
           pickImage(true);
         });
-    composer.addView(attach, new LinearLayout.LayoutParams(dp(40), dp(40)));
+    if (!planning) composer.addView(attach, new LinearLayout.LayoutParams(dp(40), dp(40)));
     LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, -2, 1);
     inputParams.leftMargin = dp(6);
     inputParams.rightMargin = dp(6);
@@ -6527,6 +6536,10 @@ public final class MainActivity extends Activity
 
   /** Открывает чат по заметке и при запуске из предложения сразу просит разобрать план. */
   private void openPlanChat(long noteId, boolean startPlan) {
+    openPlanChat(noteId, startPlan ? PlanChat.START : "");
+  }
+
+  private void openPlanChat(long noteId, String request) {
     stash();
     if ("edit".equals(page) && !persistEditedNote()) return;
     Note n = store.note(noteId);
@@ -6535,16 +6548,19 @@ public final class MainActivity extends Activity
       toast("Заметка исключена из сценариев ИИ");
       return;
     }
-    long id = store.noteChat(noteId);
-    boolean fresh = id == 0;
-    if (fresh) id = store.newNoteChat(noteId, "План: " + n.title);
+    long id = store.noteChat(noteId, true);
+    if (id == 0 && request.isEmpty()) id = store.noteChat(noteId, false);
+    if (id == 0)
+      id = !request.isEmpty()
+          ? store.newChat("План: " + n.title, ChatOrigin.PLAN, noteId)
+          : store.newNoteChat(noteId, "План: " + n.title);
     hideKeyboard();
     chat = id;
     page = "chat";
     tab = 2;
     render();
-    if (startPlan && chatInput != null && ChatRunner.running == 0) {
-      chatInput.setText(PlanChat.START);
+    if (!request.isEmpty() && chatInput != null && ChatRunner.running == 0) {
+      chatInput.setText(request);
       send();
     }
   }
@@ -6873,7 +6889,8 @@ public final class MainActivity extends Activity
 
   private void send() {
     String query = chatInput.getText().toString().trim();
-    String image = prefs.getString("chatImage." + chat, "");
+    boolean planning = chat > 0 && ChatOrigin.PLAN.equals(store.chatOrigin(chat));
+    String image = planning ? "" : prefs.getString("chatImage." + chat, "");
     if (ChatRunner.running != 0 || (query.isEmpty() && image.isEmpty())) return;
     long linked = chat == 0 ? 0 : store.chatNote(chat);
     if (linked > 0 && !store.aiAllowed(linked)) {
@@ -6912,11 +6929,16 @@ public final class MainActivity extends Activity
           .show();
       return;
     }
-    if (!local && !prefs.getBoolean("consent", false)) {
+    if (!local && !prefs.getBoolean("consent", false)
+        && !(planning && prefs.getBoolean("planConsent", false))) {
+      String consentKey = planning ? "planConsent" : "consent";
       new Ask(this)
           .setTitle("Отправить заметки в Polza.AI?")
           .setMessage(
-              "Ваш вопрос, последние сообщения чата и до 24 найденных фрагментов заметок будут"
+              planning
+                  ? "Ваш вопрос, выбранная заметка, её план и переписка по нему будут отправлены"
+                      + " в Polza.AI и выбранной модели. Запросы оплачиваются с вашего баланса Polza.AI."
+                  : "Ваш вопрос, последние сообщения чата и до 24 найденных фрагментов заметок будут"
                   + " отправлены в Polza.AI и выбранной модели. Запросы оплачиваются с вашего"
                   + " баланса Polza.AI. Картинки, которые вы присылаете в чат, тоже уходят"
                   + " модели и остаются в чате: ИИ видит последние из них при каждом ответе.")
@@ -6924,7 +6946,7 @@ public final class MainActivity extends Activity
           .setPositiveButton(
               "Подключить",
               (d, w) -> {
-                prefs.edit().putBoolean("consent", true).apply();
+                prefs.edit().putBoolean(consentKey, true).apply();
                 send();
               })
           .show();
@@ -9327,6 +9349,14 @@ public final class MainActivity extends Activity
   private void settingsApp() {
     subHeader("Приложение");
     settingsRow("Что нового", "История изменений · версия " + appVersion(), "settings.changelog");
+    if ("app.fastnotes".equals(getPackageName())) {
+      TextView update = button(updateBusy ? "Проверка или загрузка обновления…"
+          : "Проверить обновления", false, this::checkForAppUpdate);
+      update.setEnabled(!updateBusy);
+      content.addView(update);
+      if (!pendingUpdateApk.isEmpty())
+        content.addView(button("Установить загруженное обновление", false, this::installAppUpdate));
+    }
     section("Внешний вид", false);
     secondary(content, "Тема");
     gap(content, 6);
@@ -9434,6 +9464,102 @@ public final class MainActivity extends Activity
             + "Заметки и чаты хранятся на устройстве. API-ключ зашифрован Android Keystore."
             + " Удаление приложения удалит локальные данные; предварительно экспортируйте"
             + " заметки.");
+  }
+
+  private void checkForAppUpdate() {
+    if (updateBusy) return;
+    updateBusy = true;
+    render();
+    heavy.execute(() -> {
+      try {
+        AppUpdateManifest update = AppUpdates.check();
+        long installed = AppUpdates.versionCode(getPackageManager().getPackageInfo(getPackageName(), 0));
+        finishUpdateTask(() -> {
+          if (update == null) {
+            toast("В облаке пока нет выпусков для Android");
+          } else if (update.versionCode() <= installed) {
+            toast("У вас установлена актуальная версия");
+          } else if ("settings.app".equals(page)) {
+            String size = String.format(java.util.Locale.getDefault(), "%.1f", update.size() / 1048576.0);
+            new Ask(this).setTitle("Доступно обновление " + update.versionName())
+                .setMessage("Сейчас установлена версия " + appVersion() + ". Размер загрузки " + size + " МБ.")
+                .setNegativeButton("Позже", null)
+                .setPositiveButton("Скачать", (d, w) -> downloadAppUpdate(update))
+                .show();
+          }
+        });
+      } catch (Exception e) {
+        android.util.Log.w("AppUpdates", "Update check failed", e);
+        finishUpdateTask(() -> toast("Не удалось проверить обновления. Попробуйте ещё раз."));
+      }
+    });
+  }
+
+  private void downloadAppUpdate(AppUpdateManifest update) {
+    if (updateBusy) return;
+    updateBusy = true;
+    render();
+    heavy.execute(() -> {
+      try {
+        File apk = AppUpdates.download(getApplicationContext(), update);
+        finishUpdateTask(() -> {
+          pendingUpdateApk = apk.getName();
+          if ("settings.app".equals(page)) {
+            render();
+            installAppUpdate();
+          } else toast("Обновление скачано. Установить его можно в настройках приложения.");
+        });
+      } catch (Exception e) {
+        android.util.Log.w("AppUpdates", "Update download failed", e);
+        finishUpdateTask(() -> toast(e instanceof java.io.IOException && e.getMessage() != null
+            ? e.getMessage() : "Не удалось скачать или проверить APK"));
+      }
+    });
+  }
+
+  private void finishUpdateTask(Runnable result) {
+    runOnUiThread(() -> {
+      if (isDestroyed() || isFinishing()) return;
+      updateBusy = false;
+      if ("settings.app".equals(page)) render();
+      result.run();
+    });
+  }
+
+  private void installAppUpdate() {
+    File apk = new File(new File(getCacheDir(), "updates"), pendingUpdateApk);
+    if (!pendingUpdateApk.matches("mimohodom-[0-9]+\\.[0-9]+\\.[0-9]+-debug\\.apk")
+        || !apk.isFile()) {
+      pendingUpdateApk = "";
+      if ("settings.app".equals(page)) render();
+      toast("Скачайте обновление ещё раз");
+      return;
+    }
+    try {
+      if (!getPackageManager().canRequestPackageInstalls()) {
+        new Ask(this).setTitle("Разрешить установку обновлений?")
+            .setMessage("В системных настройках разрешите Мимоходом устанавливать APK."
+                + " Затем Android попросит подтвердить обновление.")
+            .setNegativeButton("Позже", null)
+            .setPositiveButton("Настройки", (d, w) -> {
+              try {
+                startActivityForResult(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    android.net.Uri.parse("package:" + getPackageName())), UPDATE_INSTALL_PERMISSION);
+              } catch (android.content.ActivityNotFoundException e) {
+                toast("Не удалось открыть разрешение на установку");
+              }
+            })
+            .show();
+        return;
+      }
+      android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+          this, getPackageName() + ".files", apk);
+      startActivity(new Intent(Intent.ACTION_VIEW)
+          .setDataAndType(uri, "application/vnd.android.package-archive")
+          .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+    } catch (android.content.ActivityNotFoundException | SecurityException e) {
+      toast("Android не смог открыть установщик обновления");
+    }
   }
 
   private void settingsChangelog() {
@@ -9557,6 +9683,11 @@ public final class MainActivity extends Activity
   @Override
   protected void onActivityResult(int request, int result, Intent data) {
     super.onActivityResult(request, result, data);
+    if (request == UPDATE_INSTALL_PERMISSION) {
+      if (getPackageManager().canRequestPackageInstalls() && !pendingUpdateApk.isEmpty())
+        installAppUpdate();
+      return;
+    }
     if (request == 89 && result == RESULT_OK && data != null && data.getData() != null) {
       android.net.Uri uri = data.getData();
       toast("Копирую GGUF в приложение. Большая модель может занять несколько минут.");

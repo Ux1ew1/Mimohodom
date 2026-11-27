@@ -106,7 +106,7 @@ final class ManagerStorageTest {
           m.pending().stream()
               .filter(
                   p ->
-                      p.optString("type").equals("merge")
+                      p.optString("type").equals("group")
                           && p.optJSONArray("sources").optJSONObject(0).optLong("id") == auto)
               .findFirst()
               .orElseThrow();

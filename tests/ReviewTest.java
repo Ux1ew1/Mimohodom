@@ -53,11 +53,29 @@ public final class ReviewTest {
         .getString("content"));
     check(!planned.getJSONObject(0).getBoolean("has_plan")
         && planned.getJSONObject(1).getBoolean("has_plan"), "Plan presence follows note ID");
-    check(!ManagerAnalysis.planReason(new JSONObject(), TaskKind.COMPLEX, 1).isEmpty()
-        && ManagerAnalysis.planReason(new JSONObject(), TaskKind.INFO, 2).isEmpty(),
-        "An empty planning map falls back to complex tasks only");
-    check(ManagerAnalysis.planReason(new JSONObject().put("1", "Собрать чек-лист"),
-        TaskKind.COMPLEX, 2).isEmpty(), "A nonempty planning map controls note selection");
+    Note list = new Note(7, "Список дел", "Заказать зал. Разослать приглашения.", 1, 2, 0);
+    JSONObject review = new JSONObject().put("7", new JSONObject().put("mode", "checklist")
+        .put("reason", "Два действия").put("evidence", new JSONArray()
+            .put("Заказать зал").put("разослать приглашения")));
+    check(ManagerAnalysis.planOffer(review, TaskKind.EVENT, list).mode().equals("checklist"),
+        "Explicit actions in an event can become a checklist");
+    check(ManagerAnalysis.planOffer(review, TaskKind.SIMPLE, list) == null
+        && ManagerAnalysis.planOffer(review, TaskKind.INFO, list) == null,
+        "Reject plan suggestions inconsistent with the task class");
+    check(ManagerAnalysis.planOffer(new JSONObject(), TaskKind.COMPLEX, list) == null
+        && ManagerAnalysis.planOffer(review, TaskKind.COMPLEX, a) == null,
+        "Only explicit suggestions for the selected input ID can be accepted");
+    list.body = "Заказать зал и выписать счёт.";
+    check(ManagerAnalysis.planOffer(review, TaskKind.COMPLEX, list) == null,
+        "Reject evidence absent from the note");
+    list.body = "Заказать зал. Разослать приглашения. Всё сделано.";
+    check(ManagerAnalysis.planOffer(review, TaskKind.COMPLEX, list) == null,
+        "Reject a checklist for an explicitly completed task");
+    list.body = "Организовать выезд команды";
+    review.put("7", new JSONObject().put("mode", "plan").put("reason", "Большая цель")
+        .put("evidence", new JSONArray().put(list.body)));
+    check(ManagerAnalysis.planOffer(review, TaskKind.COMPLEX, list).mode().equals("plan"),
+        "A grounded complex goal can become a plan");
     String instruction = payload.getJSONArray("messages").getJSONObject(0).getString("content");
     check(
         instruction.contains("ОБЕ проверки")

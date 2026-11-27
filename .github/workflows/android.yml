@@ -2,6 +2,11 @@ name: Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_android:
+        description: Publish the signed Android APK to GitHub Releases
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -58,6 +63,7 @@ jobs:
       - name: Core, Polza and manager tests
         run: |
           ./scripts/test-core.ps1
+          ./scripts/test-app-update.ps1
           ./scripts/test-polza.ps1
           ./scripts/test-manager.ps1
           ./scripts/test-aicore.ps1
@@ -122,6 +128,33 @@ jobs:
         run: |
           $keyFile = Join-Path $env:USERPROFILE '.android/debug.keystore'
           if (Test-Path -LiteralPath $keyFile) { Remove-Item -LiteralPath $keyFile -Force }
+
+  publish-android:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_android && github.ref == 'refs/heads/main' && github.repository == 'Ux1ew1/Mimohodom' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mimohodom-debug-${{ github.run_number }}
+          path: dist
+      - name: Publish verified Android update
+        shell: bash
+        run: |
+          manifest=dist/mimohodom-update.json
+          test -s "$manifest" || { echo 'A build signed with DEBUG_KEYSTORE_BASE64 is required'; exit 1; }
+          version=$(jq -er '.versionName | select(test("^[0-9]+[.][0-9]+[.][0-9]+$"))' "$manifest")
+          apk="dist/mimohodom-$version-debug.apk"
+          test "$(stat -c %s "$apk")" = "$(jq -er '.size' "$manifest")"
+          echo "$(jq -er '.sha256' "$manifest")  $apk" | sha256sum --check --strict
+          tag="android-v$version"
+          gh release create "$tag" "$apk" "$manifest" --repo "$GITHUB_REPOSITORY" \
+            --draft --target "$GITHUB_SHA" --title "Мимоходом Android $version" --generate-notes
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
 
   desktop:
     name: Desktop (${{ matrix.os }})

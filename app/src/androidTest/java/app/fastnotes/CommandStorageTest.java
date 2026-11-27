@@ -25,11 +25,113 @@ final class CommandStorageTest {
       suggestionSeries(store);
       collectionAndIncognito(store);
       planFromReview(store);
+      scopedPlan(store);
     } finally {
       context.deleteDatabase(name);
     }
     collectionDialogue(context);
+    reviewQueue(context);
     return checks;
+  }
+
+  private static void reviewQueue(Context context) throws Exception {
+    String name = "review-queue-test-" + System.nanoTime() + ".db";
+    try (Store store = new Store(context, name)) {
+      ManagerStore manager = new ManagerStore(store);
+      long now = System.currentTimeMillis();
+      long day = 86_400_000L;
+      long old = now - 25 * day, future = now + 30 * day;
+      long car = store.save(0, "Прогреть машину", "Прогреть машину утром", 0);
+      long eyelash = store.save(0, "Ресницы", "Запись к мастеру", future);
+      var db = store.getWritableDatabase();
+      db.execSQL("UPDATE notes SET created=?,updated=? WHERE id IN (?,?)",
+          new Object[] {old, old, car, eyelash});
+      require(manager.batch().isEmpty() && manager.batch(true).isEmpty(),
+          "Old notes and distant reminders stay out of both review modes");
+      require(store.note(eyelash).reminder == future && store.note(car) != null,
+          "Filtering preserves the reminder and both notes");
+
+      store.save(car, "Прогреть машину", "Определить время поездки", 0);
+      List<Note> batch = manager.batch();
+      require(batch.size() == 1 && batch.get(0).id == car, "A substantive edit reopens an old note");
+      JSONObject action = new JSONObject().put("action", "ask").put("note", car)
+          .put("question", "Во сколько выезжаете?");
+      List<JSONObject> proposals = ManagerAnalysis.parse(
+          new JSONObject().put("actions", new JSONArray().put(action)).toString(), batch);
+      long run = manager.claim(batch);
+      manager.finish(run, batch, proposals);
+      require(manager.batch().isEmpty() && manager.batch(true).isEmpty(),
+          "Completed reviews are not repeated on unchanged notes");
+      JSONObject question = manager.pendingQuestion(car);
+      require(question != null && manager.answerClarify(question.getLong("id"), "В девять"),
+          "Record an explicit answer");
+      db.execSQL("UPDATE notes SET updated=? WHERE id=?", new Object[] {old, car});
+      db.execSQL("UPDATE manager_review SET revision=?,attempted=? WHERE note=?",
+          new Object[] {ManagerAnalysis.fingerprint(store.note(car)), now - day, car});
+      batch = manager.batch();
+      require(batch.size() == 1 && batch.get(0).id == car, "Recent answer reopens an old note");
+      manager.finish(manager.claim(batch), batch, List.of());
+
+      db.execSQL("UPDATE notes SET reminder=? WHERE id=?", new Object[] {now + day, eyelash});
+      batch = manager.batch();
+      require(batch.size() == 1 && batch.get(0).id == eyelash,
+          "Old scheduled note becomes eligible close to the reminder");
+      manager.finish(manager.claim(batch), batch, List.of());
+      require(manager.batch().isEmpty(), "A nearby deadline alone starts only one review");
+
+      PlanTree plan = new PlanTree();
+      plan.add(null, PlanTree.STEP, "Подготовить машину").at = now + day;
+      // The prior review predates the moment this step became due soon.
+      db.execSQL("UPDATE manager_review SET attempted=? WHERE note=?",
+          new Object[] {now - 2 * day, car});
+      store.savePlan(car, plan.toJson());
+      batch = manager.batch();
+      require(batch.size() == 1 && batch.get(0).id == car,
+          "An open plan with a nearby step keeps an old note relevant");
+    } finally {
+      context.deleteDatabase(name);
+    }
+  }
+
+  private static void scopedPlan(Store store) throws Exception {
+    long id = store.save(0, "Послушать Челлентано", "Послушать Челлентано", 0);
+    long other = store.save(0, "Заменить масло", "Заменить масло в машине", 0);
+    long legacy = store.newNoteChat(id, "Старый план");
+    store.message(legacy, "assistant", "Заменить масло и забрать заказ", new JSONArray());
+    require(store.noteChat(id, true) == 0, "Legacy plan chat is not reused");
+    long chat = store.newChat("План: Послушать Челлентано", ChatOrigin.PLAN, id);
+    require(store.noteChat(id, true) == chat && store.noteChat(id, false) == legacy,
+        "Planning and discussion select different chats");
+
+    JSONObject node = new JSONObject().put("kind", "step").put("text", "Послушать Челлентано");
+    JSONObject model = new JSONObject().put("note", other).put("say", "Вот один шаг.")
+        .put("plan", new JSONObject().put("nodes", new JSONArray().put(node)));
+    JSONObject choice = new JSONObject().put("finish_reason", "stop")
+        .put("message", new JSONObject().put("content", model.toString()));
+    ChatRunner.planReply(store, chat, id, "test", PlanChat.START, store.messages(chat), 2000,
+        payload -> {
+          String sent = payload.toString();
+          require(sent.contains("Послушать Челлентано"), "Scoped chat sees the selected note");
+          require(!sent.contains("Заменить масло") && !sent.contains("забрать заказ"),
+              "Scoped context excludes both archive matches and old chat history");
+          return new JSONObject().put("choices", new JSONArray().put(choice));
+        });
+    JSONObject message = store.messages(chat).getJSONObject(0);
+    JSONObject draft = new JSONObject(message.getString("draft"));
+    PlanTree preview = PlanTree.parse(draft.getString("plan"));
+    require(draft.getLong("note") == id && preview.checkable() == 1 && store.plan(id).isEmpty(),
+        "Preview has one step and ignores a different target proposed by the model");
+    store.dismissDraft(message.getLong("id"));
+    require(store.messages(chat).getJSONObject(0).optString("draft").isEmpty()
+            && store.plan(id).isEmpty(),
+        "Discard removes the plan preview without changing the note");
+    ChatRunner.planReply(store, chat, id, "test", PlanChat.START, new JSONArray(), 2000,
+        payload -> new JSONObject().put("choices", new JSONArray().put(choice)));
+    message = store.messages(chat).getJSONObject(1);
+    store.applyNoteDraft(message.getLong("id"), id, null, preview);
+    require(PlanTree.parse(store.plan(id)).checkable() == 1 && store.plan(other).isEmpty(),
+        "Confirmation changes only the selected note");
+    require(store.messages(legacy).length() == 1, "Old history is preserved");
   }
 
   private static void planFromReview(Store store) throws Exception {
@@ -42,14 +144,34 @@ final class CommandStorageTest {
     ManagerStore manager = new ManagerStore(store);
     List<Note> batch = List.of(store.note(id), store.note(withPlan));
     manager.finishReview(manager.claim(batch), batch, List.of(), Map.of(),
-        Map.of(id, TaskKind.EVENT), new JSONObject()
-            .put(Long.toString(id), "В заметке три шага, удобно собрать их в чек-лист.")
-            .put(Long.toString(withPlan), "Предложение для заметки с планом"));
+        Map.of(id, TaskKind.EVENT, withPlan, TaskKind.COMPLEX), new JSONObject()
+            .put(Long.toString(id), new JSONObject().put("mode", "checklist")
+                .put("reason", "В заметке три шага").put("evidence", new JSONArray()
+                    .put("заказала стол").put("собрать его")))
+            .put(Long.toString(withPlan), new JSONObject().put("mode", "plan")
+                .put("reason", "Предложение для заметки с планом").put("evidence",
+                    new JSONArray().put("Заказать и собрать полку"))));
     require(manager.pending().stream().filter(p -> "plan".equals(p.optString("type"))).count() == 1,
         "Review skips an existing plan");
     JSONObject suggestion = manager.pending().stream().filter(p -> "plan".equals(p.optString("type")))
         .findFirst().orElseThrow();
-    require(ManagerStore.firstSource(suggestion) == id, "Review offers a plan for a known note");
+    require(ManagerStore.firstSource(suggestion) == id && suggestion.optString("planMode").equals("checklist"),
+        "Review offers a checklist for a known note");
+    long simple = store.save(0, "Послушать альбом", "Послушать альбом", 0);
+    Note simpleNote = store.note(simple);
+    List<Note> simpleBatch = List.of(simpleNote);
+    manager.finishReview(manager.claim(simpleBatch), simpleBatch, List.of(), Map.of(),
+        Map.of(simple, TaskKind.SIMPLE), new JSONObject().put(Long.toString(simple),
+            new JSONObject().put("mode", "plan").put("reason", "Простое дело, спросить когда")
+                .put("evidence", new JSONArray().put(simpleNote.body))));
+    require(manager.pending().stream().noneMatch(p -> ManagerStore.firstSource(p) == simple),
+        "Review rejects a plan relying on a simple task");
+    JSONObject legacy = new JSONObject().put("type", "plan").put("identity", "plan|" + simple)
+        .put("reason", "Простое дело, спросить когда").put("sources", new JSONArray()
+            .put(new JSONObject().put("id", simple).put("revision", ManagerAnalysis.fingerprint(simpleNote))));
+    require(manager.finish(manager.claim(simpleBatch), simpleBatch, List.of(legacy)) == 1
+            && manager.pending().stream().noneMatch(p -> ManagerStore.firstSource(p) == simple),
+        "A saved legacy offer for a simple task is removed from the inbox");
 
     long chat = store.newNoteChat(id, "План: Сборка стола");
     JSONObject model = new JSONObject().put("say", "Подготовил чек-лист.").put("note", id)

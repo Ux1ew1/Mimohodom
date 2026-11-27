@@ -3,7 +3,8 @@ import fs from 'node:fs';
 const BASE = 'https://polza.ai/api/v1/';
 const BUDGET = 45;
 const BASELINE = 'qwen/qwen4-max';
-const REVISION = 3;
+const GEMMA = 'google/gemma-3-27b-it';
+const REVISION = 4;
 const CANDIDATES = [
   'google/gemini-3.1-flash-lite',
   'google/gemini-3.8-flash',
@@ -15,6 +16,7 @@ const CANDIDATES = [
 const modes = ['chat', 'review'];
 const [caseFile, reportFile, ...flags] = process.argv.slice(2);
 const dry = flags.includes('--dry');
+const stage4 = flags.includes('--stage4');
 const resume = flags.find(flag => flag.startsWith('--resume='))?.slice('--resume='.length);
 const cases = JSON.parse(fs.readFileSync(caseFile, 'utf8'));
 const baseline = JSON.parse(
@@ -89,12 +91,33 @@ function score(fixture, response, variant) {
   const hasDraft = !!(result.plan || result.collection || result.edit || actions.length);
   if (fixture.kind === 'review') {
     const reasons = Object.entries(result.planning || {});
-    const planned = (variant === 'new' && reasons.length === 0
-      ? Object.entries(result.kinds || {}).filter(([, kind]) => kind === 'complex')
-      : reasons.filter(([, value]) => typeof value === 'string' && value.trim()))
+    const sources = JSON.parse(fixture.payload.messages[1].content);
+    const normalize = text => text.toLowerCase().replaceAll('ё', 'е').trim().replace(/\s+/g, ' ');
+    const valid = ([id, value]) => {
+      if (variant !== 'new') return typeof value === 'string' && value.trim();
+      const kind = result.kinds?.[id];
+      const count = value?.mode === 'plan' && kind === 'complex' ? 1
+        : value?.mode === 'checklist' && (kind === 'complex' || kind === 'event') ? 2 : 0;
+      if (!count || typeof value.reason !== 'string' || !value.reason.trim()
+          || !Array.isArray(value.evidence) || value.evidence.length !== count
+          || !value.evidence.every(quote => typeof quote === 'string' && normalize(quote).length >= 4))
+        return false;
+      const row = sources.find(note => note.id === Number(id));
+      if (!row) return false;
+      const source = normalize(row.title) + '\n' + normalize(row.text);
+      const [first, second] = value.evidence.map(normalize);
+      if (!source.includes(first)) return false;
+      if (count === 1) return true;
+      return source.includes(second) && !first.includes(second) && !second.includes(first)
+        && (source.indexOf(first) + first.length <= source.lastIndexOf(second)
+          || source.indexOf(second) + second.length <= source.lastIndexOf(first));
+    };
+    const planned = reasons.filter(valid)
       .map(([id]) => Number(id))
       .filter(id => variant !== 'new' || !fixture.planned.includes(id));
     if (!sameIds(planned, exp.planning)) critical.push('wrong_planning_ids');
+    for (const [id, mode] of Object.entries(exp.planModes || {}))
+      if (result.planning?.[id]?.mode !== mode) critical.push(`wrong_plan_mode:${id}`);
     if (!sameIds(Object.keys(result.kinds || {}), fixture.notes)
         || !Array.isArray(result.notes) || !sameIds(result.notes.map(row => row?.id), fixture.notes)
         || !Array.isArray(result.actions)) critical.push('incomplete_review');
@@ -104,7 +127,8 @@ function score(fixture, response, variant) {
         '\\((?:отмечено )?выполнено?\\)|всё выполнено|дело закрыто', row?.metadata?.summary || '',
       )) critical.push('invented_completion');
     }
-    quality.push(reasons.every(([, reason]) => typeof reason === 'string' && reason.length <= 120));
+    quality.push(reasons.every(entry => valid(entry)
+      && (variant === 'new' ? entry[1].reason : entry[1]).length <= 120));
     quality.push(actions.every(action => action?.action !== 'ask'
       || !exp.planning.includes(Number(action.note))));
   } else {
@@ -143,6 +167,9 @@ function score(fixture, response, variant) {
       }
     }
     if (exp.minSteps && nodes.length < exp.minSteps) critical.push('too_few_steps');
+    if (fixture.stage === 'stage4' && exp.maxSteps && nodes.length > exp.maxSteps)
+      critical.push('extra_steps');
+    if (exp.forbidden && matches(exp.forbidden, subject)) critical.push('unrelated_steps');
     quality.push(nodes.length <= (exp.maxSteps || 12));
     quality.push(String(result.say || '').trim().split(/\s+/).length <= 90);
     if (question) quality.push(question.length <= 150);
@@ -173,8 +200,12 @@ function upperCost(payload, rate) {
 const modeOf = fixture => fixture.kind === 'review' ? 'review' : 'chat';
 const screen = cases.filter(fixture => fixture.stage === 'screen');
 const holdout = cases.filter(fixture => fixture.stage === 'holdout');
-const variants = [[BASELINE, 'old'], [BASELINE, 'new'], ...CANDIDATES.map(id => [id, 'new'])];
-for (const fixture of cases) payloadFor(fixture, BASELINE, 'old');
+const pairedCases = cases.filter(fixture => fixture.stage === 'stage4'
+  || (fixture.stage === 'holdout' && fixture.kind === 'review'));
+const variants = stage4 ? [[BASELINE, 'new'], [GEMMA, 'new']]
+  : [[BASELINE, 'old'], [BASELINE, 'new'], ...CANDIDATES.map(id => [id, 'new'])];
+if (stage4 && resume) throw new Error('Парное сравнение запускается с новым набором результатов');
+if (!stage4) for (const fixture of cases) payloadFor(fixture, BASELINE, 'old');
 if (!dry && !key) throw new Error('Задайте POLZA_KEY или запустите с -DryRun');
 
 const listing = await fetch(BASE + 'models?type=chat', { signal: AbortSignal.timeout(30_000) });
@@ -184,18 +215,21 @@ const rates = Object.fromEntries(variants.map(([id]) => [
   id, priceFrom(catalog.find(model => model.id === id) || {}),
 ]));
 if (!rates[BASELINE]) throw new Error('Нет подтверждённого тарифа Qwen4 Max');
+if (stage4 && !rates[GEMMA]) throw new Error('Нет подтверждённого тарифа Gemma 3 27B');
 const active = variants.filter(([id]) => rates[id]);
 const cheap = CANDIDATES.filter(id => rates[id]);
 const estimated = active.map(([model, variant]) => ({
   model, variant,
-  screen_ceiling_rub: screen.reduce(
+  estimated_ceiling_rub: (stage4 ? pairedCases : screen).reduce(
     (sum, fixture) => sum + upperCost(payloadFor(fixture, model, variant), rates[model]), 0,
   ),
 }));
 console.table(estimated);
-for (const model of CANDIDATES.filter(id => !rates[id])) console.log(`Нет тарифа: ${model}`);
+if (!stage4)
+  for (const model of CANDIDATES.filter(id => !rates[id])) console.log(`Нет тарифа: ${model}`);
 if (dry) {
-  console.log(`Тестовых случаев: ${screen.length} + ${holdout.length}. Лимит: ${BUDGET} ₽. Запросов к моделям: 0.`);
+  const fixtureCount = stage4 ? pairedCases.length : `${screen.length} + ${holdout.length}`;
+  console.log(`Тестовых случаев: ${fixtureCount}. Лимит: ${BUDGET} ₽. Запросов к моделям: 0.`);
   process.exit(0);
 }
 
@@ -261,6 +295,33 @@ async function run(fixture, model, variant, reserve = 0) {
   rows.push(row);
   saveReport();
   console.log(`${row.fixture} ${model} ${variant}: ${row.points}, ${row.reserved_rub.toFixed(3)} ₽`);
+}
+
+if (stage4) {
+  const estimate = estimated.reduce((total, row) => total + row.estimated_ceiling_rub, 0);
+  if (estimate > BUDGET) throw new Error('Парный прогон превышает лимит по оценке');
+  for (const fixture of pairedCases) {
+    for (const [model, variant] of active) await run(fixture, model, variant);
+    if (halted) break;
+  }
+  const summary = active.flatMap(([model]) => modes.map(mode => {
+    const observed = rows.filter(row => row.model === model && row.mode === mode);
+    return {
+      model, mode, attempted: observed.length,
+      expected: pairedCases.filter(fixture => modeOf(fixture) === mode).length,
+      passed: observed.filter(row => !row.critical.length).length,
+      api_failures: observed.filter(row => !(row.http >= 200 && row.http < 300)).length,
+      truncated: observed.filter(row => row.finish_reason === 'length').length,
+      reported_rub: observed.every(row => row.cost_rub !== null)
+        ? observed.reduce((sum, row) => sum + row.cost_rub, 0) : null,
+      rub_or_reserved: observed.reduce((sum, row) => sum + row.reserved_rub, 0),
+    };
+  }));
+  recommendations.paired = summary;
+  saveReport();
+  console.table(summary);
+  console.log(`Учтено ${spent.toFixed(2)} ₽. Ответы и оценки: ${reportFile}`);
+  process.exit(halted || summary.some(row => row.attempted !== row.expected) ? 1 : 0);
 }
 
 const queue = [...active];

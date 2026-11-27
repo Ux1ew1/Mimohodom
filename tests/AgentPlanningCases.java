@@ -80,7 +80,28 @@ public final class AgentPlanningCases {
             List.of(note(1, "Отчёт", "Подготовить таблицу, сверить цифры и отдать отчёт."),
                 note(2, "Полка", "Заказали полку, забрали и собрали. Всё сделано."),
                 note(3, "Проверка", "Проверить звук и отправить запись.")),
-            Set.of(3L), List.of(1)));
+                Set.of(3L), List.of(1)))
+        .put(scoped("scoped_single", PlanChat.START, note(1, "Послушать Челлентано", "Послушать Челлентано"),
+            expect("послушать", "челлентано").put("minSteps", 1).put("maxSteps", 1)
+                .put("forbidden", "заменить масло|купить хлеб|забрать заказ")))
+        .put(scoped("scoped_checklist", PlanChat.CHECKLIST, note(1, "Сборка стола", ready),
+            expect("стол", "собр", "креплен", "игор", "2026-12-04.*15:00")
+                .put("minSteps", 3).put("maxSteps", 3)
+                .put("done", "заказ.*стол|стол.*заказ")
+                .put("order", new JSONArray(List.of("заказ", "собр", "креплен")))))
+        .put(scoped("scoped_project", PlanChat.START, note(1, "Выезд команды",
+            "Организовать командный выезд для 15 участников без ночёвки."),
+            expect("предложени").put("minSteps", 3).put("maxSteps", 12)))
+        .put(review("review_stage4", "stage4",
+            List.of(note(1, "Челлентано", "Послушать Челлентано."),
+                note(2, "Список дел", "Заказать зал. Разослать приглашения."),
+                note(3, "Выезд", "Организовать командный выезд для 15 участников."),
+                note(4, "Дежурный вход", "Вход через проходную Б, код 5170."),
+                note(5, "Полка", "Заказали полку и собрали. Всё сделано."),
+                note(6, "Проверка", "Проверить звук. Отправить запись.")),
+            Set.of(6L), List.of(2, 3)));
+    cases.getJSONObject(cases.length() - 1).getJSONObject("expected").put("planModes",
+        new JSONObject().put("2", "checklist").put("3", "plan"));
     Files.writeString(Path.of(args[0]), cases.toString(2), StandardCharsets.UTF_8);
   }
 
@@ -120,6 +141,15 @@ public final class AgentPlanningCases {
     return fixture(id, "review", notes, payload,
         new JSONObject().put("planning", new JSONArray(proposals))).put("stage", stage)
         .put("planned", new JSONArray(planned));
+  }
+
+  private static JSONObject scoped(String id, String query, Note note, JSONObject expected)
+      throws Exception {
+    JSONObject payload = PlanChat.payload(BASELINE, note.title, note.body, PlanTree.parse(""),
+        new JSONArray(), query, NOW, ZONE);
+    ManagerAnalysis.limit(payload, ManagerAnalysis.answerTokens(0));
+    return fixture(id, "plan", List.of(note), payload, expected)
+        .put("linked", note.id).put("stage", "stage4");
   }
 
   private static JSONObject fixture(String id, String kind, List<Note> notes, JSONObject payload,

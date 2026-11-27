@@ -226,6 +226,7 @@ final class AgentLog {
       if (!c.moveToFirst()) throw new IllegalStateException("Вопрос уже закрыт");
       JSONObject p = new JSONObject(c.getString(0));
       p.remove("_answer");
+      p.remove("_answeredAt");
       ContentValues v = new ContentValues();
       v.put("data", p.toString());
       v.put("state", "pending");

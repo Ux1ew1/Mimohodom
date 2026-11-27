@@ -101,13 +101,16 @@ public final class ManagerAnalysis {
           + " напоминание уместно, а срока в записи нет (has_reminder=false); event — спроси одно"
           + " самое важное из недостающего: время, место, с кем или что взять, если этого нет в"
           + " записи.\n"
-          + "ПЛАН. Добавь в planning ключ ID и короткую причину, когда заметка описывает несколько"
-          + " действий, даже если они уже записаны списком или относятся к событию, либо большую"
-          + " цель, которую полезно разбить на шаги. «Заказать зал, затем разослать приглашения» —"
-          + " предложи собрать чек-лист. «Организовать выезд команды» — предложи разложить по этапам."
-          + " «Адрес зала и код двери» — памятка, не предлагай план. Пропускай одиночные дела,"
-          + " завершённые задачи и записи с has_plan=true. Не создавай для того же плана ask"
-          + " или новую заметку. При отсутствии кандидатов верни planning: {}.\n"
+          + "ПЛАН. Для каждой подходящей записи добавь в planning объект по её ID."
+          + " Например: \"planning\":{\"7\":{\"mode\":\"checklist\",\"reason\":\"Два действия уже записаны\","
+          + "\"evidence\":[\"Заказать зал\",\"разослать приглашения\"]}}. checklist — два и более"
+          + " разных действия уже записаны явно (класс complex или event). Приведи две короткие"
+          + " дословные цитаты разных действий из названия или текста. plan — большая цель класса"
+          + " complex, которую нужно разбить на этапы. Приведи одну дословную цитату всей цели,"
+          + " например «Организовать выезд команды». Не придумывай действия для checklist."
+          + " Одиночное дело (simple), памятка (info), полностью завершённая задача и запись"
+          + " с has_plan=true не входят в planning. Не создавай для того же плана ask или новую"
+          + " заметку. При отсутствии кандидатов верни planning: {}.\n"
           + " options — 0–4 варианта по 1–4 слова (пользователь может ответить и своими словами);"
           + " вопрос по-русски на «вы», до 120 символов. Один вопрос на запись; не спрашивай то, на"
           + " что уже есть ответ.\n"
@@ -169,20 +172,46 @@ public final class ManagerAnalysis {
     system.put("content", system.getString("content")
         + "\nДля planning пройдись по всем входным ID отдельно от actions и notes."
         + " text_complete означает, что текст пришёл целиком. has_plan означает наличие"
-        + " интерактивного плана. О выполнении суди только по словам пользователя."
-        + " Полностью выполненное дело считай info."
-        + " Любая незавершённая запись с несколькими действиями или большой целью и"
-        + " has_plan=false должна попасть в planning. Укажи номер записи и причину до 120"
-        + " символов, например \"planning\":{\"7\":\"В заметке есть шаги для чек-листа\"}."
-        + " Оставь объект пустым только если подходящих записей нет.");
+        + " интерактивного плана. Полностью выполненное дело считай info. Опирайся на слова"
+        + " пользователя. Причину в reason напиши одной фразой до 120 символов.");
     return payload;
   }
 
-  static String planReason(JSONObject planning, String kind, long note) {
-    if (planning == null || planning.length() == 0)
-      return TaskKind.COMPLEX.equals(kind) ? "Разложить дело на конкретные шаги." : "";
-    Object reason = planning.opt(Long.toString(note));
-    return reason instanceof String text ? Retrieval.excerpt(text.trim(), "", 240) : "";
+  record PlanOffer(String mode, String reason) {}
+
+  static PlanOffer planOffer(JSONObject planning, String kind, Note note) {
+    JSONObject row = planning == null ? null : planning.optJSONObject(Long.toString(note.id));
+    if (row == null || explicitlyCompleted(note)) return null;
+    String mode = row.optString("mode");
+    boolean checklist = "checklist".equals(mode);
+    if (checklist ? !TaskKind.COMPLEX.equals(kind) && !TaskKind.EVENT.equals(kind)
+        : !"plan".equals(mode) || !TaskKind.COMPLEX.equals(kind)) return null;
+    JSONArray evidence = row.optJSONArray("evidence");
+    if (!(row.opt("reason") instanceof String reason) || reason.isBlank()
+        || evidence == null || evidence.length() != (checklist ? 2 : 1)) return null;
+    String source = quoteText(note.title) + "\n" + quoteText(note.body);
+    String first = evidence.opt(0) instanceof String text ? quoteText(text) : "";
+    if (first.length() < 4 || !source.contains(first)) return null;
+    if (checklist) {
+      String second = evidence.opt(1) instanceof String text ? quoteText(text) : "";
+      if (second.length() < 4 || first.contains(second) || second.contains(first)) return null;
+      int a = source.indexOf(first), b = source.lastIndexOf(second);
+      int c = source.indexOf(second), d = source.lastIndexOf(first);
+      if (b < a + first.length() && (c < 0 || d < c + second.length())) return null;
+    }
+    return new PlanOffer(mode, Retrieval.excerpt(reason.trim(), "", 240));
+  }
+
+  private static String quoteText(String text) {
+    return Retrieval.normalize(text).trim().replaceAll("\\s+", " ");
+  }
+
+  private static final java.util.regex.Pattern DONE = java.util.regex.Pattern.compile(
+      "(?:^|[.!;] )(?:(?:все|дело) (?:сделано|выполнено|завершено)|"
+          + "задача (?:сделана|выполнена|завершена))[.!]?$");
+
+  static boolean explicitlyCompleted(Note note) {
+    return DONE.matcher(quoteText(note.body)).find() || DONE.matcher(quoteText(note.title)).find();
   }
 
   /**

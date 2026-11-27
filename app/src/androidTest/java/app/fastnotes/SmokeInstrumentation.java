@@ -8,7 +8,7 @@ import org.json.JSONArray;
 
 /** Run on a disposable emulator: creates and removes its own records only. */
 public final class SmokeInstrumentation extends Instrumentation {
-  private boolean importOnly, commandOnly, globalSortOnly;
+  private boolean importOnly, commandOnly, globalSortOnly, updateOnly;
 
   @Override
   public void onCreate(Bundle args) {
@@ -16,15 +16,19 @@ public final class SmokeInstrumentation extends Instrumentation {
     importOnly = "true".equals(args.getString("importOnly"));
     commandOnly = "true".equals(args.getString("commandOnly"));
     globalSortOnly = "true".equals(args.getString("globalSortOnly"));
+    updateOnly = "true".equals(args.getString("updateOnly"));
     start();
   }
 
   @Override
   public void onStart() {
     Bundle result = new Bundle();
-    if (importOnly || commandOnly || globalSortOnly) {
+    if (importOnly || commandOnly || globalSortOnly || updateOnly) {
       try {
-        if (globalSortOnly) {
+        if (updateOnly) {
+          verifyUpdateArchives(getTargetContext());
+          result.putString("stream", "PASS: Android APK package, version and signer checks\n");
+        } else if (globalSortOnly) {
           GlobalSortStorageTest.run(getTargetContext());
           result.putString("stream", "PASS: global sort scopes, archive, trash and rollback\n");
         } else if (commandOnly) {
@@ -294,6 +298,34 @@ public final class SmokeInstrumentation extends Instrumentation {
       require(db.markScheduledStep(id, step) && db.markScheduledStep(id, step), "Step retry");
       require(PlanTree.parse(db.plan(id)).find(step.id).done, "Retry keeps step checked");
     } finally { db.delete(id); }
+  }
+
+  /** Uses synthetic APKs placed in cache/update-test by the local verification run. */
+  private static void verifyUpdateArchives(Context context) throws Exception {
+    java.io.File root = new java.io.File(context.getCacheDir(), "update-test");
+    java.io.File valid = new java.io.File(root, "valid.apk");
+    var packages = context.getPackageManager();
+    var archive = packages.getPackageArchiveInfo(valid.getAbsolutePath(), 0);
+    require(archive != null, "Signed update fixture is present");
+    long installed = AppUpdates.versionCode(packages.getPackageInfo(context.getPackageName(), 0));
+    int nextCode = Math.toIntExact(installed + 1);
+    AppUpdateManifest next = new AppUpdateManifest(nextCode, archive.versionName, 1, "");
+    AppUpdates.verify(context, valid, next);
+    rejectUpdate(context, new java.io.File(root, "wrong-signer.apk"), next, "Подпись");
+    rejectUpdate(context, new java.io.File(root, "other-package.apk"), next, "APK не подходит");
+    rejectUpdate(context, valid,
+        new AppUpdateManifest(nextCode + 1, next.versionName(), 1, ""), "APK не подходит");
+  }
+
+  private static void rejectUpdate(Context context, java.io.File apk, AppUpdateManifest update,
+      String detail) throws Exception {
+    try {
+      AppUpdates.verify(context, apk, update);
+    } catch (java.io.IOException expected) {
+      require(expected.getMessage().startsWith(detail), "Expected update rejection: " + detail);
+      return;
+    }
+    throw new AssertionError("Accepted invalid update " + apk.getName());
   }
 
   private static void require(boolean ok, String name) {

@@ -41,10 +41,17 @@ public final class ManagerStore {
   }
 
   public List<Note> batch(boolean manual) {
+    return TopicSelection.select(reviewCandidates(manual, false));
+  }
+
+  private List<Note> reviewCandidates(boolean manual, boolean failedOnly) {
+    long now = System.currentTimeMillis();
+    Map<Long, Long> answers = recentAnswers(now - ReviewPolicy.FRESH);
     List<Note> seeds = new ArrayList<>();
     try (Cursor c =
         db.rawQuery(
-            "SELECT n.id,r.revision,r.failed FROM notes n LEFT JOIN manager_review r ON r.note=n.id"
+            "SELECT n.id,r.revision,r.failed,r.attempted FROM notes n"
+                + " LEFT JOIN manager_review r ON r.note=n.id"
                 + " WHERE n.trashed=0"
                 // Эксперимент «баллы внимания»: заметка на нуле помощника не интересует.
                 + " AND (?='0' OR n.attention<>0)"
@@ -53,15 +60,51 @@ public final class ManagerStore {
             new String[] {store.attentionEnabled() ? "1" : "0"})) {
       while (c.moveToNext()) {
         Note n = store.note(c.getLong(0));
-        if (n != null && !store.isIncognitoFolder(n.folder)
-            && (manual
-                || c.isNull(1)
-                || !ManagerAnalysis.fingerprint(n).equals(c.getString(1))
-                || c.getInt(2) == 0)) seeds.add(n);
+        if (n == null || store.isIncognitoFolder(n.folder) || top(n.id) != 0) continue;
+        long attempted = c.getLong(3);
+        boolean answered = answers.getOrDefault(n.id, 0L) > attempted;
+        boolean changed = c.isNull(1) || !ManagerAnalysis.fingerprint(n).equals(c.getString(1))
+            || answered;
+        boolean failed = !changed && c.getInt(2) != 0;
+        if ((failedOnly && !failed) || (failed && !manual)) continue;
+        if (answered || ((changed || failed) && n.updated >= now - ReviewPolicy.FRESH)
+            || upcoming(n, changed || failed ? 0 : attempted, now)) seeds.add(n);
       }
     }
-    seeds.removeIf(n -> top(n.id) != 0);
-    return TopicSelection.select(seeds);
+    return seeds;
+  }
+
+  private boolean upcoming(Note note, long attempted, long now) {
+    if (!ReminderPolicy.periodic(note.repeat) || attempted == 0) {
+      if (ReviewPolicy.upcoming(note.reminder, attempted, now)) return true;
+      for (long date : ReminderPolicy.parseTimes(note.reminderTimes))
+        if (ReviewPolicy.upcoming(date, attempted, now)) return true;
+    }
+    PlanTree plan = PlanTree.parse(store.plan(note.id));
+    if (plan.checkable() > plan.done())
+      for (PlanTree.Node node : plan.all())
+        if (!node.done && ReviewPolicy.upcoming(node.at, attempted, now)) return true;
+    return false;
+  }
+
+  private Map<Long, Long> recentAnswers(long since) {
+    Map<Long, Long> answers = new HashMap<>();
+    try (Cursor c = db.rawQuery(
+        "SELECT data FROM manager_proposals WHERE state='accepted' AND identity LIKE 'clarify|%'",
+        null)) {
+      while (c.moveToNext()) {
+        try {
+          JSONObject proposal = new JSONObject(c.getString(0));
+          long answeredAt = proposal.optLong("_answeredAt");
+          long note = firstSource(proposal);
+          if (note > 0 && answeredAt >= since && !proposal.optString("_answer").isEmpty())
+            answers.merge(note, answeredAt, Math::max);
+        } catch (JSONException ignored) {
+          // Ignore malformed proposals already present in the database.
+        }
+      }
+    }
+    return answers;
   }
 
   public List<Note> summarySources(JSONObject p) throws Exception {
@@ -112,16 +155,6 @@ public final class ManagerStore {
       db.setTransactionSuccessful();
     } finally {
       db.endTransaction();
-    }
-  }
-
-  private boolean failedUnchanged(Note n) {
-    try (Cursor c =
-        db.rawQuery(
-            "SELECT revision,failed FROM manager_review WHERE note=?", new String[] {"" + n.id})) {
-      return c.moveToFirst()
-          && c.getInt(1) != 0
-          && c.getString(0).equals(ManagerAnalysis.fingerprint(n));
     }
   }
 
@@ -294,7 +327,8 @@ public final class ManagerStore {
             "SELECT data FROM manager_proposals WHERE id=? AND state='pending'",
             new String[] {"" + id})) {
       if (!c.moveToFirst()) return false;
-      JSONObject data = new JSONObject(c.getString(0)).put("_answer", answer.trim());
+      JSONObject data = new JSONObject(c.getString(0)).put("_answer", answer.trim())
+          .put("_answeredAt", System.currentTimeMillis());
       ContentValues v = new ContentValues();
       v.put("data", data.toString());
       v.put("state", "accepted");
@@ -427,11 +461,15 @@ public final class ManagerStore {
       List<JSONObject> valid = new ArrayList<>();
       for (JSONObject p : proposals) if (current(p)) valid.add(p);
       List<Note> unchanged = new ArrayList<>();
+      Map<Long, ManagerAnalysis.PlanOffer> offers = new HashMap<>();
       for (Note snapshot : notes) {
         Note current = store.note(snapshot.id);
         if (current == null || !store.aiAllowed(snapshot.id)
             || !ManagerAnalysis.fingerprint(current).equals(ManagerAnalysis.fingerprint(snapshot)))
           continue;
+        ManagerAnalysis.PlanOffer offer =
+            ManagerAnalysis.planOffer(planning, TaskKind.clean(kinds.get(snapshot.id)), snapshot);
+        if (offer != null) offers.put(snapshot.id, offer);
         Analysis.Result result = analysis.get(snapshot.id);
         if (result != null && store.applyAnalysis(snapshot, result)) {
           Note after = store.note(snapshot.id);
@@ -461,13 +499,14 @@ public final class ManagerStore {
         attachGroups(p, groups);
       }
       for (Note n : unchanged) {
-        String kind = TaskKind.clean(kinds.get(n.id));
-        String reason = ManagerAnalysis.planReason(planning, kind, n.id);
-        if (reason.isEmpty() || !store.plan(n.id).isEmpty()) continue;
+        retireLegacyPlanOffer(n.id);
+        ManagerAnalysis.PlanOffer offer = offers.get(n.id);
+        if (offer == null || !PlanTree.parse(store.plan(n.id)).isEmpty()) continue;
         valid.add(
             new JSONObject()
                 .put("type", "plan")
-                .put("reason", reason)
+                .put("planMode", offer.mode())
+                .put("reason", offer.reason())
                 .put("title", n.title)
                 .put("body", "")
                 .put("options", new JSONArray())
@@ -501,9 +540,7 @@ public final class ManagerStore {
   }
 
   public int failedCount() {
-    int count = 0;
-    for (Note n : store.aiNotes()) if (top(n.id) == 0 && failedUnchanged(n)) count++;
-    return count;
+    return reviewCandidates(true, true).size();
   }
 
   public boolean current(JSONObject p) throws Exception {
@@ -559,7 +596,7 @@ public final class ManagerStore {
         try {
           JSONObject p = new JSONObject(c.getString(1)).put("id", c.getLong(0));
           if (c.getString(2).equals("reviewed") && !p.optString("type").equals("link")) continue;
-          if (current(p)) out.add(p);
+          if (current(p) && (!"plan".equals(p.optString("type")) || planOfferCurrent(p))) out.add(p);
           else state(c.getLong(0), "stale");
         } catch (Exception e) {
           state(c.getLong(0), "stale");
@@ -567,6 +604,28 @@ public final class ManagerStore {
       }
     }
     return out;
+  }
+
+  private boolean planOfferCurrent(JSONObject proposal) {
+    Note note = store.note(firstSource(proposal));
+    if (note == null || !PlanTree.parse(store.plan(note.id)).isEmpty()
+        || ManagerAnalysis.explicitlyCompleted(note)) return false;
+    String kind = kind(note.id);
+    return !TaskKind.SIMPLE.equals(kind) && !TaskKind.INFO.equals(kind);
+  }
+
+  private void retireLegacyPlanOffer(long note) {
+    try (Cursor c = db.rawQuery(
+        "SELECT id,data FROM manager_proposals WHERE identity=? AND state='pending'",
+        new String[] {"plan|" + note})) {
+      if (!c.moveToFirst()) return;
+      try {
+        if (new JSONObject(c.getString(1)).has("planMode")) return;
+      } catch (JSONException ignored) {
+        // A damaged proposal can be replaced by the current review.
+      }
+      state(c.getLong(0), "stale");
+    }
   }
 
   public void state(long id, String state) {

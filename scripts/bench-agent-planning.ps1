@@ -1,5 +1,6 @@
 param(
   [switch]$DryRun,
+  [switch]$Stage4,
   [switch]$PromptForKey,
   [string]$Resume
 )
@@ -27,6 +28,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Benchmark payload generation failed' }
 
 $nodeArgs = @("$PSScriptRoot/bench-agent-planning.mjs", $cases, "$out/results-$(Get-Date -Format yyyyMMdd-HHmmss).json")
 if ($DryRun) { $nodeArgs += '--dry' }
+if ($Stage4) { $nodeArgs += '--stage4' }
 if ($Resume) { $nodeArgs += "--resume=$((Resolve-Path -LiteralPath $Resume).Path)" }
 $prompted = -not $DryRun -and $PromptForKey -and -not $env:POLZA_KEY
 if ($prompted) {

@@ -1569,14 +1569,15 @@ public final class Store extends SQLiteOpenHelper implements Polza.Memory {
   }
 
   /**
-   * Чат по заметке, если он уже есть, иначе 0. Чаты «Как продвигается?» помощника тоже привязаны к
-   * заметке, но это не её чат.
+   * Обычное обсуждение или отдельный разбор плана этой заметки, если такой чат уже есть.
    */
-  public long noteChat(long note) {
+  public long noteChat(long note, boolean planning) {
     try (Cursor c =
         getReadableDatabase()
             .rawQuery(
-                "SELECT id FROM chats WHERE note=? AND origin<>'agent' ORDER BY id LIMIT 1",
+                "SELECT id FROM chats WHERE note=? AND "
+                    + (planning ? "origin='plan'" : "origin NOT IN ('agent','plan')")
+                    + " ORDER BY id LIMIT 1",
                 new String[] {"" + note})) {
       return c.moveToFirst() ? c.getLong(0) : 0;
     }

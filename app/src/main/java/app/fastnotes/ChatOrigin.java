@@ -7,14 +7,15 @@ package app.fastnotes;
  * Java без Android.
  */
 public final class ChatOrigin {
-  public static final String USER = "user", AGENT = "agent", NOTE = "note";
+  public static final String USER = "user", AGENT = "agent", NOTE = "note", PLAN = "plan";
 
   private ChatOrigin() {}
 
-  /** Одно из трёх значений; неизвестное или пустое — {@link #USER}. */
+  /** Неизвестное или пустое значение — {@link #USER}. */
   public static String clean(String raw) {
     if (AGENT.equals(raw)) return AGENT;
     if (NOTE.equals(raw)) return NOTE;
+    if (PLAN.equals(raw)) return PLAN;
     return USER;
   }
 
@@ -39,7 +40,7 @@ public final class ChatOrigin {
   public static String label(String origin) {
     return switch (clean(origin)) {
       case AGENT -> "От помощника";
-      case NOTE -> "По заметке";
+      case NOTE, PLAN -> "По заметке";
       default -> "";
     };
   }

@@ -22,6 +22,9 @@ public final class NoteChatTest {
     // ---- Происхождение чата ----
     check(ChatOrigin.clean("agent").equals(ChatOrigin.AGENT), "agent");
     check(ChatOrigin.clean("note").equals(ChatOrigin.NOTE), "note");
+    check(ChatOrigin.fromRecord("plan", false, null).equals(ChatOrigin.PLAN), "plan origin on sync");
+    check(ChatOrigin.fromRecord(null, false, "plan").equals(ChatOrigin.PLAN), "legacy record keeps plan origin");
+    check(ChatOrigin.label("plan").equals("По заметке"), "plan chat label");
     check(ChatOrigin.clean("").equals(ChatOrigin.USER), "empty is user");
     check(ChatOrigin.clean(null).equals(ChatOrigin.USER), "null is user");
     check(ChatOrigin.clean("robot").equals(ChatOrigin.USER), "unknown is user");
